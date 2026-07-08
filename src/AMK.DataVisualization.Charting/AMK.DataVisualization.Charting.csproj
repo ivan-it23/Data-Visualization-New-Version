@@ -1,0 +1,12 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\AMK.DataVisualization.Core\AMK.DataVisualization.Core.csproj" />
+    <ProjectReference Include="..\AMK.DataVisualization.Metrology\AMK.DataVisualization.Metrology.csproj" />
+  </ItemGroup>
+</Project>

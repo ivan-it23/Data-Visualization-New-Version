@@ -1,0 +1,18 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="AMK.DataVisualization.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="AMK Data Visualization">
+
+    <Window.SystemBackdrop>
+        <MicaBackdrop />
+    </Window.SystemBackdrop>
+
+    <Grid Padding="24">
+        <StackPanel Spacing="8" VerticalAlignment="Center" HorizontalAlignment="Center">
+            <TextBlock Text="AMK Data Visualization" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Center" />
+            <TextBlock Text="WinUI 3 / .NET 10 migration workspace" Opacity="0.72" HorizontalAlignment="Center" />
+        </StackPanel>
+    </Grid>
+</Window>

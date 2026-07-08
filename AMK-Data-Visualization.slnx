@@ -1,0 +1,35 @@
+﻿<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+  </Configurations>
+  <Project Path="AMK-Data-Visualization/AMK-Data-Visualization.csproj">
+    <Platform Solution="*|x64" Project="x64" />
+  </Project>
+  <Project Path="src/AMK.DataVisualization.Core/AMK.DataVisualization.Core.csproj">
+    <Platform Solution="*|x64" Project="Any CPU" />
+  </Project>
+  <Project Path="src/AMK.DataVisualization.IO/AMK.DataVisualization.IO.csproj">
+    <Platform Solution="*|x64" Project="Any CPU" />
+  </Project>
+  <Project Path="src/AMK.DataVisualization.Hardware/AMK.DataVisualization.Hardware.csproj">
+    <Platform Solution="*|x64" Project="Any CPU" />
+  </Project>
+  <Project Path="src/AMK.DataVisualization.Metrology/AMK.DataVisualization.Metrology.csproj">
+    <Platform Solution="*|x64" Project="Any CPU" />
+  </Project>
+  <Project Path="src/AMK.DataVisualization.Charting/AMK.DataVisualization.Charting.csproj">
+    <Platform Solution="*|x64" Project="Any CPU" />
+  </Project>
+  <Project Path="src/AMK.DataVisualization.Reporting/AMK.DataVisualization.Reporting.csproj">
+    <Platform Solution="*|x64" Project="Any CPU" />
+  </Project>
+  <Project Path="tests/AMK.DataVisualization.Core.Tests/AMK.DataVisualization.Core.Tests.csproj">
+    <Platform Solution="*|x64" Project="Any CPU" />
+  </Project>
+  <Project Path="tests/AMK.DataVisualization.IO.Tests/AMK.DataVisualization.IO.Tests.csproj">
+    <Platform Solution="*|x64" Project="Any CPU" />
+  </Project>
+  <Project Path="tests/AMK.DataVisualization.Charting.Tests/AMK.DataVisualization.Charting.Tests.csproj">
+    <Platform Solution="*|x64" Project="Any CPU" />
+  </Project></Solution>
+
