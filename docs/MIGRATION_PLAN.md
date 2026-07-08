@@ -15,6 +15,7 @@
 - Любое изменение поведения должно быть явно описано как новая бизнес-логика, а не как часть технического переноса.
 - Сначала переносятся модели, форматы, расчеты и тестовые фикстуры; затем строится UI.
 - Сборка не считается полной проверкой: для UI-изменений нужно отдельно подтверждать запуск окна и основные сценарии.
+- Современный WinUI-дизайн допустим только как визуальная реализация старой схемы. Расположение элементов главного окна, русские подписи, меню, панели графиков и статусная строка должны переноситься из `Amk-Horizon-New-Chart` без произвольных перестановок, включая временные тестовые вертикали.
 
 ## 3. Текущие источники истины старого проекта
 
@@ -141,7 +142,7 @@
 
 ### Этап 6. Charting: данные графиков и геометрия
 
-Статус: начат 2026-07-07, продолжен 2026-07-08. Первая версия aligned data-series слоя перенесена в `AMK.DataVisualization.Charting`: `DataType`, `FrequencyBand`, `Transmitter`, `GetDataIndexRange`, `NormalizePhase`, conversion to millidegrees и multi-series `CalculateChartData` для базовых типов. Также перенесен слой конфигурации кривых: `CurveDefinition`, `ChartConfiguration`, axis grouping, `CalculateSingleCurveData`, `CalculateCustomCurveData` и `CalculateChartDataFromConfiguration`.
+Статус: начат 2026-07-07, продолжен 2026-07-08. Первая версия aligned data-series слоя перенесена в `AMK.DataVisualization.Charting`: `DataType`, `FrequencyBand`, `Transmitter`, `GetDataIndexRange`, `NormalizePhase`, conversion to millidegrees и multi-series `CalculateChartData` для базовых типов. Также перенесен слой конфигурации кривых: `CurveDefinition`, `ChartConfiguration`, axis grouping, `CalculateSingleCurveData`, `CalculateCustomCurveData` и `CalculateChartDataFromConfiguration`. Первая WinUI-вертикаль уже использует этот слой для отображения одного ряда внутри legacy-совместимой схемы главного окна.
 
 Задачи:
 
@@ -154,7 +155,8 @@
 - [x] Перенести `CalculateSingleCurveData`, `CalculateCustomCurveData` и `CalculateChartDataFromConfiguration`.
 - [x] Сохранить совместимость `CalculateSingleCurveData`: `valueScale` применяется после расчета; `RHO_SMT` и `TEMPERATURE` удаляют точки вне `minY/maxY`, остальные типы сохраняют aligned-ряд.
 - [ ] Перенести graph data source для одного/двух графиков.
-- [ ] Поддержать один и два графика.
+- [x] Поддержать первый минимальный сценарий одного графика с одной кривой.
+- [ ] Поддержать полноценные режимы одного и двух графиков.
 - [ ] Поддержать graph 2 в linked mode и independent file mode.
 - [ ] Поддержать X-axis по `FRAME_NUMBER`, `TEMPERATURE`, `Surf` и crossplot-сценарии.
 - [ ] Поддержать single-axis и dual-axis, включая Y zoom target.
@@ -165,7 +167,10 @@
 
 Задачи:
 
-- Построить основной shell: меню/command bar, рабочая область графиков, панель источников, статусная строка.
+- [x] Построить первый shell по старой схеме окна: верхнее меню, компактная панель управления графиком, рабочая область графика и нижняя статусная строка.
+- [x] Подключить сценарий открытия `.bin/.biv/.DEV` через WinUI picker и загрузку в `ToolDataRepository`.
+- [x] Показать первый график по default `CurveDefinition` (`AmplitudeRx1`, `T1`, `400 kHz`) через `ChartDataCalculator`.
+- [ ] Довести основной shell до полного паритета со старым окном: второй график, graph 2 controls, scroll/undo controls, cursor fields, notes controls, status parts.
 - Перенести схему прибора и capability-aware доступность T1..T5.
 - Перенести пресеты кривых: амплитуды R1/R2, отношения, разности фаз, silent, температура, UES, симм. фазы.
 - Перенести немодальный лог обмена с прибором.
@@ -192,6 +197,8 @@
 4. Показать один график с одной выбранной кривой.
 5. Поддержать zoom и координаты курсора.
 6. Сравнить значения с текущим приложением на одном контрольном файле.
+
+Статус: пункты 1-4 реализованы в первой WinUI-вертикали и build/launch verified. Сценарий выбора реального файла через picker нужно отдельно зафиксировать вручную или автоматизированным UI-прогоном; пункты 5-6 остаются следующими parity-задачами.
 
 ## 7. Риски
 

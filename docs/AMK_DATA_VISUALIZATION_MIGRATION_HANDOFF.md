@@ -200,13 +200,35 @@
 - `AMK.DataVisualization.IO.Tests`: успешно, real-data scan прошел: `files=163; records=25307; bin=163; biv=0; dev=0`.
 - `AMK.DataVisualization.Charting.Tests`: успешно, включая synthetic configuration tests и real-data smoke.
 
+### 8. Первая WinUI-вертикаль
+
+Реализовано:
+
+- `CommandBar` с действием `Open`.
+- `FileOpenPicker` для `.bin`, `.biv`, `.DEV`.
+- загрузка выбранного файла через `ToolDataRepository`.
+- построение default `ChartConfiguration` по старому дефолту `CurveDefinition`: `AmplitudeRx1`, `T1`, `400 kHz`, `mV`.
+- расчет ряда через `ChartDataCalculator.CalculateChartDataFromConfiguration`.
+- отображение одного графика через `LineChartControl`.
+- панель источника показывает имя файла, количество записей, signature и тип прибора.
+
+Проверено:
+
+- build: успешно, `0 warnings / 0 errors`.
+- Core/IO/Charting smoke tests: успешно.
+- WinUI launch: успешно, окно `AMK Data Visualization` открывается и отвечает.
+
+Не зафиксировано автоматизированно:
+
+- ручной выбор реального файла через picker и визуальное сравнение с текущим C++ приложением.
+
 ## Следующий шаг переноса
 
-Следующий шаг: перейти к первой UI-вертикали:
+Следующий шаг: зафиксировать выбор реального файла через WinUI picker, затем переносить graph data source для одного/двух графиков:
 
 `Open file -> ToolDataRepository -> ChartConfiguration -> ChartDataCalculator -> one rendered chart`
 
-После этого переносить graph data source для одного/двух графиков, graph 2 linked/independent mode и UI-обвязку выбора кривых.
+После этого переносить graph 2 linked/independent mode, UI-обвязку выбора кривых, zoom, координаты курсора и parity-сравнение с текущим приложением.
 
 ## Уже использованные C++ участки для ChartConfiguration
 

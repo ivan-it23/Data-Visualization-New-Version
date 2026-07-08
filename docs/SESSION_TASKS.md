@@ -1,6 +1,6 @@
 ﻿# AMK Data Visualization - задачи текущей сессии
 
-Последнее обновление: 2026-07-08 12:00 MSK
+Последнее обновление: 2026-07-08 11:50 MSK
 
 ## Назначение файла
 
@@ -56,6 +56,10 @@
 - [x] Перенесены `UpdateAxisConfiguration`, `GroupCurvesByAxis`, `CalculateSingleCurveData`, `CalculateCustomCurveData`, `CalculateChartDataFromConfiguration`.
 - [x] Сохранена совместимость конфигурационного расчета: disabled curves пропускаются, неизвестные `YAxisGroup` игнорируются, порядок кривых по осям сохраняется, `valueScale` применяется после расчета.
 - [x] Сохранена особенность старого `CalculateSingleCurveData`: для `RHO_SMT` и `TEMPERATURE` значения вне `minY/maxY` удаляются из результата, а остальные типы рассчитываются как aligned-ряды без Y-фильтра.
+- [x] Реализована первая UI-вертикаль WinUI: `Open` -> `FileOpenPicker` -> `ToolDataRepository` -> `ChartConfiguration` -> `ChartDataCalculator` -> один график.
+- [x] Добавлен первый `LineChartControl` для отображения одного ряда с сеткой, осями, пустым состоянием и theme-aware контейнером.
+- [x] Исправлена первая WinUI-оболочка под схему старого главного окна: верхнее меню, компактная панель управления графиком, график на всю рабочую область, нижняя статусная строка.
+- [x] Англоязычные подписи в первой UI-вертикали заменены на русские/legacy-совместимые.
 
 ## В работе
 
@@ -68,6 +72,10 @@
 - [x] Проверить фактический запуск WinUI-окна после Charting data-series шага.
 - [x] Перенести `ChartConfiguration`, curve definitions, axis grouping и конфигурационный расчет кривых.
 - [x] Проверить сборку и smoke tests после переноса `ChartConfiguration`.
+- [x] Сделать первую вертикаль UI: открыть файл -> прочитать canonical frames -> показать один график.
+- [x] Проверить сборку, smoke tests и фактический запуск WinUI-окна после первой UI-вертикали.
+- [x] Вернуть первой UI-вертикали расположение элементов старого главного окна вместо новой боковой панели.
+- [x] Проверить сборку, smoke tests и фактический запуск WinUI-окна после исправления legacy shell.
 
 ## Не начато
 
@@ -76,7 +84,8 @@
 - [ ] Перенести sidecar-сегменты старого приложения и новое пространство хранения.
 - [x] Перенести первую версию Charting data-series слоя: `DataType`, `FrequencyBand`, transmitter-aware aligned series.
 - [x] Перенести Charting configuration слой: `ChartConfiguration`, curve definitions, axis grouping.
-- [ ] Сделать первую вертикаль UI: открыть файл -> прочитать canonical frames -> показать один график.
+- [x] Сделать первую вертикаль UI: открыть файл -> прочитать canonical frames -> показать один график.
+- [ ] Автоматизировать или вручную зафиксировать parity-сценарий выбора реального файла через WinUI picker.
 
 ## Решения текущей сессии
 
@@ -87,6 +96,9 @@
 - Mixed metadata range считается валидным для canonical export, но требует adapter-aware policy, как в старом `TryAnalyzeExportRange`.
 - Generated smoke fixtures нужны для быстрой проверки контракта; real-data smoke проверяет массовую загрузку приборных файлов; golden fixtures с ожидаемыми значениями остаются отдельной parity-задачей.
 - `ChartDataCalculator.CalculateChartData` остается aligned multi-series API; конфигурационный слой `CalculateSingleCurveData` повторяет старую ветку `DataModule` с особым Y-фильтром только для `RHO_SMT` и `TEMPERATURE`.
+- Первая UI-вертикаль использует старый default `CurveDefinition`: `AmplitudeRx1`, `T1`, `400 kHz`, единицы `mV`. UI не считает значения сам, а вызывает `ChartDataCalculator.CalculateChartDataFromConfiguration`.
+- Для WinUI-дизайна разрешены современная визуальная отделка и Fluent-технологии, но расположение элементов, русские подписи и поведение главного окна берутся из `Amk-Horizon-New-Chart` без перестановок. Даже временные тестовые вертикали должны использовать старую схему окна.
+- Текущий старый shell-контракт главного окна: меню сверху (`Файл`, `Настройки подключения`, `Метрология`, `Конструктор файлов`, `Заметки`, `Логи`, `Проверить обновления`, `Документация`), затем компактная панель `Двойной режим` / `Схема прибора` / X-range / `Поток` / кнопки опроса и подключения / поля курсора, затем область графика, затем статусная строка.
 
 ## Проверки текущей сессии
 
@@ -99,10 +111,20 @@
 - Core smoke tests после `ChartConfiguration` переноса: успешно, `Core binary contract smoke tests passed.`, `GpToolData=240; MetrologyData=240`.
 - IO smoke tests после `ChartConfiguration` переноса: успешно, `Real-data fixtures loaded: files=163; records=25307; bin=163; biv=0; dev=0`, `IO file loader, repository, range export, and real-data smoke tests passed.`
 - Charting smoke tests после `ChartConfiguration` переноса: успешно, `Charting real-data series loaded: file=AMK_12026_0_20260616_102250.bin; records=18; channels=5`, `Charting data-series smoke tests passed.`
+- Build после первой UI-вертикали: успешно, `0` warnings / `0` errors.
+- Core smoke tests после первой UI-вертикали: успешно, `Core binary contract smoke tests passed.`, `GpToolData=240; MetrologyData=240`.
+- IO smoke tests после первой UI-вертикали: успешно, `Real-data fixtures loaded: files=163; records=25307; bin=163; biv=0; dev=0`, `IO file loader, repository, range export, and real-data smoke tests passed.`
+- Charting smoke tests после первой UI-вертикали: успешно, `Charting real-data series loaded: file=AMK_12026_0_20260616_102250.bin; records=18; channels=5`, `Charting data-series smoke tests passed.`
+- Launch после первой UI-вертикали: успешно, `Get-Process` подтвердил видимое окно процесса `34836`: title `AMK Data Visualization`, handle `4392264`, `Responding=True`.
+- Build после исправления legacy shell: успешно, `0` warnings / `0` errors.
+- Core smoke tests после исправления legacy shell: успешно, `Core binary contract smoke tests passed.`, `GpToolData=240; MetrologyData=240`.
+- IO smoke tests после исправления legacy shell: успешно, `Real-data fixtures loaded: files=163; records=25307; bin=163; biv=0; dev=0`, `IO file loader, repository, range export, and real-data smoke tests passed.`
+- Charting smoke tests после исправления legacy shell: успешно, `Charting real-data series loaded: file=AMK_12026_0_20260616_102250.bin; records=18; channels=5`, `Charting data-series smoke tests passed.`
+- Launch после исправления legacy shell: успешно, `Get-Process` подтвердил видимое окно процесса `26512`: title `Amk-Horizon-New-Chart`, handle `10815326`, `Responding=True`.
 
 ## Следующий рекомендуемый шаг
 
-Следующий шаг: подготовить первую UI-вертикаль “открыть файл -> ToolDataRepository -> ChartConfiguration -> ChartDataCalculator -> один график” и затем перенести graph data source для одного/двух графиков.
+Следующий шаг: вручную или автоматизированно зафиксировать выбор реального файла через WinUI picker в legacy shell, затем переносить graph data source для одного/двух графиков и режимы graph 2 linked/independent без изменения расположения элементов старого окна.
 
 
 
