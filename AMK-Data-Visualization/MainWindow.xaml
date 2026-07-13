@@ -58,6 +58,7 @@
                 Unchecked="DualModeCheckBox_Unchecked" />
 
             <Button
+                x:Name="Graph1SchematicButton"
                 Grid.Column="1"
                 Width="120"
                 Height="24"
@@ -66,7 +67,7 @@
                 VerticalAlignment="Center"
                 Content="Схема прибора"
                 FontWeight="SemiBold"
-                IsEnabled="False" />
+                Click="Graph1SchematicButton_Click" />
 
             <StackPanel
                 Grid.Column="2"
@@ -256,13 +257,14 @@
                     Orientation="Horizontal"
                     Spacing="4">
                     <Button
+                        x:Name="Graph2SchematicButton"
                         Width="140"
                         Height="24"
                         MinWidth="0"
                         Padding="8,0"
                         Content="Схема прибора"
                         FontWeight="SemiBold"
-                        IsEnabled="False" />
+                        Click="Graph2SchematicButton_Click" />
                     <TextBox
                         x:Name="XRange2FromTextBox"
                         Width="50"

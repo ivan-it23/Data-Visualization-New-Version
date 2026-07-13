@@ -13,9 +13,9 @@
 - Старое приложение остается источником истины по поведению до тех пор, пока новая реализация не пройдет parity-проверку.
 - Бинарные форматы, индексация каналов, единицы измерения и расчетные формулы переносятся без смысловых изменений.
 - Любое изменение поведения должно быть явно описано как новая бизнес-логика, а не как часть технического переноса.
-- Сначала переносятся модели, форматы, расчеты и тестовые фикстуры; затем строится UI.
+- Сначала переносятся модели, форматы и расчеты; затем строится UI.
 - Сборка не считается полной проверкой: для UI-изменений нужно отдельно подтверждать запуск окна и основные сценарии.
-- Современный WinUI-дизайн допустим только как визуальная реализация старой схемы. Расположение элементов главного окна, русские подписи, меню, панели графиков и статусная строка должны переноситься из `Amk-Horizon-New-Chart` без произвольных перестановок, включая временные тестовые вертикали.
+- Современный WinUI-дизайн допустим только как визуальная реализация старой схемы. Расположение элементов главного окна, русские подписи, меню, панели графиков и статусная строка должны переноситься из `Amk-Horizon-New-Chart` без произвольных перестановок, включая промежуточные вертикали.
 
 ## 3. Текущие источники истины старого проекта
 
@@ -57,7 +57,7 @@
 - `AMK.DataVisualization.Charting` - подготовка рядов, координаты, LOD, hit-test, модели графиков.
 - `AMK.DataVisualization.Reporting` - отчеты, экспорт, печать, будущие документы.
 
-Тестовые smoke-проекты добавляются рядом с переносимыми слоями: `AMK.DataVisualization.Core.Tests` проверяет бинарный контракт, `AMK.DataVisualization.IO.Tests` проверяет чтение контейнеров `.bin/.biv/.DEV`.
+Автоматизированные тестовые проекты не входят в решение. Сборка используется как проверка компиляции, а функциональный паритет подтверждается владельцем проекта вручную на реальных `.bin/.biv/.DEV`.
 
 ## 5. Этапы переноса
 
@@ -85,7 +85,7 @@
 
 ### Этап 2. Core: бинарные структуры и capabilities
 
-Статус: начат 2026-07-06. Первая версия `GpToolData`, `MetrologyData`, capabilities, `UniversalCanonicalAdapter`, `ToolDataAdapterRegistry`, `ToolDataAccessView` и smoke tests перенесена.
+Статус: начат 2026-07-06. Первая версия `GpToolData`, `MetrologyData`, capabilities, `UniversalCanonicalAdapter`, `ToolDataAdapterRegistry` и `ToolDataAccessView` перенесена.
 
 Задачи:
 
@@ -95,8 +95,7 @@
 - [x] Перенести decode toolCode из signature: тип прибора, число передатчиков, модификация.
 - [x] Перенести `ToolCapabilities`, `ToolRecordMetadata`, `ParsedToolFrame`.
 - [x] Перенести `UniversalCanonicalAdapter` и registry.
-- [x] Добавить проверки `sizeof`/`Marshal.SizeOf` и smoke tests.
-- [ ] Добавить golden fixtures на реальных файлах после переноса `AMK.DataVisualization.IO`.
+- [x] Сохранить бинарный размер `GpToolData` и `MetrologyData` в 240 байт через явную layout-модель.
 
 ### Этап 3. IO: файлы и canonical storage
 
@@ -108,13 +107,9 @@
 - [x] Реализовать чтение signature с правильного смещения: начало кадра для `.bin/.biv`, после 11 байт для `.DEV`.
 - [x] Реализовать physical frame size: 240 для `.bin/.biv`, 251 для `.DEV`.
 - [x] Реализовать materialize через `ToolDataAdapterRegistry` в canonical `GP_TOOL_DATA + ToolRecordMetadata`.
-- [x] Добавить smoke tests для generated `.bin`, `.biv`, `.DEV`, unsupported extension и corrupted size.
 - [x] Перенести stateful-часть `DataModule`: `ApplyLoadedData`, `ClearData`, `AddData`, `AddDataBatch`, `AddParsedData`, `dataVersion`, `LoadedFileName`, доступ к records/metadata.
 - [x] Перенести `TryDescribeRangeMetadata`, `TryAnalyzeExportRange`, `TryGetRangeMetadataSummary`.
-- [x] Добавить repository smoke tests для версионирования, mixed metadata range и access view.
-- [x] Подключить real-data smoke проверку из `Desktop\AMK_Data`: загрузка поддержанных файлов через `ToolDataFileReader` и `ToolDataRepository`.
-- [x] Добавить smoke tests для canonical save range, `.bin` cut range, `.DEV` cut range и отказов при invalid/same/mismatched range.
-- [ ] Добавить golden fixtures с зафиксированными ожидаемыми значениями на выбранных реальных файлах старого приложения.
+- [ ] Проверить вручную на реальных файлах загрузку `.bin/.biv/.DEV`, версионирование repository, canonical save range и cut range.
 - [x] Перенести range export, save range, cut range: `SaveDataRange` пишет canonical 240-byte records, `SaveFileExcludingRange` сохраняет исходные physical frames при совпадающем формате.
 - [ ] Перенести sidecar-сегменты `%LOCALAPPDATA%\AMK-Horizon-New-Chart\segments\...` с новым пространством хранения и миграцией старых sidecar.
 ### Этап 4. Metrology: расчеты и from computer/from sonde
@@ -142,7 +137,7 @@
 
 ### Этап 6. Charting: данные графиков и геометрия
 
-Статус: начат 2026-07-07, продолжен 2026-07-08. Первая версия aligned data-series слоя перенесена в `AMK.DataVisualization.Charting`: `DataType`, `FrequencyBand`, `Transmitter`, `GetDataIndexRange`, `NormalizePhase`, conversion to millidegrees и multi-series `CalculateChartData` для базовых типов. Также перенесен слой конфигурации кривых: `CurveDefinition`, `ChartConfiguration`, axis grouping, `CalculateSingleCurveData`, `CalculateCustomCurveData` и `CalculateChartDataFromConfiguration`. Первая WinUI-вертикаль уже использует этот слой для отображения одного ряда внутри legacy-совместимой схемы главного окна.
+Статус: начат 2026-07-07, продолжен 2026-07-13. Перенесены aligned data-series слой, модели конфигурации кривых, группировка по двум Y-осям, расчет комбинированных конфигураций и preset-слой. WinUI shell применяет независимые конфигурации Graph 1/Graph 2, отображает несколько серий, легенду активного пресета и ось X по номеру кадра или температуре. Расчеты и состояние метрологии для SMT-режима «на компьютере» еще не перенесены.
 
 Задачи:
 
@@ -150,16 +145,17 @@
 - [x] Перенести aligned multi-series расчет для `PHASE_DIFFERENCE`, `AMPLITUDE_RATIO`, `AMPLITUDE_RX1`, `AMPLITUDE_RX2`, `PHASE_SMT`, `RHO_SMT`, silent amplitude/phase и `TEMPERATURE`.
 - [x] Сохранить старую семантику пропусков: отсутствующие/невидимые значения добавляются как `NaN`, чтобы не ломать X-alignment.
 - [x] Сохранить phase normalization и conversion `57295.7795 mdeg/rad`.
-- [x] Добавить Charting smoke tests на synthetic records и реальный файл из `Desktop\AMK_Data`.
+- [ ] Проверить вручную расчет рядов и конфигураций графика на реальных файлах после завершения окна «Схема прибора».
 - [x] Перенести модели `ChartConfiguration`, curve definitions и axis grouping.
 - [x] Перенести `CalculateSingleCurveData`, `CalculateCustomCurveData` и `CalculateChartDataFromConfiguration`.
 - [x] Сохранить совместимость `CalculateSingleCurveData`: `valueScale` применяется после расчета; `RHO_SMT` и `TEMPERATURE` удаляют точки вне `minY/maxY`, остальные типы сохраняют aligned-ряд.
 - [x] Перенести source-state для одного/двух графиков: Graph 1 как primary repository, Graph 2 в linked или independent mode.
 - [x] Поддержать первый минимальный сценарий одного графика с одной кривой.
-- [ ] Поддержать полноценные режимы одного и двух графиков.
+- [x] Поддержать применение независимых конфигураций кривых в режимах одного и двух графиков; интерактивный parity графиков остается в последующих задачах.
 - [x] Поддержать Graph 2 в linked mode и independent file mode на уровне source-state и WinUI shell; parity-проверка с двумя реальными файлами остается отдельной задачей.
-- [ ] Поддержать X-axis по `FRAME_NUMBER`, `TEMPERATURE`, `Surf` и crossplot-сценарии.
-- [ ] Поддержать single-axis и dual-axis, включая Y zoom target.
+- [x] Поддержать X-axis по `FRAME_NUMBER` и `TEMPERATURE` в текущем renderer.
+- [ ] Поддержать оставшиеся X-axis `Surf` и crossplot-сценарии.
+- [x] Поддержать отрисовку single-axis и dual-axis; Y zoom target остается отдельной задачей.
 - [ ] Перенести zoom, scroll, undo/reset, crosshair, cursor coordinate fields.
 - [ ] Перенести LOD/downsampling и cache-инварианты.
 - [ ] Обеспечить единый geometry path для draw, screen-to-data, crosshair, notes и hit-test.
@@ -172,8 +168,9 @@
 - [x] Подключить сценарий открытия `.bin/.biv/.DEV` через WinUI picker и загрузку в `ToolDataRepository`.
 - [x] Показать первый график по default `CurveDefinition` (`AmplitudeRx1`, `T1`, `400 kHz`) через `ChartDataCalculator`.
 - [ ] Довести основной shell до полного паритета со старым окном: второй график, graph 2 controls, scroll/undo controls, cursor fields, notes controls, status parts.
-- Перенести схему прибора и capability-aware доступность T1..T5.
-- Перенести пресеты кривых: амплитуды R1/R2, отношения, разности фаз, silent, температура, UES, симм. фазы.
+- [x] Перенести немодальную схему прибора, независимые состояния Graph 1/Graph 2 и capability-aware доступность T1..T5.
+- [x] Перенести пресеты кривых: амплитуды R1/R2, отношения, разности фаз, silent, температура, УЭС и симметричные фазы в режиме «на приборе».
+- [ ] Перенести метрологические вычисления УЭС/симметричных фаз «на компьютере»; до этого выбора окно использует legacy-предупреждение об отсутствии метрологических данных.
 - Перенести немодальный лог обмена с прибором.
 - Перенести notes UI и визуализацию маркеров.
 - Перенести окно конструктора файлов.

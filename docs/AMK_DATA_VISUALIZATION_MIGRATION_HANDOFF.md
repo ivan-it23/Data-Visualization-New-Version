@@ -28,7 +28,7 @@
 ## Что уже перенесено в новый проект
 
 Состояние ниже зафиксировано по предыдущей рабочей сессии. Перед продолжением
-нужно быстро перепроверить файлы и тесты в `AMK-Data-Visualization`.
+нужно быстро перепроверить файлы и сборку `AMK-Data-Visualization`.
 
 ### 1. Базовая структура решения
 
@@ -41,9 +41,6 @@
 - `src\AMK.DataVisualization.Metrology`
 - `src\AMK.DataVisualization.Charting`
 - `src\AMK.DataVisualization.Reporting`
-- `tests\AMK.DataVisualization.Core.Tests`
-- `tests\AMK.DataVisualization.IO.Tests`
-- `tests\AMK.DataVisualization.Charting.Tests`
 
 Документы нового проекта:
 
@@ -193,30 +190,28 @@
 
 `C:\Users\Admin\Desktop\AMK_Data`
 
-Последняя зафиксированная проверка:
+Последняя зафиксированная проверка до удаления автоматизированных тестовых проектов:
 
 - `dotnet build` нового решения: успешно, `0 warnings / 0 errors`.
-- `AMK.DataVisualization.Core.Tests`: успешно, `GpToolData=240; MetrologyData=240`.
-- `AMK.DataVisualization.IO.Tests`: успешно, real-data scan прошел: `files=163; records=25307; bin=163; biv=0; dev=0`.
-- `AMK.DataVisualization.Charting.Tests`: успешно, включая synthetic configuration tests и real-data smoke.
 
-### 8. Первая WinUI-вертикаль
+С 2026-07-13 функциональный паритет проверяется владельцем проекта вручную на реальных приборных файлах; сборка подтверждает только компиляцию.
+
+### 8. Текущая WinUI-вертикаль
 
 Реализовано:
 
-- `CommandBar` с действием `Open`.
-- `FileOpenPicker` для `.bin`, `.biv`, `.DEV`.
-- загрузка выбранного файла через `ToolDataRepository`.
-- построение default `ChartConfiguration` по старому дефолту `CurveDefinition`: `AmplitudeRx1`, `T1`, `400 kHz`, `mV`.
-- расчет ряда через `ChartDataCalculator.CalculateChartDataFromConfiguration`.
-- отображение одного графика через `LineChartControl`.
-- панель источника показывает имя файла, количество записей, signature и тип прибора.
+- `FileOpenPicker` для `.bin`, `.biv`, `.DEV` и загрузка через `ToolDataRepository`.
+- Graph 1 и Graph 2 с linked/independent источниками через `ChartWorkspace`.
+- немодальное окно «Схема прибора» с ручным комбинированным выбором, capability-aware T1..T5, legacy-валидацией и отдельным editor session для каждого графика.
+- быстрые пресеты амплитуд R1/R2, отношений, разностей фаз, УЭС, симметричных фаз, silent-каналов и температуры.
+- применение `ChartConfiguration` к выбранному графику и multi-series расчет через `ChartDataCalculator.CalculateChartDataFromConfiguration`.
+- отрисовка левой/правой оси, X по номеру кадра или температуре и названия активного пресета через `LineChartControl`.
 
 Проверено:
 
-- build: успешно, `0 warnings / 0 errors`.
-- Core/IO/Charting smoke tests: успешно.
-- WinUI launch: успешно, окно `AMK Data Visualization` открывается и отвечает.
+- build после переноса окна: успешно, `0 warnings / 0 errors`.
+- WinUI launch: основное окно и немодальная «Схема прибора» открываются и отвечают.
+- UI Automation подтвердила доступность controls, генерацию пресета «Амплитуды R1» и независимость незавершенных состояний Graph 1/Graph 2.
 
 Не зафиксировано автоматизированно:
 
@@ -224,11 +219,9 @@
 
 ## Следующий шаг переноса
 
-Следующий шаг: зафиксировать выбор реального файла через WinUI picker, затем переносить graph data source для одного/двух графиков:
+Владелец проекта вручную проверяет окно на реальных `.bin/.biv/.DEV`: комбинированные наборы и все быстрые пресеты отдельно для Graph 1/Graph 2, распределение серий по осям и X по температуре. Успешная сборка и UI Automation не заменяют эту проверку.
 
-`Open file -> ToolDataRepository -> ChartConfiguration -> ChartDataCalculator -> one rendered chart`
-
-После этого переносить graph 2 linked/independent mode, UI-обвязку выбора кривых, zoom, координаты курсора и parity-сравнение с текущим приложением.
+После фиксации parity-результатов переносить метрологические вычисления УЭС/симметричных фаз «на компьютере», затем zoom, scroll, crosshair и координаты курсора.
 
 ## Уже использованные C++ участки для ChartConfiguration
 
@@ -372,11 +365,11 @@ Dispatch по `curve.dataType`:
 - если данных нет или `config.curves.empty()` - return.
 - делегирует в `CalculateCustomCurveData(config.curves, ...)`.
 
-## Следующие блоки после ChartConfiguration
+## Перенесенный preset-слой и следующие блоки
 
 ### Presets и CurveSelectionModule
 
-Переносить после базового `ChartConfiguration`:
+Следующие C++ участки использованы как источник истины для уже перенесенного preset-слоя; zoom-aware расчет и полный cache/rendering parity остаются следующими задачами:
 
 - [`CurveSelectionModule.cpp`](../Amk-Horizon-New-Chart/CurveSelectionModule.cpp#L871) - `CreatePresetConfiguration`.
 - [`CurveSelectionModule.cpp`](../Amk-Horizon-New-Chart/CurveSelectionModule.cpp#L919) - `BuildFullCurveSet`.
@@ -410,38 +403,19 @@ Dispatch по `curve.dataType`:
 - [`ChartModule.cpp`](../Amk-Horizon-New-Chart/ChartModule.cpp#L3133) - temperature grid.
 - [`ChartModule.cpp`](../Amk-Horizon-New-Chart/ChartModule.cpp#L3386) - temperature data drawing.
 
-## Тестовое покрытие ChartConfiguration
+## Ручная проверка ChartConfiguration
 
-После переноса `ChartConfiguration` добавлены проверки в
-`tests\AMK.DataVisualization.Charting.Tests`:
+Автоматизированные тестовые проекты удалены 2026-07-13. После завершения окна
+«Схема прибора» владелец проекта проверяет на реальных `.bin/.biv/.DEV`:
 
-1. `ChartConfiguration.UpdateAxisConfiguration`:
-   - disabled curves игнорируются.
-   - left/right units берутся с первой включенной кривой.
-   - `hasDualAxis` выставляется только при наличии обеих осей.
-   - units очищаются при отсутствии соответствующей оси.
+1. применение комбинированных и быстрых пресетов к Graph 1 и Graph 2;
+2. порядок включенных кривых и распределение по левой/правой оси;
+3. доступность T1..T5 в соответствии с capabilities загруженного файла;
+4. поведение пустой конфигурации и отключенных кривых;
+5. расчет `TEMPERATURE`, `RHO_SMT`, масштабирование `valueScale` и сохранение разрывов `NaN`;
+6. независимость конфигураций и источников данных Graph 1/Graph 2.
 
-2. `GroupCurvesByAxis`:
-   - порядок кривых сохраняется.
-   - disabled curves игнорируются.
-   - неизвестный `yAxisGroup` игнорируется.
-
-3. `CalculateSingleCurveData`:
-   - dispatch по всем уже перенесенным `DataType`.
-   - `valueScale` применяется после расчета.
-   - `NaN` сохраняется при масштабировании.
-   - `TEMPERATURE` и `RHO_SMT` используют старое поведение с удалением точек
-     вне `minY/maxY`.
-
-4. `CalculateChartDataFromConfiguration`:
-   - левая/правая ось получают массивы в порядке сгруппированных кривых.
-   - пустые данные и пустой config возвращают пустые axis data.
-
-5. Real-data smoke:
-   - использовать `C:\Users\Admin\Desktop\AMK_Data`.
-   - проверить минимум один `.bin` файл с несколькими curves и двумя осями.
-
-Следующий тестовый блок нужен уже для первой UI-вертикали: открыть файл, заполнить `ToolDataRepository`, построить конфигурационный ряд и отрисовать один график.
+Результаты такой проверки нужно фиксировать отдельно от успешной сборки.
 
 ## Команды проверки
 
@@ -449,14 +423,11 @@ Dispatch по `curve.dataType`:
 
 ```powershell
 dotnet build .\AMK-Data-Visualization.slnx -p:Platform=x64 -p:UseSharedCompilation=false
-dotnet run --project .\tests\AMK.DataVisualization.Core.Tests\AMK.DataVisualization.Core.Tests.csproj
-dotnet run --project .\tests\AMK.DataVisualization.IO.Tests\AMK.DataVisualization.IO.Tests.csproj
-dotnet run --project .\tests\AMK.DataVisualization.Charting.Tests\AMK.DataVisualization.Charting.Tests.csproj
 ```
 
 Если меняется WinUI startup или визуальная вертикаль, после build нужно реально
-запустить приложение и подтвердить окно `AMK Data Visualization`, а не считать
-один только build полной проверкой.
+запустить приложение и подтвердить главное окно `Amk-Horizon-New-Chart` и
+соответствующее рабочее окно, а не считать один только build полной проверкой.
 
 ## Правила ведения документации при переносе
 

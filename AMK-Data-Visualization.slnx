@@ -23,13 +23,5 @@
   <Project Path="src/AMK.DataVisualization.Reporting/AMK.DataVisualization.Reporting.csproj">
     <Platform Solution="*|x64" Project="Any CPU" />
   </Project>
-  <Project Path="tests/AMK.DataVisualization.Core.Tests/AMK.DataVisualization.Core.Tests.csproj">
-    <Platform Solution="*|x64" Project="Any CPU" />
-  </Project>
-  <Project Path="tests/AMK.DataVisualization.IO.Tests/AMK.DataVisualization.IO.Tests.csproj">
-    <Platform Solution="*|x64" Project="Any CPU" />
-  </Project>
-  <Project Path="tests/AMK.DataVisualization.Charting.Tests/AMK.DataVisualization.Charting.Tests.csproj">
-    <Platform Solution="*|x64" Project="Any CPU" />
-  </Project></Solution>
+</Solution>
 

@@ -371,6 +371,22 @@ public static class ChartDataCalculator
         return normalizedPhaseRadians * MillidegreePerRadian;
     }
 
+    public static List<float> CalculateXAxisData(
+        IReadOnlyList<GpToolData> records,
+        IReadOnlyList<ToolRecordMetadata> metadata,
+        XAxisType xAxisType)
+    {
+        List<float> output = new(records.Count);
+        for (int recordIndex = 0; recordIndex < records.Count; recordIndex++)
+        {
+            output.Add(xAxisType == XAxisType.Temperature
+                ? CreateMeasurementView(records, metadata, recordIndex).Temperature
+                : recordIndex);
+        }
+
+        return output;
+    }
+
     private static void CalculateActiveTransmitterData(
         IReadOnlyList<GpToolData> records,
         IReadOnlyList<ToolRecordMetadata> metadata,

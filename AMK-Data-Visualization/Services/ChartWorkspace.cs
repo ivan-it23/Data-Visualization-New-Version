@@ -26,9 +26,9 @@ internal sealed class ChartWorkspace
 
     public ToolDataRepository Graph2IndependentRepository { get; } = new();
 
-    public ChartConfiguration Graph1Configuration { get; }
+    public ChartConfiguration Graph1Configuration { get; private set; }
 
-    public ChartConfiguration Graph2Configuration { get; }
+    public ChartConfiguration Graph2Configuration { get; private set; }
 
     public Graph2DataMode Graph2Mode { get; private set; } = Graph2DataMode.LinkedToGraph1;
 
@@ -58,6 +58,22 @@ internal sealed class ChartWorkspace
             2 => Graph2Configuration,
             _ => throw new ArgumentOutOfRangeException(nameof(graphNumber))
         };
+    }
+
+    public void ApplyConfigurationForGraph(int graphNumber, ChartConfiguration configuration)
+    {
+        ChartConfiguration copy = configuration.Copy();
+        switch (graphNumber)
+        {
+            case 1:
+                Graph1Configuration = copy;
+                break;
+            case 2:
+                Graph2Configuration = copy;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(graphNumber));
+        }
     }
 
     public string GetStatusFileInformation()

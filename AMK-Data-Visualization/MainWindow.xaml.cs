@@ -1,10 +1,13 @@
 using System.Runtime.InteropServices;
+using AMK.DataVisualization.App.Controls;
 using AMK.DataVisualization.Charting.Series;
+using AMK.DataVisualization.Charting.Configuration;
 using AMK.DataVisualization.Core;
 using AMK.DataVisualization.Core.Adapters;
 using AMK.DataVisualization.IO.DataFiles;
 using AMK.DataVisualization.App.Layout;
 using AMK.DataVisualization.App.Services;
+using AMK.DataVisualization.App.Views;
 using Microsoft.UI.Xaml;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
@@ -13,11 +16,10 @@ namespace AMK.DataVisualization.App;
 
 public sealed partial class MainWindow : Window
 {
-    private const int DefaultTransmitterIndex = 0;
     private const int ShowMaximized = 3;
-    private readonly ChartWorkspace chartWorkspace = new(
-        CreateDefaultGraphConfiguration(),
-        new ChartConfiguration());
+    private readonly CurveSelectionService curveSelectionService = new();
+    private readonly ChartWorkspace chartWorkspace = new(new ChartConfiguration(), new ChartConfiguration());
+    private SchematicWindow? schematicWindow;
 
     public MainWindow()
     {
@@ -26,6 +28,7 @@ public sealed partial class MainWindow : Window
         ShowLegacyEmptyState(2, hasData: false);
         UpdateDualModeLayout();
         MaximizeLikeLegacyApplication();
+        Closed += MainWindow_Closed;
     }
 
     private async void OpenFileButton_Click(object sender, RoutedEventArgs e)
@@ -41,6 +44,7 @@ public sealed partial class MainWindow : Window
         try
         {
             chartWorkspace.Graph1Repository.LoadDataFromFile(file.Path);
+            schematicWindow?.RefreshDataContext(1, 2);
             RenderGraph(1);
             RenderGraph(2);
             SetStatus("Готов");
@@ -49,6 +53,7 @@ public sealed partial class MainWindow : Window
         catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException)
         {
             chartWorkspace.Graph1Repository.ClearData();
+            schematicWindow?.RefreshDataContext(1, 2);
             GraphControl.ClearSeries("Ошибка загрузки");
             if (!chartWorkspace.IsGraph2Independent)
             {
@@ -81,12 +86,14 @@ public sealed partial class MainWindow : Window
             chartWorkspace.SetGraph2Mode(Graph2DataMode.IndependentFile);
             UpdateGraph2DataModeUi();
             chartWorkspace.Graph2IndependentRepository.LoadDataFromFile(file.Path);
+            schematicWindow?.RefreshDataContext(2);
             RenderGraph(2);
             SetStatus("Готов");
             UpdateStatusBarFileInfo();
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException)
         {
+            schematicWindow?.RefreshDataContext(2);
             Graph2Control.ClearSeries("Ошибка загрузки");
             SetStatus("Ошибка загрузки");
             UpdateStatusBarFileInfo();
@@ -96,6 +103,7 @@ public sealed partial class MainWindow : Window
     private void Graph2LinkedModeMenuItem_Click(object sender, RoutedEventArgs e)
     {
         chartWorkspace.SetGraph2Mode(Graph2DataMode.LinkedToGraph1);
+        schematicWindow?.RefreshDataContext(2);
         UpdateGraph2DataModeUi();
         RenderGraph(2);
         UpdateStatusBarFileInfo();
@@ -104,6 +112,7 @@ public sealed partial class MainWindow : Window
     private void Graph2IndependentModeMenuItem_Click(object sender, RoutedEventArgs e)
     {
         chartWorkspace.SetGraph2Mode(Graph2DataMode.IndependentFile);
+        schematicWindow?.RefreshDataContext(2);
         UpdateGraph2DataModeUi();
         RenderGraph(2);
         UpdateStatusBarFileInfo();
@@ -118,6 +127,35 @@ public sealed partial class MainWindow : Window
     private void DualModeCheckBox_Unchecked(object sender, RoutedEventArgs e)
     {
         UpdateDualModeLayout();
+    }
+
+    private void Graph1SchematicButton_Click(object sender, RoutedEventArgs e)
+    {
+        ShowSchematicWindow(1);
+    }
+
+    private void Graph2SchematicButton_Click(object sender, RoutedEventArgs e)
+    {
+        ShowSchematicWindow(2);
+    }
+
+    private void ShowSchematicWindow(int graphNumber)
+    {
+        try
+        {
+            schematicWindow ??= new SchematicWindow(chartWorkspace, curveSelectionService, OnCurveConfigurationApplied);
+            schematicWindow.ShowForGraph(graphNumber, WindowNative.GetWindowHandle(this));
+        }
+        catch (Exception exception)
+        {
+            File.WriteAllText(Path.Combine(Path.GetTempPath(), "amk-schematic-window-error.txt"), exception.ToString());
+            throw;
+        }
+    }
+
+    private void OnCurveConfigurationApplied(int graphNumber)
+    {
+        RenderGraph(graphNumber);
     }
 
     private void RenderGraph(int graphNumber)
@@ -141,17 +179,47 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        CurveDefinition curve = graphConfiguration.Curves[0];
         ConfiguredChartData chartData = ChartDataCalculator.CalculateChartDataFromConfiguration(
             repository.Records,
             repository.RecordMetadata,
             graphConfiguration);
+        List<float> xAxisData = ChartDataCalculator.CalculateXAxisData(
+            repository.Records,
+            repository.RecordMetadata,
+            graphConfiguration.XAxisType);
+        GroupedCurves groupedCurves = ChartDataCalculator.GroupCurvesByAxis(graphConfiguration.Curves);
+        List<ChartRenderSeries> renderSeries = [];
 
-        IReadOnlyList<float> series = chartData.LeftAxisData.Count > 0
-            ? chartData.LeftAxisData[0]
-            : [];
+        for (int index = 0; index < Math.Min(groupedCurves.LeftAxisCurves.Count, chartData.LeftAxisData.Count); index++)
+        {
+            CurveDefinition curve = groupedCurves.LeftAxisCurves[index];
+            renderSeries.Add(new ChartRenderSeries(
+                chartData.LeftAxisData[index],
+                curve.DisplayName,
+                curve.Units,
+                curve.Color,
+                curve.YAxisGroup));
+        }
 
-        graphControl.SetSeries(series, curve.DisplayName, curve.Units);
+        for (int index = 0; index < Math.Min(groupedCurves.RightAxisCurves.Count, chartData.RightAxisData.Count); index++)
+        {
+            CurveDefinition curve = groupedCurves.RightAxisCurves[index];
+            renderSeries.Add(new ChartRenderSeries(
+                chartData.RightAxisData[index],
+                curve.DisplayName,
+                curve.Units,
+                curve.Color,
+                curve.YAxisGroup));
+        }
+
+        graphControl.SetSeries(
+            renderSeries,
+            $"График {graphNumber}",
+            graphConfiguration.LeftAxisUnits,
+            graphConfiguration.RightAxisUnits,
+            xAxisData,
+            graphConfiguration.XAxisType == XAxisType.Temperature ? "Температура, °C" : "Номер кадра",
+            graphConfiguration.IsPresetActive ? graphConfiguration.PresetDisplayName : string.Empty);
     }
 
     private void ShowLegacyEmptyState(int graphNumber, bool hasData)
@@ -216,18 +284,10 @@ public sealed partial class MainWindow : Window
         ShowWindow(WindowNative.GetWindowHandle(this), ShowMaximized);
     }
 
-    private static ChartConfiguration CreateDefaultGraphConfiguration()
+    private void MainWindow_Closed(object sender, WindowEventArgs args)
     {
-        ChartConfiguration configuration = new();
-        configuration.AddCurve(new CurveDefinition(
-            "T1_R1_AMP_400",
-            "T1 Амплитуда R1",
-            "mV",
-            ElementType.Transmitter,
-            DefaultTransmitterIndex,
-            DataType.AmplitudeRx1,
-            FrequencyBand.Freq400KHz));
-        return configuration;
+        schematicWindow?.ClosePermanently();
+        schematicWindow = null;
     }
 
     [DllImport("user32.dll")]
