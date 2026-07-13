@@ -154,10 +154,10 @@
 - [x] Перенести модели `ChartConfiguration`, curve definitions и axis grouping.
 - [x] Перенести `CalculateSingleCurveData`, `CalculateCustomCurveData` и `CalculateChartDataFromConfiguration`.
 - [x] Сохранить совместимость `CalculateSingleCurveData`: `valueScale` применяется после расчета; `RHO_SMT` и `TEMPERATURE` удаляют точки вне `minY/maxY`, остальные типы сохраняют aligned-ряд.
-- [ ] Перенести graph data source для одного/двух графиков.
+- [x] Перенести source-state для одного/двух графиков: Graph 1 как primary repository, Graph 2 в linked или independent mode.
 - [x] Поддержать первый минимальный сценарий одного графика с одной кривой.
 - [ ] Поддержать полноценные режимы одного и двух графиков.
-- [ ] Поддержать graph 2 в linked mode и independent file mode.
+- [x] Поддержать Graph 2 в linked mode и independent file mode на уровне source-state и WinUI shell; parity-проверка с двумя реальными файлами остается отдельной задачей.
 - [ ] Поддержать X-axis по `FRAME_NUMBER`, `TEMPERATURE`, `Surf` и crossplot-сценарии.
 - [ ] Поддержать single-axis и dual-axis, включая Y zoom target.
 - [ ] Перенести zoom, scroll, undo/reset, crosshair, cursor coordinate fields.
@@ -168,6 +168,7 @@
 Задачи:
 
 - [x] Построить первый shell по старой схеме окна: верхнее меню, компактная панель управления графиком, рабочая область графика и нижняя статусная строка.
+- [x] Привести панели Graph 1/Graph 2 к legacy-порядку и равному интервалу controls; сохранить полную подпись `Двойной режим`, правое выравнивание координатных полей и проверить отсутствие наложений через UI Automation.
 - [x] Подключить сценарий открытия `.bin/.biv/.DEV` через WinUI picker и загрузку в `ToolDataRepository`.
 - [x] Показать первый график по default `CurveDefinition` (`AmplitudeRx1`, `T1`, `400 kHz`) через `ChartDataCalculator`.
 - [ ] Довести основной shell до полного паритета со старым окном: второй график, graph 2 controls, scroll/undo controls, cursor fields, notes controls, status parts.

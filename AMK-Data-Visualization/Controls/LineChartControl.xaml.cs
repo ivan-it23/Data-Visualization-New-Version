@@ -13,6 +13,7 @@ public sealed partial class LineChartControl : UserControl
     private readonly List<float> values = [];
     private string title = string.Empty;
     private string units = string.Empty;
+    private string emptyStateMessage = "Нет данных графика";
 
     public LineChartControl()
     {
@@ -33,6 +34,16 @@ public sealed partial class LineChartControl : UserControl
         values.Clear();
         title = emptyTitle;
         units = string.Empty;
+        emptyStateMessage = "Нет данных графика";
+        Render();
+    }
+
+    public void ShowLegacyEmptyState(string chartTitle, string message)
+    {
+        values.Clear();
+        title = chartTitle;
+        units = string.Empty;
+        emptyStateMessage = message;
         Render();
     }
 
@@ -142,7 +153,7 @@ public sealed partial class LineChartControl : UserControl
     {
         TextBlock message = new()
         {
-            Text = "Нет данных графика",
+            Text = emptyStateMessage,
             FontSize = 14,
             Opacity = 0.72,
             Foreground = Foreground
