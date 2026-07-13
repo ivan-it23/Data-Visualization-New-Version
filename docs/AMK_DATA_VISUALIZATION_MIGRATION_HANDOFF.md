@@ -16,7 +16,7 @@
 
 - `Core` - бинарные контракты, типы данных, capabilities, безопасные access-view.
 - `IO` - чтение `.bin/.biv/.DEV`, repository-state, range export.
-- `Hardware` - будущий COM/polling слой.
+- `Hardware` - COM/polling слой: discovery, 125000/8N1 transport, CRC16 packets, live frames, canonical recording и connection settings.
 - `Metrology` - метрология и вычисления, связанные с прибором.
 - `Charting` - расчеты серий, конфигурации кривых, оси, геометрия графиков.
 - `Reporting` - будущие отчеты/экспорт.

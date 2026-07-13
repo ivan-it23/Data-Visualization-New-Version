@@ -19,8 +19,18 @@ namespace AMK.DataVisualization.App.Views;
 public sealed partial class SchematicWindow : Window
 {
     private const int WindowWidth = 820;
-    private const int WindowHeight = 540;
+    private const int WindowHeight = 577;
     private const int WindowOwnerIndex = -8;
+    private const int WindowExtendedStyleIndex = -20;
+    private const int ClassIconIndex = -14;
+    private const int ClassSmallIconIndex = -34;
+    private const int IconSmall = 0;
+    private const int IconBig = 1;
+    private const int WindowMessageGetIcon = 0x007F;
+    private const int WindowMessageSetIcon = 0x0080;
+    private const long ExtendedStyleAppWindow = 0x00040000L;
+    private const long ExtendedStyleToolWindow = 0x00000080L;
+    private const int ShowRestore = 9;
     private const uint NoSize = 0x0001;
     private const uint NoZOrder = 0x0004;
     private readonly ChartWorkspace chartWorkspace;
@@ -71,6 +81,8 @@ public sealed partial class SchematicWindow : Window
             SetWindowLongPtr(windowHandle, WindowOwnerIndex, ownerHandle);
         }
 
+        EnsureTaskbarPresenceAndIcon(windowHandle, ownerHandle);
+
         if (!activated)
         {
             Activate();
@@ -79,6 +91,11 @@ public sealed partial class SchematicWindow : Window
         else
         {
             AppWindow.Show();
+        }
+
+        if (IsIconic(windowHandle))
+        {
+            ShowWindow(windowHandle, ShowRestore);
         }
 
         CenterOverOwner(windowHandle, ownerHandle);
@@ -190,13 +207,13 @@ public sealed partial class SchematicWindow : Window
 
         button.IsEnabled = enabled;
         button.IsChecked = selected;
-        button.BorderBrush = new SolidColorBrush(selected ? Colors.Gold : Colors.DimGray);
-        button.BorderThickness = selected ? new Thickness(3) : new Thickness(1);
+        button.BorderBrush = new SolidColorBrush(selected ? Color.FromArgb(255, 255, 214, 0) : Colors.Transparent);
+        button.BorderThickness = new Thickness(3);
         button.Background = new SolidColorBrush(type switch
         {
-            ElementType.Transmitter => selected ? Color.FromArgb(255, 230, 130, 130) : Color.FromArgb(255, 190, 105, 105),
-            ElementType.Receiver => selected ? Color.FromArgb(255, 130, 220, 130) : Color.FromArgb(255, 105, 185, 105),
-            ElementType.SilentTx => selected ? Color.FromArgb(255, 180, 180, 180) : Color.FromArgb(255, 145, 145, 145),
+            ElementType.Transmitter => Color.FromArgb(255, 190, 105, 105),
+            ElementType.Receiver => Color.FromArgb(255, 105, 185, 105),
+            ElementType.SilentTx => Color.FromArgb(255, 145, 145, 145),
             _ => Colors.Gray
         });
         button.Foreground = new SolidColorBrush(Colors.White);
@@ -281,9 +298,12 @@ public sealed partial class SchematicWindow : Window
 
     private void AddCurveCheckBox(CurveDefinition curve)
     {
+        string axisSuffix = editor?.CurrentPreset is PresetType.None or PresetType.Custom
+            ? $" [{(curve.YAxisGroup == 0 ? "Левая ось" : "Правая ось")}]"
+            : string.Empty;
         CheckBox checkBox = new()
         {
-            Content = $"{curve.DisplayName} ({curve.Units}) [{(curve.YAxisGroup == 0 ? "Левая ось" : "Правая ось")}]",
+            Content = $"{curve.DisplayName} ({curve.Units}){axisSuffix}",
             IsChecked = curve.Enabled,
             MinWidth = 0,
             Tag = curve.Id
@@ -479,8 +499,60 @@ public sealed partial class SchematicWindow : Window
         SetWindowPos(windowHandle, IntPtr.Zero, x, y, 0, 0, NoSize | NoZOrder);
     }
 
+    private static void EnsureTaskbarPresenceAndIcon(IntPtr windowHandle, IntPtr ownerHandle)
+    {
+        long extendedStyle = GetWindowLongPtr(windowHandle, WindowExtendedStyleIndex).ToInt64();
+        extendedStyle |= ExtendedStyleAppWindow;
+        extendedStyle &= ~ExtendedStyleToolWindow;
+        SetWindowLongPtr(windowHandle, WindowExtendedStyleIndex, new IntPtr(extendedStyle));
+
+        if (ownerHandle == IntPtr.Zero)
+        {
+            return;
+        }
+
+        IntPtr largeIcon = SendMessage(ownerHandle, WindowMessageGetIcon, new IntPtr(IconBig), IntPtr.Zero);
+        if (largeIcon == IntPtr.Zero)
+        {
+            largeIcon = GetClassLongPtr(ownerHandle, ClassIconIndex);
+        }
+
+        IntPtr smallIcon = SendMessage(ownerHandle, WindowMessageGetIcon, new IntPtr(IconSmall), IntPtr.Zero);
+        if (smallIcon == IntPtr.Zero)
+        {
+            smallIcon = GetClassLongPtr(ownerHandle, ClassSmallIconIndex);
+        }
+
+        if (largeIcon != IntPtr.Zero)
+        {
+            SendMessage(windowHandle, WindowMessageSetIcon, new IntPtr(IconBig), largeIcon);
+        }
+
+        if (smallIcon != IntPtr.Zero)
+        {
+            SendMessage(windowHandle, WindowMessageSetIcon, new IntPtr(IconSmall), smallIcon);
+        }
+    }
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+    private static extern IntPtr GetWindowLongPtr(IntPtr windowHandle, int index);
+
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
     private static extern IntPtr SetWindowLongPtr(IntPtr windowHandle, int index, IntPtr newValue);
+
+    [DllImport("user32.dll", EntryPoint = "GetClassLongPtrW")]
+    private static extern IntPtr GetClassLongPtr(IntPtr windowHandle, int index);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr windowHandle, int message, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsIconic(IntPtr windowHandle);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ShowWindow(IntPtr windowHandle, int command);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

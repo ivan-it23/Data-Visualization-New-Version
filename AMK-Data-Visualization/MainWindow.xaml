@@ -23,7 +23,11 @@
                     Text="Выход"
                     Click="ExitMenuItem_Click" />
             </MenuBarItem>
-            <MenuBarItem Title="Настройки подключения" />
+            <MenuBarItem Title="Настройки подключения">
+                <MenuFlyoutItem
+                    Text="Открыть настройки подключения..."
+                    Click="ConnectionSettingsMenuItem_Click" />
+            </MenuBarItem>
             <MenuBarItem Title="Метрология" />
             <MenuBarItem Title="Конструктор файлов" />
             <MenuBarItem Title="Заметки">
@@ -159,21 +163,23 @@
                     InputScope="Number"
                     Text="100" />
                 <Button
+                    x:Name="PollingToggleButton"
                     Width="32"
                     Height="24"
                     MinWidth="0"
                     Padding="0"
                     Content="▶"
-                    IsEnabled="False"
+                    Click="PollingToggleButton_Click"
                     ToolTipService.ToolTip="Старт/Стоп опроса прибора" />
                 <Button
+                    x:Name="ConnectionToggleButton"
                     Width="80"
                     Height="24"
                     MinWidth="0"
                     Padding="0"
                     Content="Включить"
                     FontWeight="SemiBold"
-                    IsEnabled="False"
+                    Click="ConnectionToggleButton_Click"
                     ToolTipService.ToolTip="Включение/Отключение прибора" />
             </StackPanel>
 

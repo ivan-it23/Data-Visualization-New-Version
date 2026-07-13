@@ -6,14 +6,83 @@
 
     <Grid
         x:Name="RootGrid"
-        Padding="12"
+        Padding="12,12,12,4"
         Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
         RowSpacing="10">
+        <Grid.Resources>
+        <Style x:Key="SchematicElementToggleButtonStyle" TargetType="ToggleButton">
+            <Setter Property="BorderThickness" Value="3" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="CornerRadius" Value="5" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border
+                            x:Name="ElementBorder"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="{TemplateBinding CornerRadius}">
+                            <ContentPresenter
+                                Content="{TemplateBinding Content}"
+                                ContentTemplate="{TemplateBinding ContentTemplate}"
+                                FontSize="{TemplateBinding FontSize}"
+                                FontWeight="{TemplateBinding FontWeight}"
+                                Foreground="{TemplateBinding Foreground}"
+                                Padding="{TemplateBinding Padding}"
+                                HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
+                            <VisualStateManager.VisualStateGroups>
+                                <VisualStateGroup x:Name="CommonStates">
+                                    <VisualState x:Name="Normal" />
+                                    <VisualState x:Name="PointerOver">
+                                        <VisualState.Setters>
+                                            <Setter Target="ElementBorder.Opacity" Value="0.92" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Pressed">
+                                        <VisualState.Setters>
+                                            <Setter Target="ElementBorder.Opacity" Value="0.82" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Disabled">
+                                        <VisualState.Setters>
+                                            <Setter Target="ElementBorder.Opacity" Value="0.48" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                </VisualStateGroup>
+                                <VisualStateGroup x:Name="CheckStates">
+                                    <VisualState x:Name="Unchecked">
+                                        <VisualState.Setters>
+                                            <Setter Target="ElementBorder.BorderBrush" Value="Transparent" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Checked">
+                                        <VisualState.Setters>
+                                            <Setter Target="ElementBorder.BorderBrush" Value="#FFFFD600" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Indeterminate">
+                                        <VisualState.Setters>
+                                            <Setter Target="ElementBorder.BorderBrush" Value="#FFFFD600" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                </VisualStateGroup>
+                            </VisualStateManager.VisualStateGroups>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        </Grid.Resources>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <Grid>
@@ -45,6 +114,7 @@
                             Width="58"
                             Height="35"
                             MinWidth="0"
+                            Style="{StaticResource SchematicElementToggleButtonStyle}"
                             Click="SchematicElementButton_Click"
                             Content="T5"
                             Tag="Transmitter:4"
@@ -54,6 +124,7 @@
                             Width="58"
                             Height="35"
                             MinWidth="0"
+                            Style="{StaticResource SchematicElementToggleButtonStyle}"
                             Click="SchematicElementButton_Click"
                             Content="T3"
                             Tag="Transmitter:2"
@@ -63,6 +134,7 @@
                             Width="58"
                             Height="35"
                             MinWidth="0"
+                            Style="{StaticResource SchematicElementToggleButtonStyle}"
                             Click="SchematicElementButton_Click"
                             Content="T1"
                             Tag="Transmitter:0"
@@ -72,6 +144,7 @@
                             Width="58"
                             Height="35"
                             MinWidth="0"
+                            Style="{StaticResource SchematicElementToggleButtonStyle}"
                             Click="SchematicElementButton_Click"
                             Content="R1"
                             Tag="Receiver:0"
@@ -81,6 +154,7 @@
                             Width="58"
                             Height="35"
                             MinWidth="0"
+                            Style="{StaticResource SchematicElementToggleButtonStyle}"
                             Click="SchematicElementButton_Click"
                             Content="R2"
                             Tag="Receiver:1"
@@ -90,6 +164,7 @@
                             Width="58"
                             Height="35"
                             MinWidth="0"
+                            Style="{StaticResource SchematicElementToggleButtonStyle}"
                             Click="SchematicElementButton_Click"
                             Content="T2"
                             Tag="Transmitter:1"
@@ -99,6 +174,7 @@
                             Width="58"
                             Height="35"
                             MinWidth="0"
+                            Style="{StaticResource SchematicElementToggleButtonStyle}"
                             Click="SchematicElementButton_Click"
                             Content="T4"
                             Tag="Transmitter:3"
@@ -109,9 +185,10 @@
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
                     <ToggleButton
                         x:Name="SilentReceiver1Button"
-                        Width="58"
+                        Width="64"
                         Height="35"
                         MinWidth="0"
+                        Style="{StaticResource SchematicElementToggleButtonStyle}"
                         Padding="2,0"
                         Click="SchematicElementButton_Click"
                         Content="Молч. R1"
@@ -120,9 +197,10 @@
                         ToolTipService.ToolTip="Молчащий передатчик для R1 - нажмите для выбора" />
                     <ToggleButton
                         x:Name="SilentReceiver2Button"
-                        Width="58"
+                        Width="64"
                         Height="35"
                         MinWidth="0"
+                        Style="{StaticResource SchematicElementToggleButtonStyle}"
                         Padding="2,0"
                         Click="SchematicElementButton_Click"
                         Content="Молч. R2"
@@ -161,11 +239,15 @@
             </ComboBox>
         </StackPanel>
 
-        <Grid Grid.Row="2" ColumnSpacing="10">
+        <Grid Grid.Row="2" ColumnSpacing="10" RowSpacing="6">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="326" />
             </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="40" />
+            </Grid.RowDefinitions>
 
             <Grid RowSpacing="5">
                 <Grid.RowDefinitions>
@@ -189,7 +271,6 @@
 
             <Grid Grid.Column="1" RowSpacing="6">
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
@@ -293,10 +374,6 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
                     <Button
                         HorizontalAlignment="Stretch"
                         Click="PresetButton_Click"
@@ -309,40 +386,44 @@
                         Content="Разность фаз молч."
                         FontSize="12"
                         Tag="SilentPhaseDifference" />
-                    <Button
-                        Grid.Row="1"
-                        Grid.ColumnSpan="2"
-                        HorizontalAlignment="Stretch"
-                        Click="PresetButton_Click"
-                        Content="Температура"
-                        Tag="Temperature" />
                 </Grid>
             </Grid>
-        </Grid>
 
-        <Grid Grid.Row="3">
-            <TextBlock
-                x:Name="ValidationTextBlock"
-                MaxWidth="430"
-                Margin="4,0,0,0"
-                VerticalAlignment="Center"
-                Foreground="{ThemeResource SystemFillColorCriticalBrush}"
-                TextWrapping="Wrap" />
-            <StackPanel
-                HorizontalAlignment="Right"
-                Orientation="Horizontal"
-                Spacing="8">
-                <Button
-                    x:Name="ApplyButton"
-                    MinWidth="120"
-                    Click="ApplyButton_Click"
-                    Content="Применить"
-                    Style="{StaticResource AccentButtonStyle}" />
-                <Button
-                    MinWidth="120"
-                    Click="CancelButton_Click"
-                    Content="Отмена" />
-            </StackPanel>
+            <Grid Grid.Row="1">
+                <TextBlock
+                    x:Name="ValidationTextBlock"
+                    MaxWidth="100"
+                    Margin="4,0,0,0"
+                    VerticalAlignment="Center"
+                    Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                    TextWrapping="Wrap" />
+                <StackPanel
+                    HorizontalAlignment="Right"
+                    Orientation="Horizontal"
+                    Spacing="8">
+                    <Button
+                        x:Name="ApplyButton"
+                        Width="120"
+                        Height="40"
+                        Click="ApplyButton_Click"
+                        Content="Применить"
+                        Style="{StaticResource AccentButtonStyle}" />
+                    <Button
+                        Width="120"
+                        Height="40"
+                        Click="CancelButton_Click"
+                        Content="Отмена" />
+                </StackPanel>
+            </Grid>
+
+            <Button
+                Grid.Row="1"
+                Grid.Column="1"
+                Height="40"
+                HorizontalAlignment="Stretch"
+                Click="PresetButton_Click"
+                Content="Температура"
+                Tag="Temperature" />
         </Grid>
     </Grid>
 </Window>

@@ -1,13 +1,14 @@
-using System.Runtime.InteropServices;
 using AMK.DataVisualization.App.Controls;
 using AMK.DataVisualization.Charting.Series;
 using AMK.DataVisualization.Charting.Configuration;
 using AMK.DataVisualization.Core;
 using AMK.DataVisualization.Core.Adapters;
 using AMK.DataVisualization.IO.DataFiles;
+using AMK.DataVisualization.Hardware.Serial;
 using AMK.DataVisualization.App.Layout;
 using AMK.DataVisualization.App.Services;
 using AMK.DataVisualization.App.Views;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
@@ -16,10 +17,12 @@ namespace AMK.DataVisualization.App;
 
 public sealed partial class MainWindow : Window
 {
-    private const int ShowMaximized = 3;
     private readonly CurveSelectionService curveSelectionService = new();
     private readonly ChartWorkspace chartWorkspace = new(new ChartConfiguration(), new ChartConfiguration());
+    private readonly SerialDeviceService serialDeviceService = new();
+    private readonly SerialConnectionSettingsStore serialSettingsStore = new();
     private SchematicWindow? schematicWindow;
+    private ConnectionSettingsWindow? connectionSettingsWindow;
 
     public MainWindow()
     {
@@ -27,6 +30,9 @@ public sealed partial class MainWindow : Window
         ShowLegacyEmptyState(1, hasData: false);
         ShowLegacyEmptyState(2, hasData: false);
         UpdateDualModeLayout();
+        serialDeviceService.FrameReceived += SerialDeviceService_FrameReceived;
+        serialDeviceService.StatusChanged += SerialDeviceService_StatusChanged;
+        UpdateConnectionControls(serialDeviceService.GetStatus());
         MaximizeLikeLegacyApplication();
         Closed += MainWindow_Closed;
     }
@@ -68,6 +74,160 @@ public sealed partial class MainWindow : Window
     private void ExitMenuItem_Click(object sender, RoutedEventArgs e)
     {
         Close();
+    }
+
+    private void ConnectionSettingsMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        ShowConnectionSettingsWindow();
+    }
+
+    private void ShowConnectionSettingsWindow()
+    {
+        connectionSettingsWindow ??= new ConnectionSettingsWindow(
+            serialDeviceService,
+            serialSettingsStore,
+            PrepareSerialSession);
+        connectionSettingsWindow.ShowForOwner(WindowNative.GetWindowHandle(this));
+    }
+
+    private async void ConnectionToggleButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (serialDeviceService.IsConnected)
+        {
+            await serialDeviceService.DisconnectAsync();
+            SetStatus("Прибор отключён");
+            return;
+        }
+
+        SerialConnectionSettings settings = serialSettingsStore.Load();
+        IReadOnlyList<string> ports = await Task.Run(SerialDeviceService.GetAvailablePorts);
+        if (string.IsNullOrWhiteSpace(settings.LastPort)
+            || !ports.Contains(settings.LastPort, StringComparer.OrdinalIgnoreCase))
+        {
+            SetStatus("Выберите COM-порт в настройках подключения");
+            ShowConnectionSettingsWindow();
+            return;
+        }
+
+        try
+        {
+            ConnectionToggleButton.IsEnabled = false;
+            PrepareSerialSession(settings);
+            serialDeviceService.ConfigureRecording(
+                settings.RecordingEnabled,
+                settings.RecordFolder,
+                settings.AppendToExistingFile ? settings.ExistingRecordFile : string.Empty);
+            SerialOperationResult result = await serialDeviceService.ConnectAsync(settings.LastPort);
+            if (result == SerialOperationResult.Success)
+            {
+                await serialDeviceService.StartPollingAsync(settings.PollIntervalMilliseconds);
+                SetStatus($"Опрос {settings.LastPort} запущен");
+            }
+            else
+            {
+                SetStatus(SerialDeviceService.ResultToDisplayText(result));
+                ShowConnectionSettingsWindow();
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            SetStatus(exception.Message);
+            ShowConnectionSettingsWindow();
+        }
+        finally
+        {
+            UpdateConnectionControls(serialDeviceService.GetStatus());
+        }
+    }
+
+    private async void PollingToggleButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!serialDeviceService.IsConnected)
+        {
+            ShowConnectionSettingsWindow();
+            return;
+        }
+
+        if (serialDeviceService.IsPolling)
+        {
+            await serialDeviceService.StopPollingAsync();
+            SetStatus("Опрос прибора приостановлен");
+        }
+        else
+        {
+            SerialConnectionSettings settings = serialSettingsStore.Load();
+            await serialDeviceService.StartPollingAsync(settings.PollIntervalMilliseconds);
+            SetStatus("Опрос прибора продолжен");
+        }
+
+        UpdateConnectionControls(serialDeviceService.GetStatus());
+    }
+
+    private void PrepareSerialSession(SerialConnectionSettings settings)
+    {
+        bool loadExisting = settings.AppendToExistingFile
+            && settings.ShowFullExistingFile
+            && File.Exists(settings.ExistingRecordFile);
+        if (loadExisting)
+        {
+            chartWorkspace.Graph1Repository.LoadDataFromFile(settings.ExistingRecordFile);
+        }
+        else
+        {
+            chartWorkspace.Graph1Repository.ClearData();
+        }
+
+        schematicWindow?.RefreshDataContext(1, 2);
+        RenderGraph(1);
+        if (!chartWorkspace.IsGraph2Independent)
+        {
+            RenderGraph(2);
+        }
+
+        UpdateStatusBarFileInfo();
+    }
+
+    private void SerialDeviceService_FrameReceived(object? sender, SerialFrameReceivedEventArgs e)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            bool firstFrame = !chartWorkspace.Graph1Repository.HasData;
+            chartWorkspace.Graph1Repository.AddParsedData(e.Frame);
+            if (firstFrame)
+            {
+                schematicWindow?.RefreshDataContext(1, 2);
+            }
+
+            RenderGraph(1);
+            if (!chartWorkspace.IsGraph2Independent && DualModeCheckBox.IsChecked == true)
+            {
+                RenderGraph(2);
+            }
+
+            SetStatus($"Получен кадр {e.Frame.CanonicalData.Frame}");
+            UpdateStatusBarFileInfo();
+        });
+    }
+
+    private void SerialDeviceService_StatusChanged(object? sender, SerialStatusChangedEventArgs e)
+    {
+        DispatcherQueue.TryEnqueue(() => UpdateConnectionControls(e.Status));
+    }
+
+    private void UpdateConnectionControls(SerialStatusSnapshot status)
+    {
+        bool connected = status.State == SerialConnectionState.Connected;
+        bool busy = status.State == SerialConnectionState.Connecting;
+        ConnectionToggleButton.Content = connected ? "Отключить" : "Включить";
+        ConnectionToggleButton.IsEnabled = !busy;
+        PollingToggleButton.Content = status.IsPolling ? "⏸" : "▶";
+        PollingToggleButton.IsEnabled = connected;
+        if (status.State == SerialConnectionState.ConnectionError && !string.IsNullOrWhiteSpace(status.LastError))
+        {
+            SetStatus(status.LastError);
+        }
+
+        UpdateStatusBarFileInfo();
     }
 
     private async void OpenGraph2FileButton_Click(object sender, RoutedEventArgs e)
@@ -196,6 +356,7 @@ public sealed partial class MainWindow : Window
             renderSeries.Add(new ChartRenderSeries(
                 chartData.LeftAxisData[index],
                 curve.DisplayName,
+                graphConfiguration.IsPresetActive ? GetPresetLegendLabel(curve) : curve.DisplayName,
                 curve.Units,
                 curve.Color,
                 curve.YAxisGroup));
@@ -207,6 +368,7 @@ public sealed partial class MainWindow : Window
             renderSeries.Add(new ChartRenderSeries(
                 chartData.RightAxisData[index],
                 curve.DisplayName,
+                graphConfiguration.IsPresetActive ? GetPresetLegendLabel(curve) : curve.DisplayName,
                 curve.Units,
                 curve.Color,
                 curve.YAxisGroup));
@@ -214,12 +376,32 @@ public sealed partial class MainWindow : Window
 
         graphControl.SetSeries(
             renderSeries,
-            $"График {graphNumber}",
+            $"График {graphNumber} ({GetFrequencyDisplayName(graphConfiguration)})",
             graphConfiguration.LeftAxisUnits,
             graphConfiguration.RightAxisUnits,
             xAxisData,
             graphConfiguration.XAxisType == XAxisType.Temperature ? "Температура, °C" : "Номер кадра",
             graphConfiguration.IsPresetActive ? graphConfiguration.PresetDisplayName : string.Empty);
+    }
+
+    private static string GetPresetLegendLabel(CurveDefinition curve)
+    {
+        return curve.DataType switch
+        {
+            DataType.Temperature => "Temp",
+            DataType.SilentAmplitudeRx1 => "Молч. R1",
+            DataType.SilentAmplitudeRx2 => "Молч. R2",
+            DataType.SilentPhaseDifference => "Молч. R1-R2",
+            _ when curve.SourceElement == ElementType.Transmitter => $"T{curve.ElementIndex + 1}",
+            _ when curve.SourceElement == ElementType.Receiver => $"R{curve.ElementIndex + 1}",
+            _ => curve.DisplayName
+        };
+    }
+
+    private static string GetFrequencyDisplayName(ChartConfiguration configuration)
+    {
+        CurveDefinition? firstEnabledCurve = configuration.Curves.FirstOrDefault(curve => curve.Enabled);
+        return firstEnabledCurve?.Frequency == FrequencyBand.Freq2000KHz ? "2000 кГц" : "400 кГц";
     }
 
     private void ShowLegacyEmptyState(int graphNumber, bool hasData)
@@ -263,8 +445,11 @@ public sealed partial class MainWindow : Window
     private void UpdateStatusBarFileInfo()
     {
         bool hasAnyData = chartWorkspace.Graph1Repository.HasData || chartWorkspace.Graph2IndependentRepository.HasData;
-        FolderStatusIcon.Visibility = hasAnyData ? Visibility.Visible : Visibility.Collapsed;
-        LoadedFileStatusTextBlock.Text = chartWorkspace.GetStatusFileInformation();
+        bool connected = serialDeviceService.IsConnected;
+        FolderStatusIcon.Visibility = hasAnyData || connected ? Visibility.Visible : Visibility.Collapsed;
+        LoadedFileStatusTextBlock.Text = connected
+            ? $"{serialDeviceService.ConnectedPort}  |  Кадров: {chartWorkspace.Graph1Repository.DataSize}"
+            : chartWorkspace.GetStatusFileInformation();
     }
 
     private static FileOpenPicker CreateDataFilePicker()
@@ -281,16 +466,20 @@ public sealed partial class MainWindow : Window
 
     private void MaximizeLikeLegacyApplication()
     {
-        ShowWindow(WindowNative.GetWindowHandle(this), ShowMaximized);
+        if (AppWindow.Presenter is OverlappedPresenter presenter)
+        {
+            presenter.Maximize();
+        }
     }
 
     private void MainWindow_Closed(object sender, WindowEventArgs args)
     {
+        serialDeviceService.FrameReceived -= SerialDeviceService_FrameReceived;
+        serialDeviceService.StatusChanged -= SerialDeviceService_StatusChanged;
+        connectionSettingsWindow?.ClosePermanently();
+        connectionSettingsWindow = null;
         schematicWindow?.ClosePermanently();
         schematicWindow = null;
+        serialDeviceService.Dispose();
     }
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 }
