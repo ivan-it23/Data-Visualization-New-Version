@@ -164,9 +164,7 @@ public sealed partial class SchematicWindow : Window
         RefreshSmtCheckBoxes();
         RefreshCurveList();
 
-        string error = editor.ConfigurationError;
-        ApplyButton.IsEnabled = error.Length == 0;
-        ValidationTextBlock.Text = TranslateConfigurationError(error);
+        ApplyButton.IsEnabled = editor.ConfigurationError.Length == 0;
         Title = $"Схема прибора - График {targetGraphNumber}";
         controlsAreUpdating = false;
     }
@@ -403,9 +401,7 @@ public sealed partial class SchematicWindow : Window
         }
 
         editor.SetCurveEnabled(curveId, checkBox.IsChecked == true);
-        string error = editor.ConfigurationError;
-        ApplyButton.IsEnabled = error.Length == 0;
-        ValidationTextBlock.Text = TranslateConfigurationError(error);
+        ApplyButton.IsEnabled = editor.ConfigurationError.Length == 0;
         Title = $"Схема прибора - График {targetGraphNumber}";
     }
 
@@ -462,18 +458,6 @@ public sealed partial class SchematicWindow : Window
 
         args.Cancel = true;
         sender.Hide();
-    }
-
-    private static string TranslateConfigurationError(string error)
-    {
-        return error switch
-        {
-            "No curves selected for display" => "Не выбраны кривые для отображения",
-            "All curves are disabled" => "Все кривые отключены",
-            "Dual axis requires curves on both axes" => "Для двух осей нужны кривые на обеих осях",
-            "Too many curves for display (maximum 64)" => "Слишком много кривых (максимум 64)",
-            _ => error
-        };
     }
 
     private static string GetElementGroupName(ElementType type, int index)

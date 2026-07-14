@@ -3,112 +3,215 @@
     x:Class="AMK.DataVisualization.App.Views.ConnectionSettingsWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="Настройки подключения">
+    Title="Подключение к прибору">
 
     <Window.SystemBackdrop>
         <MicaBackdrop />
     </Window.SystemBackdrop>
 
-    <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <Grid Padding="20" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="16">
-            <StackPanel Spacing="8">
-                <TextBlock Text="Подключение к прибору" FontSize="20" FontWeight="SemiBold" />
-                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
-                    <TextBlock VerticalAlignment="Center" Text="Порт:" />
-                    <ComboBox
-                        x:Name="PortComboBox"
+    <Grid
+        x:Name="RootGrid"
+        Padding="16"
+        RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+        RowSpacing="10">
+        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+            <TextBlock
+                VerticalAlignment="Center"
+                FontWeight="SemiBold"
+                Text="COM-порт:" />
+            <ComboBox
+                x:Name="PortComboBox"
+                Grid.Column="1"
+                HorizontalAlignment="Stretch"
+                PlaceholderText="Выберите порт" />
+            <Button
+                x:Name="RefreshPortsButton"
+                Grid.Column="2"
+                MinWidth="100"
+                HorizontalAlignment="Stretch"
+                Content="Обновить"
+                Click="RefreshPortsButton_Click" />
+        </Grid>
+
+        <Border
+            Grid.Row="1"
+            Padding="12,10"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="8">
+            <Grid
+                ColumnDefinitions="92,*"
+                RowDefinitions="Auto,Auto,Auto,Auto"
+                ColumnSpacing="10"
+                RowSpacing="5">
+                <TextBlock
+                    Grid.ColumnSpan="2"
+                    Margin="0,0,0,2"
+                    FontWeight="SemiBold"
+                    Text="Статус" />
+                <TextBlock Grid.Row="1" Text="Состояние:" />
+                <TextBlock
+                    x:Name="ConnectionStateTextBlock"
+                    Grid.Row="1"
+                    Grid.Column="1"
+                    Text="Отключено"
+                    TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Row="2" Text="Кадр:" />
+                <TextBlock
+                    x:Name="LastFrameTextBlock"
+                    Grid.Row="2"
+                    Grid.Column="1"
+                    Text="0" />
+                <TextBlock Grid.Row="3" Text="Пакеты:" />
+                <TextBlock
+                    x:Name="PacketsTextBlock"
+                    Grid.Row="3"
+                    Grid.Column="1"
+                    Text="0 / 0" />
+            </Grid>
+        </Border>
+
+        <Border
+            Grid.Row="2"
+            Padding="12,10"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="8">
+            <Grid
+                RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+                RowSpacing="4">
+                <TextBlock
+                    Margin="0,0,0,2"
+                    FontWeight="SemiBold"
+                    Text="Запись в файл" />
+
+                <Grid
+                    Grid.Row="1"
+                    ColumnDefinitions="Auto,Auto,*,Auto"
+                    ColumnSpacing="10">
+                    <CheckBox
+                        x:Name="RecordingCheckBox"
+                        Content="Записывать данные"
+                        Checked="RecordingOptionChanged"
+                        Unchecked="RecordingOptionChanged" />
+                    <CheckBox
+                        x:Name="AppendCheckBox"
                         Grid.Column="1"
-                        MinWidth="210"
-                        HorizontalAlignment="Stretch"
-                        PlaceholderText="Выберите COM-порт" />
+                        Content="Дозапись"
+                        Checked="RecordingOptionChanged"
+                        Unchecked="RecordingOptionChanged" />
                     <Button
-                        Grid.Column="2"
-                        Content="Обновить"
-                        Click="RefreshPortsButton_Click" />
+                        x:Name="BrowseRecordPathButton"
+                        Grid.Column="3"
+                        MinWidth="82"
+                        Content="Папка..."
+                        Click="BrowseRecordPathButton_Click" />
                 </Grid>
-            </StackPanel>
 
-            <Border
-                Grid.Row="1"
-                Padding="12"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="8">
-                <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="6">
-                    <TextBlock Grid.ColumnSpan="2" Text="Состояние" FontWeight="SemiBold" />
-                    <TextBlock Grid.Row="1" Text="Подключение:" />
-                    <TextBlock x:Name="ConnectionStateTextBlock" Grid.Row="1" Grid.Column="1" Text="Отключено" />
-                    <TextBlock Grid.Row="2" Text="Последний кадр:" />
-                    <TextBlock x:Name="LastFrameTextBlock" Grid.Row="2" Grid.Column="1" Text="—" />
-                    <TextBlock Grid.Row="3" Text="Пакеты / ошибки:" />
-                    <TextBlock x:Name="PacketsTextBlock" Grid.Row="3" Grid.Column="1" Text="0 / 0" />
-                    <TextBlock Grid.Row="4" Text="Прибор:" />
-                    <TextBlock x:Name="DeviceInfoTextBlock" Grid.Row="4" Grid.Column="1" Text="—" TextWrapping="Wrap" />
-                    <TextBlock Grid.Row="5" Text="Записано кадров:" />
-                    <TextBlock x:Name="RecordedFramesTextBlock" Grid.Row="5" Grid.Column="1" Text="0" />
-                </Grid>
-            </Border>
-
-            <StackPanel Grid.Row="2" Spacing="10">
-                <TextBlock Text="Опрос и запись" FontWeight="SemiBold" />
-                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
-                    <TextBlock VerticalAlignment="Center" Text="Интервал опроса, мс:" />
-                    <NumberBox
-                        x:Name="PollIntervalNumberBox"
-                        Grid.Column="1"
-                        Minimum="500"
-                        Maximum="30000"
-                        SmallChange="100"
-                        SpinButtonPlacementMode="Inline"
-                        Value="2000" />
-                </Grid>
-                <CheckBox x:Name="RecordingCheckBox" Content="Записывать принятые кадры" IsChecked="True" />
-                <CheckBox
-                    x:Name="AppendCheckBox"
-                    Content="Продолжить запись в существующий файл"
-                    Checked="RecordingOptionChanged"
-                    Unchecked="RecordingOptionChanged" />
                 <CheckBox
                     x:Name="ShowFullFileCheckBox"
-                    Margin="24,0,0,0"
-                    Content="Показывать на графике весь дополняемый файл"
-                    IsEnabled="False" />
-                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                    <TextBox
-                        x:Name="RecordPathTextBox"
-                        IsReadOnly="True"
-                        PlaceholderText="Папка для нового файла записи" />
-                    <Button Grid.Column="1" Content="Выбрать..." Click="BrowseRecordPathButton_Click" />
-                </Grid>
-                <TextBlock
-                    x:Name="RecordFileTextBlock"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Text="Файл записи будет создан после получения первого кадра"
-                    TextTrimming="CharacterEllipsis" />
-            </StackPanel>
+                    Grid.Row="2"
+                    Content="Показывать весь файл"
+                    IsEnabled="False"
+                    Checked="RecordingOptionChanged"
+                    Unchecked="RecordingOptionChanged" />
 
-            <Grid Grid.Row="3" ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="10">
-                <TextBlock
-                    x:Name="OperationMessageTextBlock"
-                    VerticalAlignment="Center"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    TextTrimming="CharacterEllipsis" />
-                <Button
-                    x:Name="ConnectButton"
-                    Grid.Column="1"
-                    MinWidth="110"
-                    Content="Подключить"
-                    Click="ConnectButton_Click" />
-                <Button
-                    x:Name="DisconnectButton"
-                    Grid.Column="2"
-                    MinWidth="110"
-                    Content="Отключить"
-                    Click="DisconnectButton_Click"
-                    IsEnabled="False" />
-                <Button Grid.Column="3" MinWidth="90" Content="Закрыть" Click="CloseButton_Click" />
+                <Grid
+                    Grid.Row="3"
+                    ColumnDefinitions="92,*"
+                    ColumnSpacing="10">
+                    <TextBlock VerticalAlignment="Center" Text="Файл:" />
+                    <TextBlock
+                        x:Name="RecordFileTextBlock"
+                        Grid.Column="1"
+                        VerticalAlignment="Center"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="Не записывается"
+                        TextTrimming="CharacterEllipsis" />
+                </Grid>
+
+                <Grid
+                    Grid.Row="4"
+                    ColumnDefinitions="92,*,Auto"
+                    ColumnSpacing="10">
+                    <TextBlock VerticalAlignment="Center" Text="Записано:" />
+                    <TextBlock
+                        x:Name="RecordedFramesTextBlock"
+                        Grid.Column="1"
+                        VerticalAlignment="Center"
+                        Text="0 кадров" />
+                    <Button
+                        Grid.Column="2"
+                        MinWidth="112"
+                        Content="Открыть"
+                        Click="OpenRecordFolderButton_Click" />
+                </Grid>
             </Grid>
+        </Border>
+
+        <Border
+            Grid.Row="3"
+            Padding="12,10"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="8">
+            <Grid
+                ColumnDefinitions="Auto,82,Auto"
+                RowDefinitions="Auto,Auto"
+                ColumnSpacing="8"
+                RowSpacing="6">
+                <TextBlock
+                    Grid.ColumnSpan="3"
+                    FontWeight="SemiBold"
+                    Text="Таймер" />
+                <TextBlock
+                    Grid.Row="1"
+                    VerticalAlignment="Center"
+                    Text="Интервал опроса:" />
+                <TextBox
+                    x:Name="PollIntervalTextBox"
+                    Grid.Row="1"
+                    Grid.Column="1"
+                    HorizontalContentAlignment="Right"
+                    MaxLength="5"
+                    Text="2000"
+                    LostFocus="PollIntervalTextBox_LostFocus" />
+                <TextBlock
+                    Grid.Row="1"
+                    Grid.Column="2"
+                    VerticalAlignment="Center"
+                    Text="мс" />
+            </Grid>
+        </Border>
+
+        <Grid
+            Grid.Row="4"
+            ColumnDefinitions="*,*,*"
+            ColumnSpacing="10">
+            <Button
+                x:Name="ConnectButton"
+                HorizontalAlignment="Stretch"
+                FontWeight="SemiBold"
+                Content="Подключить"
+                Click="ConnectButton_Click"
+                Style="{StaticResource AccentButtonStyle}" />
+            <Button
+                x:Name="DisconnectButton"
+                Grid.Column="1"
+                HorizontalAlignment="Stretch"
+                FontWeight="SemiBold"
+                Content="Отключить"
+                Click="DisconnectButton_Click"
+                IsEnabled="False" />
+            <Button
+                Grid.Column="2"
+                HorizontalAlignment="Stretch"
+                FontWeight="SemiBold"
+                Content="Закрыть"
+                Click="CloseButton_Click" />
         </Grid>
-    </ScrollViewer>
+    </Grid>
 </Window>

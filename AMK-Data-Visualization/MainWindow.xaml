@@ -13,32 +13,43 @@
     <Grid
         Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
         RowDefinitions="Auto,32,*,24">
-        <MenuBar>
-            <MenuBarItem Title="Файл">
-                <MenuFlyoutItem
-                    Text="Открыть файл данных..."
-                    Click="OpenFileButton_Click" />
-                <MenuFlyoutSeparator />
-                <MenuFlyoutItem
-                    Text="Выход"
-                    Click="ExitMenuItem_Click" />
-            </MenuBarItem>
-            <MenuBarItem Title="Настройки подключения">
-                <MenuFlyoutItem
-                    Text="Открыть настройки подключения..."
-                    Click="ConnectionSettingsMenuItem_Click" />
-            </MenuBarItem>
-            <MenuBarItem Title="Метрология" />
-            <MenuBarItem Title="Конструктор файлов" />
-            <MenuBarItem Title="Заметки">
-                <MenuFlyoutItem
-                    Text="Журнал заметок текущего файла..."
-                    IsEnabled="False" />
-            </MenuBarItem>
-            <MenuBarItem Title="Логи" />
-            <MenuBarItem Title="Проверить обновления" />
-            <MenuBarItem Title="Документация" />
-        </MenuBar>
+        <StackPanel Orientation="Horizontal">
+            <MenuBar Padding="0">
+                <MenuBarItem Title="Файл">
+                    <MenuFlyoutItem
+                        Text="Открыть файл данных..."
+                        Click="OpenFileButton_Click" />
+                    <MenuFlyoutSeparator />
+                    <MenuFlyoutItem
+                        Text="Выход"
+                        Click="ExitMenuItem_Click" />
+                </MenuBarItem>
+            </MenuBar>
+
+            <Button
+                MinWidth="0"
+                MinHeight="0"
+                Padding="12,0"
+                VerticalAlignment="Stretch"
+                AutomationProperties.Name="Настройки подключения"
+                Background="Transparent"
+                BorderThickness="0"
+                Content="Настройки подключения"
+                Click="ConnectionSettingsMenuItem_Click" />
+
+            <MenuBar Padding="0">
+                <MenuBarItem Title="Метрология" />
+                <MenuBarItem Title="Конструктор файлов" />
+                <MenuBarItem Title="Заметки">
+                    <MenuFlyoutItem
+                        Text="Журнал заметок текущего файла..."
+                        IsEnabled="False" />
+                </MenuBarItem>
+                <MenuBarItem Title="Логи" />
+                <MenuBarItem Title="Проверить обновления" />
+                <MenuBarItem Title="Документация" />
+            </MenuBar>
+        </StackPanel>
 
         <Grid
             Grid.Row="1"

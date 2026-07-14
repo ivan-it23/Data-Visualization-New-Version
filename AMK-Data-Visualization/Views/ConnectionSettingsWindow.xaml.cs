@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using AMK.DataVisualization.Hardware.Serial;
 using Microsoft.UI.Windowing;
@@ -18,6 +19,8 @@ public sealed partial class ConnectionSettingsWindow : Window
     private SerialConnectionSettings settings;
     private bool allowPermanentClose;
     private bool activated;
+    private bool applyingSettings = true;
+    private bool refreshingPorts;
 
     internal ConnectionSettingsWindow(
         SerialDeviceService deviceService,
@@ -30,7 +33,7 @@ public sealed partial class ConnectionSettingsWindow : Window
         settings = settingsStore.Load();
 
         InitializeComponent();
-        AppWindow.Resize(new SizeInt32(620, 820));
+        AppWindow.Resize(new SizeInt32(600, 680));
         if (AppWindow.Presenter is OverlappedPresenter presenter)
         {
             presenter.IsMaximizable = false;
@@ -74,51 +77,72 @@ public sealed partial class ConnectionSettingsWindow : Window
 
     private void ApplySettingsToControls()
     {
-        PollIntervalNumberBox.Value = settings.PollIntervalMilliseconds;
+        applyingSettings = true;
+        PollIntervalTextBox.Text = settings.PollIntervalMilliseconds.ToString();
         RecordingCheckBox.IsChecked = settings.RecordingEnabled;
         AppendCheckBox.IsChecked = settings.AppendToExistingFile;
         ShowFullFileCheckBox.IsChecked = settings.ShowFullExistingFile;
-        ShowFullFileCheckBox.IsEnabled = settings.AppendToExistingFile;
-        RecordPathTextBox.Text = settings.AppendToExistingFile
-            ? settings.ExistingRecordFile
-            : settings.RecordFolder;
+        applyingSettings = false;
+        UpdateRecordingControls(deviceService.GetStatus());
     }
 
     private void CaptureSettingsFromControls()
     {
         settings.LastPort = PortComboBox.SelectedItem as string ?? PortComboBox.Text ?? string.Empty;
-        settings.PollIntervalMilliseconds = Math.Clamp(
-            double.IsNaN(PollIntervalNumberBox.Value) ? 2000 : (int)PollIntervalNumberBox.Value,
-            500,
-            30000);
+        settings.PollIntervalMilliseconds = GetPollInterval();
         settings.RecordingEnabled = RecordingCheckBox.IsChecked == true;
         settings.AppendToExistingFile = AppendCheckBox.IsChecked == true;
         settings.ShowFullExistingFile = settings.AppendToExistingFile && ShowFullFileCheckBox.IsChecked == true;
-        if (settings.AppendToExistingFile)
+    }
+
+    private int GetPollInterval()
+    {
+        if (!int.TryParse(PollIntervalTextBox.Text, out int interval) || interval < 500)
         {
-            settings.ExistingRecordFile = RecordPathTextBox.Text.Trim();
+            interval = 2000;
         }
-        else
-        {
-            settings.RecordFolder = RecordPathTextBox.Text.Trim();
-        }
+
+        interval = Math.Clamp(interval, 500, 30000);
+        PollIntervalTextBox.Text = interval.ToString();
+        return interval;
+    }
+
+    private void SaveSettings()
+    {
+        CaptureSettingsFromControls();
+        settingsStore.Save(settings);
     }
 
     private async Task RefreshPortsAsync()
     {
-        string selected = PortComboBox.SelectedItem as string ?? settings.LastPort;
-        IReadOnlyList<string> ports = await Task.Run(SerialDeviceService.GetAvailablePorts);
-        PortComboBox.ItemsSource = ports;
-        if (!string.IsNullOrWhiteSpace(selected) && ports.Contains(selected, StringComparer.OrdinalIgnoreCase))
+        if (refreshingPorts)
         {
-            PortComboBox.SelectedItem = ports.First(port => port.Equals(selected, StringComparison.OrdinalIgnoreCase));
-        }
-        else if (ports.Count > 0)
-        {
-            PortComboBox.SelectedIndex = 0;
+            return;
         }
 
-        OperationMessageTextBlock.Text = ports.Count == 0 ? "COM-порты не найдены" : $"Найдено портов: {ports.Count}";
+        refreshingPorts = true;
+        RefreshPortsButton.IsEnabled = false;
+        ConnectionStateTextBlock.Text = "Поиск COM-портов...";
+        try
+        {
+            string selected = PortComboBox.SelectedItem as string ?? settings.LastPort;
+            IReadOnlyList<string> ports = await Task.Run(SerialDeviceService.GetAvailablePorts);
+            PortComboBox.ItemsSource = ports;
+            if (!string.IsNullOrWhiteSpace(selected) && ports.Contains(selected, StringComparer.OrdinalIgnoreCase))
+            {
+                PortComboBox.SelectedItem = ports.First(port => port.Equals(selected, StringComparison.OrdinalIgnoreCase));
+            }
+            else if (ports.Count > 0)
+            {
+                PortComboBox.SelectedIndex = 0;
+            }
+        }
+        finally
+        {
+            refreshingPorts = false;
+            RefreshPortsButton.IsEnabled = true;
+            UpdateStatus(deviceService.GetStatus());
+        }
     }
 
     private async void RefreshPortsButton_Click(object sender, RoutedEventArgs e)
@@ -137,7 +161,7 @@ public sealed partial class ConnectionSettingsWindow : Window
             Windows.Storage.StorageFile? file = await picker.PickSingleFileAsync();
             if (file is not null)
             {
-                RecordPathTextBox.Text = file.Path;
+                settings.ExistingRecordFile = file.Path;
             }
         }
         else
@@ -148,44 +172,78 @@ public sealed partial class ConnectionSettingsWindow : Window
             Windows.Storage.StorageFolder? folder = await picker.PickSingleFolderAsync();
             if (folder is not null)
             {
-                RecordPathTextBox.Text = folder.Path;
+                settings.RecordFolder = folder.Path;
             }
         }
+
+        SaveSettings();
+        UpdateRecordingControls(deviceService.GetStatus());
     }
 
     private void RecordingOptionChanged(object sender, RoutedEventArgs e)
     {
-        if (ShowFullFileCheckBox is null || RecordPathTextBox is null)
+        if (applyingSettings || ShowFullFileCheckBox is null || BrowseRecordPathButton is null)
         {
             return;
         }
 
-        bool append = AppendCheckBox.IsChecked == true;
-        ShowFullFileCheckBox.IsEnabled = append;
-        RecordPathTextBox.PlaceholderText = append ? "Файл для продолжения записи" : "Папка для нового файла записи";
-        RecordPathTextBox.Text = append ? settings.ExistingRecordFile : settings.RecordFolder;
+        SaveSettings();
+        UpdateRecordingControls(deviceService.GetStatus());
+
+        if (deviceService.IsConnected
+            && (!settings.AppendToExistingFile || File.Exists(settings.ExistingRecordFile)))
+        {
+            deviceService.ConfigureRecording(
+                settings.RecordingEnabled,
+                settings.RecordFolder,
+                settings.AppendToExistingFile ? settings.ExistingRecordFile : string.Empty);
+        }
+    }
+
+    private void PollIntervalTextBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        settings.PollIntervalMilliseconds = GetPollInterval();
+        settingsStore.Save(settings);
+        deviceService.SetPollInterval(settings.PollIntervalMilliseconds);
+    }
+
+    private async void OpenRecordFolderButton_Click(object sender, RoutedEventArgs e)
+    {
+        SerialStatusSnapshot status = deviceService.GetStatus();
+        string folder = !string.IsNullOrWhiteSpace(status.RecordFilePath)
+            ? Path.GetDirectoryName(status.RecordFilePath) ?? string.Empty
+            : settings.AppendToExistingFile
+                ? Path.GetDirectoryName(settings.ExistingRecordFile) ?? string.Empty
+                : settings.RecordFolder;
+
+        if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
+        {
+            await ShowMessageAsync("Папка записи недоступна.");
+            return;
+        }
+
+        Process.Start(new ProcessStartInfo(folder) { UseShellExecute = true });
     }
 
     private async void ConnectButton_Click(object sender, RoutedEventArgs e)
     {
-        CaptureSettingsFromControls();
+        SaveSettings();
         if (string.IsNullOrWhiteSpace(settings.LastPort))
         {
-            OperationMessageTextBlock.Text = "Выберите COM-порт";
+            await ShowMessageAsync("Выберите COM-порт.");
             return;
         }
 
         if (settings.RecordingEnabled && settings.AppendToExistingFile && !File.Exists(settings.ExistingRecordFile))
         {
-            OperationMessageTextBlock.Text = "Выберите существующий файл для дозаписи";
+            await ShowMessageAsync("Выберите существующий файл для дозаписи.");
             return;
         }
 
         try
         {
-            settingsStore.Save(settings);
             SetBusy(true);
-            OperationMessageTextBlock.Text = $"Подключение к {settings.LastPort}...";
+            ConnectionStateTextBlock.Text = "Подключение...";
             prepareSession(settings);
             deviceService.ConfigureRecording(
                 settings.RecordingEnabled,
@@ -195,16 +253,15 @@ public sealed partial class ConnectionSettingsWindow : Window
             if (result == SerialOperationResult.Success)
             {
                 await deviceService.StartPollingAsync(settings.PollIntervalMilliseconds);
-                OperationMessageTextBlock.Text = "Прибор подключён, опрос запущен";
             }
             else
             {
-                OperationMessageTextBlock.Text = SerialDeviceService.ResultToDisplayText(result);
+                await ShowMessageAsync(SerialDeviceService.ResultToDisplayText(result));
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            OperationMessageTextBlock.Text = exception.Message;
+            await ShowMessageAsync(exception.Message);
         }
         finally
         {
@@ -217,19 +274,20 @@ public sealed partial class ConnectionSettingsWindow : Window
     {
         SetBusy(true);
         await deviceService.DisconnectAsync();
-        OperationMessageTextBlock.Text = "Прибор отключён";
         SetBusy(false);
         UpdateStatus(deviceService.GetStatus());
     }
 
     private void CloseButton_Click(object sender, RoutedEventArgs e)
     {
+        SaveSettings();
         AppWindow.Hide();
     }
 
     private void SetBusy(bool busy)
     {
         PortComboBox.IsEnabled = !busy && !deviceService.IsConnected;
+        RefreshPortsButton.IsEnabled = !busy && !deviceService.IsConnected;
         ConnectButton.IsEnabled = !busy && !deviceService.IsConnected;
         DisconnectButton.IsEnabled = !busy && deviceService.IsConnected;
     }
@@ -241,33 +299,62 @@ public sealed partial class ConnectionSettingsWindow : Window
 
     private void UpdateStatus(SerialStatusSnapshot status)
     {
-        ConnectionStateTextBlock.Text = status.State switch
+        if (!refreshingPorts)
         {
-            SerialConnectionState.Connecting => "Подключение...",
-            SerialConnectionState.Connected when status.IsPolling => $"Подключено к {status.PortName}, опрос включён",
-            SerialConnectionState.Connected => $"Подключено к {status.PortName}",
-            SerialConnectionState.ConnectionError => "Ошибка подключения",
-            _ => "Отключено"
-        };
-        LastFrameTextBlock.Text = status.PacketsReceived > 0 ? status.LastFrameNumber.ToString() : "—";
-        PacketsTextBlock.Text = $"{status.PacketsReceived} / {status.PacketErrors}";
-        RecordedFramesTextBlock.Text = status.RecordedFrames.ToString();
-        RecordFileTextBlock.Text = string.IsNullOrWhiteSpace(status.RecordFilePath)
-            ? "Файл записи будет создан после получения первого кадра"
-            : status.RecordFilePath;
-        DeviceInfoTextBlock.Text = status.Metrology is not null
-            ? $"Сигнатура {status.Metrology.Signature}, № {status.Metrology.SerialNumber}, Ø {status.Metrology.DiameterMillimeters} мм"
-            : status.DeviceSignature is uint signature
-                ? $"Сигнатура {signature}"
-                : "—";
-        if (!string.IsNullOrWhiteSpace(status.LastError))
-        {
-            OperationMessageTextBlock.Text = status.LastError;
+            ConnectionStateTextBlock.Text = status.State switch
+            {
+                SerialConnectionState.Connecting => "Подключение...",
+                SerialConnectionState.Connected when status.IsPolling => "Опрос...",
+                SerialConnectionState.Connected => "Подключено",
+                SerialConnectionState.ConnectionError => "Ошибка подключения",
+                _ => "Отключено"
+            };
         }
 
+        LastFrameTextBlock.Text = status.PacketsReceived > 0 ? status.LastFrameNumber.ToString() : "0";
+        PacketsTextBlock.Text = $"{status.PacketsReceived} / {status.PacketErrors}";
+        RecordedFramesTextBlock.Text = $"{status.RecordedFrames} кадров";
+        UpdateRecordingControls(status);
+
         PortComboBox.IsEnabled = status.State is SerialConnectionState.Disconnected or SerialConnectionState.ConnectionError;
+        RefreshPortsButton.IsEnabled = !refreshingPorts
+            && status.State is SerialConnectionState.Disconnected or SerialConnectionState.ConnectionError;
         ConnectButton.IsEnabled = status.State is SerialConnectionState.Disconnected or SerialConnectionState.ConnectionError;
         DisconnectButton.IsEnabled = status.State == SerialConnectionState.Connected;
+    }
+
+    private void UpdateRecordingControls(SerialStatusSnapshot status)
+    {
+        bool append = AppendCheckBox.IsChecked == true;
+        ShowFullFileCheckBox.IsEnabled = append;
+        BrowseRecordPathButton.Content = append ? "Файл..." : "Папка...";
+
+        if (!string.IsNullOrWhiteSpace(status.RecordFilePath))
+        {
+            RecordFileTextBlock.Text = Path.GetFileName(status.RecordFilePath);
+        }
+        else if (append)
+        {
+            RecordFileTextBlock.Text = string.IsNullOrWhiteSpace(settings.ExistingRecordFile)
+                ? "Выберите файл для дозаписи"
+                : Path.GetFileName(settings.ExistingRecordFile);
+        }
+        else
+        {
+            RecordFileTextBlock.Text = "Не записывается";
+        }
+    }
+
+    private async Task ShowMessageAsync(string message)
+    {
+        ContentDialog dialog = new()
+        {
+            Title = "Подключение к прибору",
+            Content = message,
+            CloseButtonText = "Закрыть",
+            XamlRoot = RootGrid.XamlRoot
+        };
+        await dialog.ShowAsync();
     }
 
     private void AppWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)
@@ -277,6 +364,7 @@ public sealed partial class ConnectionSettingsWindow : Window
             return;
         }
 
+        SaveSettings();
         args.Cancel = true;
         sender.Hide();
     }

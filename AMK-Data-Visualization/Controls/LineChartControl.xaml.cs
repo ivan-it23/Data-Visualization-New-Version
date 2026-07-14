@@ -13,6 +13,7 @@ public sealed record ChartRenderSeries(
     IReadOnlyList<float> Values,
     string DisplayName,
     string LegendLabel,
+    string LegendCategory,
     string Units,
     int ColorRef,
     int YAxisGroup);
@@ -36,7 +37,7 @@ public sealed partial class LineChartControl : UserControl
     public void SetSeries(IReadOnlyList<float> sourceValues, string seriesTitle, string seriesUnits)
     {
         SetSeries(
-            [new ChartRenderSeries(sourceValues, seriesTitle, seriesTitle, seriesUnits, ToColorRef(GetAccentColor()), 0)],
+            [new ChartRenderSeries(sourceValues, seriesTitle, seriesTitle, string.Empty, seriesUnits, ToColorRef(GetAccentColor()), 0)],
             seriesTitle,
             seriesUnits,
             string.Empty);
@@ -245,8 +246,22 @@ public sealed partial class LineChartControl : UserControl
         const double horizontalGap = 14;
         const double rowHeight = 21;
         List<LegendToken> tokens = [];
-        AddLegendAxisTokens(tokens, 0, "Левая ось", leftAxisUnits);
-        AddLegendAxisTokens(tokens, 1, "Правая ось", rightAxisUnits);
+        bool hasLeftAxis = series.Any(item => item.YAxisGroup == 0);
+        bool hasRightAxis = series.Any(item => item.YAxisGroup == 1);
+        if (hasLeftAxis)
+        {
+            AddLegendAxisTokens(tokens, 0, "Левая ось", leftAxisUnits);
+        }
+
+        if (hasLeftAxis && hasRightAxis)
+        {
+            tokens.Add(CreateLegendToken("|", null, semiBold: false, opacity: 0.55));
+        }
+
+        if (hasRightAxis)
+        {
+            AddLegendAxisTokens(tokens, 1, "Правая ось", rightAxisUnits);
+        }
 
         double availableWidth = Math.Max(1, width - 24);
         List<List<LegendToken>> rows = [[]];
@@ -305,27 +320,43 @@ public sealed partial class LineChartControl : UserControl
             return;
         }
 
-        string axisHeader = string.IsNullOrWhiteSpace(units) ? $"[{axisName}]" : $"[{axisName} ({units})]";
+        string axisHeader = string.IsNullOrWhiteSpace(units) ? $"[{axisName}]:" : $"[{axisName} ({units})]:";
         tokens.Add(CreateLegendToken(axisHeader, null, semiBold: true));
-        if (!string.IsNullOrWhiteSpace(presetDisplayName))
+        bool isPreset = !string.IsNullOrWhiteSpace(presetDisplayName);
+        bool useCondensedLabels = isPreset;
+        if (isPreset)
         {
             tokens.Add(CreateLegendToken($"{presetDisplayName}:", null, semiBold: true));
+        }
+        else
+        {
+            string[] categories = axisSeries
+                .Select(item => item.LegendCategory)
+                .Where(category => !string.IsNullOrWhiteSpace(category))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            useCondensedLabels = categories.Length == 1 && axisSeries.All(item => !string.IsNullOrWhiteSpace(item.LegendCategory));
+            if (useCondensedLabels)
+            {
+                tokens.Add(CreateLegendToken(categories[0], null, semiBold: true));
+            }
         }
 
         foreach (ChartRenderSeries item in axisSeries)
         {
-            tokens.Add(CreateLegendToken(item.LegendLabel, item, semiBold: false));
+            tokens.Add(CreateLegendToken(useCondensedLabels ? item.LegendLabel : item.DisplayName, item, semiBold: false));
         }
     }
 
-    private LegendToken CreateLegendToken(string text, ChartRenderSeries? item, bool semiBold)
+    private LegendToken CreateLegendToken(string text, ChartRenderSeries? item, bool semiBold, double opacity = 1)
     {
         TextBlock label = new()
         {
             Text = text,
             FontSize = 11,
             FontWeight = semiBold ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal,
-            Foreground = Foreground
+            Foreground = Foreground,
+            Opacity = opacity
         };
         double labelWidth = EstimateLegendTextWidth(text);
         return new LegendToken(label, item, labelWidth + (item is null ? 0 : 20), labelWidth);

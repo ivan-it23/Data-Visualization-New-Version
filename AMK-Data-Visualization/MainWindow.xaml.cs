@@ -356,7 +356,8 @@ public sealed partial class MainWindow : Window
             renderSeries.Add(new ChartRenderSeries(
                 chartData.LeftAxisData[index],
                 curve.DisplayName,
-                graphConfiguration.IsPresetActive ? GetPresetLegendLabel(curve) : curve.DisplayName,
+                graphConfiguration.IsPresetActive ? GetPresetLegendLabel(curve) : GetCombinedLegendLabel(curve),
+                GetLegendCategory(curve),
                 curve.Units,
                 curve.Color,
                 curve.YAxisGroup));
@@ -368,7 +369,8 @@ public sealed partial class MainWindow : Window
             renderSeries.Add(new ChartRenderSeries(
                 chartData.RightAxisData[index],
                 curve.DisplayName,
-                graphConfiguration.IsPresetActive ? GetPresetLegendLabel(curve) : curve.DisplayName,
+                graphConfiguration.IsPresetActive ? GetPresetLegendLabel(curve) : GetCombinedLegendLabel(curve),
+                GetLegendCategory(curve),
                 curve.Units,
                 curve.Color,
                 curve.YAxisGroup));
@@ -395,6 +397,38 @@ public sealed partial class MainWindow : Window
             _ when curve.SourceElement == ElementType.Transmitter => $"T{curve.ElementIndex + 1}",
             _ when curve.SourceElement == ElementType.Receiver => $"R{curve.ElementIndex + 1}",
             _ => curve.DisplayName
+        };
+    }
+
+    private static string GetCombinedLegendLabel(CurveDefinition curve)
+    {
+        return curve.SourceElement switch
+        {
+            ElementType.Transmitter => curve.DataType switch
+            {
+                DataType.AmplitudeRx1 => $"T{curve.ElementIndex + 1} R1",
+                DataType.AmplitudeRx2 => $"T{curve.ElementIndex + 1} R2",
+                _ => $"T{curve.ElementIndex + 1}"
+            },
+            ElementType.Receiver => $"R{curve.ElementIndex + 1}",
+            ElementType.SilentTx when curve.DataType == DataType.SilentPhaseDifference => "R1-R2 (молч.)",
+            ElementType.SilentTx => $"R{curve.ElementIndex + 1} (молч.)",
+            _ => curve.DisplayName
+        };
+    }
+
+    private static string GetLegendCategory(CurveDefinition curve)
+    {
+        return curve.DataType switch
+        {
+            DataType.PhaseDifference or DataType.SilentPhaseDifference => "Разность фаз",
+            DataType.PhaseSmt => "Фаза",
+            DataType.AmplitudeRx1 or DataType.AmplitudeRx2 or
+                DataType.SilentAmplitudeRx1 or DataType.SilentAmplitudeRx2 => "Амплитуда",
+            DataType.AmplitudeRatio => "Отношение амплитуд",
+            DataType.RhoSmt => "УЭС",
+            DataType.Temperature => "Температура",
+            _ => string.Empty
         };
     }
 

@@ -390,13 +390,6 @@
             </Grid>
 
             <Grid Grid.Row="1">
-                <TextBlock
-                    x:Name="ValidationTextBlock"
-                    MaxWidth="100"
-                    Margin="4,0,0,0"
-                    VerticalAlignment="Center"
-                    Foreground="{ThemeResource SystemFillColorCriticalBrush}"
-                    TextWrapping="Wrap" />
                 <StackPanel
                     HorizontalAlignment="Right"
                     Orientation="Horizontal"
