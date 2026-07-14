@@ -208,7 +208,9 @@ public unsafe struct MetrologyData
     private fixed short airZz[BinaryLayoutConstants.ChannelCount];
     private fixed short airZzAmplitude[BinaryLayoutConstants.ChannelCount];
     public uint SondeDiameterMm;
-    private fixed byte service[164];
+    public uint WorkType;
+    public uint RxPosition;
+    private fixed ushort service[78];
 
     public readonly ushort GetL1(int transmitterIndex)
     {

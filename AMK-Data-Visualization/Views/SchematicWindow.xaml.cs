@@ -4,6 +4,7 @@ using AMK.DataVisualization.Charting.Configuration;
 using AMK.DataVisualization.Charting.Series;
 using AMK.DataVisualization.Core;
 using AMK.DataVisualization.IO.DataFiles;
+using AMK.DataVisualization.Metrology;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
@@ -35,6 +36,7 @@ public sealed partial class SchematicWindow : Window
     private const uint NoZOrder = 0x0004;
     private readonly ChartWorkspace chartWorkspace;
     private readonly CurveSelectionService curveSelectionService;
+    private readonly MetrologySession metrologySession;
     private readonly Action<int> configurationApplied;
     private readonly Dictionary<int, EditorSession> editorSessions = [];
     private SchematicConfigurationEditor? editor;
@@ -46,10 +48,12 @@ public sealed partial class SchematicWindow : Window
     internal SchematicWindow(
         ChartWorkspace chartWorkspace,
         CurveSelectionService curveSelectionService,
+        MetrologySession metrologySession,
         Action<int> configurationApplied)
     {
         this.chartWorkspace = chartWorkspace;
         this.curveSelectionService = curveSelectionService;
+        this.metrologySession = metrologySession;
         this.configurationApplied = configurationApplied;
         InitializeComponent();
 
@@ -114,6 +118,14 @@ public sealed partial class SchematicWindow : Window
         if (editor is not null && graphNumbers.Contains(targetGraphNumber))
         {
             ActivateEditorForGraph(targetGraphNumber);
+        }
+    }
+
+    public void RefreshMetrologyAvailability()
+    {
+        if (editor is not null)
+        {
+            RefreshControls();
         }
     }
 
@@ -227,10 +239,12 @@ public sealed partial class SchematicWindow : Window
         bool rhoActive = editor.Selection.DataFilter == DataTypeFilter.RhoSmtOnly;
         RhoFromSondeCheckBox.IsChecked = rhoActive && editor.Selection.RhoSmtMode == SmtComputationMode.FromSonde;
         RhoFromComputerCheckBox.IsChecked = rhoActive && editor.Selection.RhoSmtMode == SmtComputationMode.FromComputer;
+        RhoFromComputerCheckBox.IsEnabled = metrologySession.HasData;
 
         bool phaseActive = editor.Selection.DataFilter == DataTypeFilter.PhaseSmtOnly;
         PhaseFromSondeCheckBox.IsChecked = phaseActive && editor.Selection.PhaseSmtMode == SmtComputationMode.FromSonde;
         PhaseFromComputerCheckBox.IsChecked = phaseActive && editor.Selection.PhaseSmtMode == SmtComputationMode.FromComputer;
+        PhaseFromComputerCheckBox.IsEnabled = metrologySession.HasData;
     }
 
     private void RefreshCurveList()
@@ -385,7 +399,7 @@ public sealed partial class SchematicWindow : Window
             return;
         }
 
-        bool accepted = editor.TrySetSmtMode(preset, mode, hasMetrologyData: false, out string warning);
+        bool accepted = editor.TrySetSmtMode(preset, mode, metrologySession.HasData, out string warning);
         RefreshControls();
         if (!accepted && warning.Length > 0)
         {

@@ -2,6 +2,7 @@
 using AMK.DataVisualization.Core.Access;
 using AMK.DataVisualization.Core.Adapters;
 using AMK.DataVisualization.Core.Binary;
+using AMK.DataVisualization.Metrology;
 
 namespace AMK.DataVisualization.Charting.Series;
 
@@ -14,7 +15,8 @@ public static class ChartDataCalculator
     public static ConfiguredChartData CalculateChartDataFromConfiguration(
         IReadOnlyList<GpToolData> records,
         IReadOnlyList<ToolRecordMetadata> metadata,
-        ChartConfiguration configuration)
+        ChartConfiguration configuration,
+        MetrologyData? metrology = null)
     {
         if (records.Count == 0)
         {
@@ -28,7 +30,8 @@ public static class ChartDataCalculator
             0.0,
             records.Count - 1,
             -1e6,
-            1e6);
+            1e6,
+            metrology);
     }
 
     public static ConfiguredChartData CalculateChartDataFromConfiguration(
@@ -38,27 +41,29 @@ public static class ChartDataCalculator
         double minX,
         double maxX,
         double minY,
-        double maxY)
+        double maxY,
+        MetrologyData? metrology = null)
     {
         if (records.Count == 0 || configuration.Curves.Count == 0)
         {
             return new ConfiguredChartData([], []);
         }
 
-        return CalculateCustomCurveData(records, metadata, configuration.Curves, minX, maxX, minY, maxY);
+        return CalculateCustomCurveData(records, metadata, configuration.Curves, minX, maxX, minY, maxY, metrology);
     }
 
     public static ConfiguredChartData CalculateCustomCurveData(
         IReadOnlyList<GpToolData> records,
         IReadOnlyList<ToolRecordMetadata> metadata,
-        IReadOnlyList<CurveDefinition> curves)
+        IReadOnlyList<CurveDefinition> curves,
+        MetrologyData? metrology = null)
     {
         if (records.Count == 0)
         {
             return new ConfiguredChartData([], []);
         }
 
-        return CalculateCustomCurveData(records, metadata, curves, 0.0, records.Count - 1, -1e6, 1e6);
+        return CalculateCustomCurveData(records, metadata, curves, 0.0, records.Count - 1, -1e6, 1e6, metrology);
     }
 
     public static ConfiguredChartData CalculateCustomCurveData(
@@ -68,7 +73,8 @@ public static class ChartDataCalculator
         double minX,
         double maxX,
         double minY,
-        double maxY)
+        double maxY,
+        MetrologyData? metrology = null)
     {
         if (records.Count == 0 || curves.Count == 0)
         {
@@ -79,13 +85,13 @@ public static class ChartDataCalculator
         List<List<float>> leftAxisData = new(groupedCurves.LeftAxisCurves.Count);
         foreach (CurveDefinition curve in groupedCurves.LeftAxisCurves)
         {
-            leftAxisData.Add(CalculateSingleCurveData(records, metadata, curve, minX, maxX, minY, maxY));
+            leftAxisData.Add(CalculateSingleCurveData(records, metadata, curve, minX, maxX, minY, maxY, metrology));
         }
 
         List<List<float>> rightAxisData = new(groupedCurves.RightAxisCurves.Count);
         foreach (CurveDefinition curve in groupedCurves.RightAxisCurves)
         {
-            rightAxisData.Add(CalculateSingleCurveData(records, metadata, curve, minX, maxX, minY, maxY));
+            rightAxisData.Add(CalculateSingleCurveData(records, metadata, curve, minX, maxX, minY, maxY, metrology));
         }
 
         return new ConfiguredChartData(leftAxisData, rightAxisData);
@@ -119,14 +125,15 @@ public static class ChartDataCalculator
     public static List<float> CalculateSingleCurveData(
         IReadOnlyList<GpToolData> records,
         IReadOnlyList<ToolRecordMetadata> metadata,
-        CurveDefinition curve)
+        CurveDefinition curve,
+        MetrologyData? metrology = null)
     {
         if (records.Count == 0)
         {
             return [];
         }
 
-        return CalculateSingleCurveData(records, metadata, curve, 0.0, records.Count - 1, -1e6, 1e6);
+        return CalculateSingleCurveData(records, metadata, curve, 0.0, records.Count - 1, -1e6, 1e6, metrology);
     }
 
     public static List<float> CalculateSingleCurveData(
@@ -136,7 +143,8 @@ public static class ChartDataCalculator
         double minX,
         double maxX,
         double minY,
-        double maxY)
+        double maxY,
+        MetrologyData? metrology = null)
     {
         if (records.Count == 0)
         {
@@ -145,9 +153,9 @@ public static class ChartDataCalculator
 
         List<float> output = curve.DataType switch
         {
-            DataType.RhoSmt => CalculateFilteredRhoSmtData(records, metadata, curve, minX, maxX, minY, maxY),
+            DataType.RhoSmt => CalculateFilteredRhoSmtData(records, metadata, curve, minX, maxX, minY, maxY, metrology),
             DataType.Temperature => CalculateFilteredTemperatureData(records, metadata, minX, maxX, minY, maxY),
-            _ => CalculateAlignedSingleCurveData(records, metadata, curve, minX, maxX, minY, maxY)
+            _ => CalculateAlignedSingleCurveData(records, metadata, curve, minX, maxX, minY, maxY, metrology)
         };
 
         if (curve.ValueScale != 1.0f)
@@ -227,8 +235,14 @@ public static class ChartDataCalculator
         double minX,
         double maxX,
         double minY,
-        double maxY)
+        double maxY,
+        MetrologyData? metrology)
     {
+        if (curve.DataType == DataType.PhaseSmt && curve.SmtMode == SmtComputationMode.FromComputer)
+        {
+            return CalculateComputerPhaseSmtData(records, metadata, curve, minX, maxX, minY, maxY, metrology);
+        }
+
         if (curve.DataType is DataType.SilentAmplitudeRx1 or DataType.SilentAmplitudeRx2 or DataType.SilentPhaseDifference)
         {
             List<List<float>> silentData = CalculateChartData(records, metadata, new ChartDataRequest(
@@ -269,7 +283,8 @@ public static class ChartDataCalculator
         double minX,
         double maxX,
         double minY,
-        double maxY)
+        double maxY,
+        MetrologyData? metrology)
     {
         DataIndexWindow window = GetDataIndexRange(records.Count, minX, maxX);
         if (window.StartIndex >= window.EndIndex || curve.ElementIndex < 0)
@@ -281,8 +296,27 @@ public static class ChartDataCalculator
         List<float> output = new(window.Count);
         for (int recordIndex = window.StartIndex; recordIndex < window.EndIndex; recordIndex++)
         {
-            ToolDataAccessView view = CreateAccessView(records, metadata, recordIndex);
-            if (!view.TryGetRhoSmt(frequencyIndex, curve.ElementIndex, out float value))
+            MeasurementView measurement = CreateMeasurementView(records, metadata, recordIndex);
+            ToolDataAccessView view = measurement.CreateAccessView();
+            bool hasValue = false;
+            float value = 0.0f;
+            if (curve.SmtMode == SmtComputationMode.FromComputer
+                && metrology is { } activeMetrology)
+            {
+                hasValue = MetrologyCalculator.TryCalculateRhoSmt(
+                    activeMetrology,
+                    measurement,
+                    frequencyIndex,
+                    curve.ElementIndex,
+                    out value);
+            }
+
+            if (!hasValue)
+            {
+                hasValue = view.TryGetRhoSmt(frequencyIndex, curve.ElementIndex, out value);
+            }
+
+            if (!hasValue)
             {
                 continue;
             }
@@ -291,6 +325,54 @@ public static class ChartDataCalculator
             {
                 output.Add(value);
             }
+        }
+
+        return output;
+    }
+
+    private static List<float> CalculateComputerPhaseSmtData(
+        IReadOnlyList<GpToolData> records,
+        IReadOnlyList<ToolRecordMetadata> metadata,
+        CurveDefinition curve,
+        double minX,
+        double maxX,
+        double minY,
+        double maxY,
+        MetrologyData? metrology)
+    {
+        DataIndexWindow window = GetDataIndexRange(records.Count, minX, maxX);
+        if (window.StartIndex >= window.EndIndex || curve.ElementIndex < 0)
+        {
+            return [];
+        }
+
+        int frequencyIndex = curve.Frequency == FrequencyBand.Freq400KHz ? 0 : 1;
+        List<float> output = new(window.Count);
+        for (int recordIndex = window.StartIndex; recordIndex < window.EndIndex; recordIndex++)
+        {
+            MeasurementView measurement = CreateMeasurementView(records, metadata, recordIndex);
+            ToolDataAccessView view = measurement.CreateAccessView();
+            bool hasValue = false;
+            float phase = 0.0f;
+            if (metrology is { } activeMetrology)
+            {
+                hasValue = MetrologyCalculator.TryCalculatePhaseSmt(
+                    activeMetrology,
+                    measurement,
+                    frequencyIndex,
+                    curve.ElementIndex,
+                    out phase);
+            }
+
+            if (!hasValue)
+            {
+                hasValue = view.TryGetPhaseSmt(frequencyIndex, curve.ElementIndex, out phase);
+            }
+
+            float value = hasValue
+                ? ConvertNormalizedPhaseToMillidegrees(NormalizePhase(phase))
+                : 0.0f;
+            AppendAlignedFilteredPlotValue(output, hasValue, value, minY, maxY);
         }
 
         return output;

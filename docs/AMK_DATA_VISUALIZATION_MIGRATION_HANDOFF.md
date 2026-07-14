@@ -49,7 +49,7 @@
 | IO | `DataFiles/ToolDataFileReader.cs`, `ToolDataRepository.cs`, `ToolDataRangeExporter.cs` | файлы, repository, range export |
 | Charting | `Series/ChartDataCalculator.cs`, `Configuration/*.cs` | series, конфигурации, presets |
 | Hardware | `Serial/SerialDeviceService.cs`, `SerialContracts.cs`, `SerialConnectionSettingsStore.cs` | COM/polling/recording |
-| Metrology | только `.csproj` | прикладной код отсутствует |
+| Metrology | `MetrologySession.cs`, `MetrologyCalculator.cs` | файлы, состояние, 3/4/5Tx phase/rho FromComputer |
 | Reporting | только `.csproj` | прикладной код отсутствует |
 
 ## 5. Стабильные контракты данных
@@ -246,12 +246,11 @@ Settings path:
 
 ### Metrology / FromComputer
 
-`SmtComputationMode.FromComputer` существует в моделях и окне схемы, но
-расчётный pipeline ещё не перенесён. `ChartDataCalculator` читает `PhaseSmt` и
-`RhoSmt` из canonical данных прибора и не использует `curve.SmtMode` для
-выполнения формул.
-
-Нельзя считать этот режим готовым даже при наличии считанной метрологии.
+`SmtComputationMode.FromComputer` подключён к `ChartDataCalculator` через
+`MetrologyCalculator`. Используются AIR-поправка, condition-byte и точные
+матрицы 3/4/5Tx. Режим доступен в окне схемы только после чтения метрологии;
+signature кадра должна совпасть с метрологией, иначе действует legacy fallback
+к canonical `FromSonde`.
 
 ### Визуальные заглушки shell
 
@@ -259,11 +258,10 @@ Settings path:
 - cursor-поля read-only, но crosshair не реализован;
 - `Поток` не выполняет полный Surf-сценарий;
 - notes controls не имеют storage/rendering логики;
-- меню метрологии, конструктора, логов, обновления и документации не перенесены.
+- меню конструктора, логов, обновления и документации не перенесены.
 
 ### Пустые проекты
 
-- `AMK.DataVisualization.Metrology` — только `.csproj`;
 - `AMK.DataVisualization.Reporting` — только `.csproj`.
 
 ## 11. Что подтверждено, а что нет
@@ -282,25 +280,15 @@ Settings path:
 - linked/independent Graph 2 с двумя контрольными файлами;
 - range export/cut на всех форматах;
 - COM-протокол, reconnect и запись на физическом приборе;
-- корректность любых `FromComputer` результатов;
+- parity результатов `FromComputer` со старым приложением на реальных данных;
 - производительность на больших файлах.
 
 ## 12. Рекомендуемый следующий блок
 
-Если владелец не сообщает о новой UI-регрессии, продолжать с Metrology:
-
-1. прочитать старые `doc/ues_phase_from_computer_5tx.md` и
-   `doc/COM_5TX_GP_POLLING_AND_METROLOGY.md`;
-2. проследить `FROM_COMPUTER` от `CurveSelectionModule` до старых формул;
-3. перенести вычисления в `AMK.DataVisualization.Metrology`;
-4. не помещать формулы в App или `LineChartControl`;
-5. отдельно решить T5, потому что часть старой логики ограничена T1..T4;
-6. подключить результат к `ChartDataCalculator` через явный контракт;
-7. проверить `from_sonde`, `from_computer`, `difference` на одинаковых данных.
-
-После Metrology рекомендуемый порядок: оставшиеся serial-команды и log →
-интерактивная geometry графика → notes/sidecar → file constructor → reporting и
-installer.
+Сначала выполнить ручную parity-проверку `from_sonde`/`from_computer` на
+одинаковых реальных данных и проверить запись/air calibration на физическом
+приборе. Затем рекомендуемый порядок: `DeviceExchangeLog` → интерактивная
+geometry графика → notes/sidecar → file constructor → reporting и installer.
 
 ## 13. Основные C++-якоря
 

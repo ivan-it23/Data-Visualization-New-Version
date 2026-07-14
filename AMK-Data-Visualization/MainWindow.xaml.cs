@@ -5,6 +5,7 @@ using AMK.DataVisualization.Core;
 using AMK.DataVisualization.Core.Adapters;
 using AMK.DataVisualization.IO.DataFiles;
 using AMK.DataVisualization.Hardware.Serial;
+using AMK.DataVisualization.Metrology;
 using AMK.DataVisualization.App.Layout;
 using AMK.DataVisualization.App.Services;
 using AMK.DataVisualization.App.Views;
@@ -21,8 +22,11 @@ public sealed partial class MainWindow : Window
     private readonly ChartWorkspace chartWorkspace = new(new ChartConfiguration(), new ChartConfiguration());
     private readonly SerialDeviceService serialDeviceService = new();
     private readonly SerialConnectionSettingsStore serialSettingsStore = new();
+    private readonly MetrologySession metrologySession = new();
     private SchematicWindow? schematicWindow;
     private ConnectionSettingsWindow? connectionSettingsWindow;
+    private MetrologyWindow? metrologyWindow;
+    private bool initialMaximizeApplied;
 
     public MainWindow()
     {
@@ -33,7 +37,7 @@ public sealed partial class MainWindow : Window
         serialDeviceService.FrameReceived += SerialDeviceService_FrameReceived;
         serialDeviceService.StatusChanged += SerialDeviceService_StatusChanged;
         UpdateConnectionControls(serialDeviceService.GetStatus());
-        MaximizeLikeLegacyApplication();
+        Activated += MainWindow_Activated;
         Closed += MainWindow_Closed;
     }
 
@@ -79,6 +83,20 @@ public sealed partial class MainWindow : Window
     private void ConnectionSettingsMenuItem_Click(object sender, RoutedEventArgs e)
     {
         ShowConnectionSettingsWindow();
+    }
+
+    private void MetrologyMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            metrologyWindow ??= new MetrologyWindow(serialDeviceService, metrologySession, OnMetrologyUpdated);
+            metrologyWindow.ShowForOwner(WindowNative.GetWindowHandle(this));
+        }
+        catch (Exception exception)
+        {
+            File.AppendAllText(Path.Combine(Path.GetTempPath(), "amk-metrology-window-error.txt"), exception + Environment.NewLine);
+            throw;
+        }
     }
 
     private void ShowConnectionSettingsWindow()
@@ -227,6 +245,8 @@ public sealed partial class MainWindow : Window
             SetStatus(status.LastError);
         }
 
+        metrologyWindow?.RefreshConnectionState();
+
         UpdateStatusBarFileInfo();
     }
 
@@ -303,7 +323,7 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            schematicWindow ??= new SchematicWindow(chartWorkspace, curveSelectionService, OnCurveConfigurationApplied);
+            schematicWindow ??= new SchematicWindow(chartWorkspace, curveSelectionService, metrologySession, OnCurveConfigurationApplied);
             schematicWindow.ShowForGraph(graphNumber, WindowNative.GetWindowHandle(this));
         }
         catch (Exception exception)
@@ -316,6 +336,18 @@ public sealed partial class MainWindow : Window
     private void OnCurveConfigurationApplied(int graphNumber)
     {
         RenderGraph(graphNumber);
+    }
+
+    private void OnMetrologyUpdated()
+    {
+        schematicWindow?.RefreshMetrologyAvailability();
+        RenderGraph(1);
+        if (DualModeCheckBox.IsChecked == true)
+        {
+            RenderGraph(2);
+        }
+
+        SetStatus("Метрология доступна для расчёта УЭС и симметризованных фаз");
     }
 
     private void RenderGraph(int graphNumber)
@@ -342,7 +374,8 @@ public sealed partial class MainWindow : Window
         ConfiguredChartData chartData = ChartDataCalculator.CalculateChartDataFromConfiguration(
             repository.Records,
             repository.RecordMetadata,
-            graphConfiguration);
+            graphConfiguration,
+            metrologySession.Current);
         List<float> xAxisData = ChartDataCalculator.CalculateXAxisData(
             repository.Records,
             repository.RecordMetadata,
@@ -506,12 +539,26 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void MainWindow_Activated(object sender, WindowActivatedEventArgs args)
+    {
+        if (initialMaximizeApplied || args.WindowActivationState == WindowActivationState.Deactivated)
+        {
+            return;
+        }
+
+        initialMaximizeApplied = true;
+        MaximizeLikeLegacyApplication();
+    }
+
     private void MainWindow_Closed(object sender, WindowEventArgs args)
     {
         serialDeviceService.FrameReceived -= SerialDeviceService_FrameReceived;
         serialDeviceService.StatusChanged -= SerialDeviceService_StatusChanged;
+        Activated -= MainWindow_Activated;
         connectionSettingsWindow?.ClosePermanently();
         connectionSettingsWindow = null;
+        metrologyWindow?.ClosePermanently();
+        metrologyWindow = null;
         schematicWindow?.ClosePermanently();
         schematicWindow = null;
         serialDeviceService.Dispose();

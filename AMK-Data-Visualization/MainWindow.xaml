@@ -37,8 +37,18 @@
                 Content="Настройки подключения"
                 Click="ConnectionSettingsMenuItem_Click" />
 
+            <Button
+                MinWidth="0"
+                MinHeight="0"
+                Padding="12,0"
+                VerticalAlignment="Stretch"
+                AutomationProperties.Name="Метрология"
+                Background="Transparent"
+                BorderThickness="0"
+                Content="Метрология"
+                Click="MetrologyMenuItem_Click" />
+
             <MenuBar Padding="0">
-                <MenuBarItem Title="Метрология" />
                 <MenuBarItem Title="Конструктор файлов" />
                 <MenuBarItem Title="Заметки">
                     <MenuFlyoutItem

@@ -1,4 +1,5 @@
 using AMK.DataVisualization.Core.Adapters;
+using AMK.DataVisualization.Core.Binary;
 
 namespace AMK.DataVisualization.Hardware.Serial;
 
@@ -28,6 +29,13 @@ public sealed record DeviceMetrologySummary(
     uint Signature,
     uint SerialNumber,
     uint DiameterMillimeters);
+
+public readonly record struct MetrologyReadResult(
+    SerialOperationResult Result,
+    MetrologyData Data)
+{
+    public bool IsSuccess => Result == SerialOperationResult.Success;
+}
 
 public sealed record SerialStatusSnapshot(
     SerialConnectionState State,

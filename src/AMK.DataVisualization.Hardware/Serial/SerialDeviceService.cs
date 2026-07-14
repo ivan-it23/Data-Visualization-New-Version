@@ -11,10 +11,13 @@ public sealed class SerialDeviceService : IDisposable
     private const byte CommandData = 0x11;
     private const byte CommandMetrology = 0x13;
     private const byte CommandSignature = 0x16;
+    private const byte CommandSelectedKey = 0x17;
+    private const byte CommandAirCalibration = 0x1A;
     private const int DefaultBaudRate = 125000;
     private const int MinimumPollInterval = 500;
     private const int MaximumPollInterval = 30000;
     private const int ReadTimeoutMilliseconds = 1000;
+    private const int ControlReadTimeoutMilliseconds = 5000;
     private const int WriteTimeoutMilliseconds = 1000;
     private const int PacketHeaderSize = 3;
     private const int PacketCrcSize = 2;
@@ -42,6 +45,7 @@ public sealed class SerialDeviceService : IDisposable
     private string appendFilePath = string.Empty;
     private bool recordingEnabled = true;
     private bool disposed;
+    private int controlOperationCount;
     private SerialConnectionState state = SerialConnectionState.Disconnected;
 
     public event EventHandler<SerialFrameReceivedEventArgs>? FrameReceived;
@@ -70,6 +74,8 @@ public sealed class SerialDeviceService : IDisposable
     public uint? DeviceSignature { get; private set; }
 
     public DeviceMetrologySummary? Metrology { get; private set; }
+
+    public MetrologyData? CurrentMetrology { get; private set; }
 
     public static IReadOnlyList<string> GetAvailablePorts()
     {
@@ -210,6 +216,7 @@ public sealed class SerialDeviceService : IDisposable
         }).ConfigureAwait(false);
         DeviceSignature = null;
         Metrology = null;
+        CurrentMetrology = null;
         consecutiveFailures = 0;
         SetState(SerialConnectionState.Disconnected);
     }
@@ -247,6 +254,86 @@ public sealed class SerialDeviceService : IDisposable
             SerialOperationResult.Cancelled => "Операция отменена",
             _ => "Неизвестная ошибка"
         };
+    }
+
+    public async Task<MetrologyReadResult> RequestMetrologyAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        Interlocked.Increment(ref controlOperationCount);
+        try
+        {
+            MetrologyReadResult result = await Task.Run(RequestMetrologyCore, cancellationToken).ConfigureAwait(false);
+            PublishStatus();
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            return new MetrologyReadResult(SerialOperationResult.Cancelled, default);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref controlOperationCount);
+        }
+    }
+
+    public async Task<SerialOperationResult> WriteMetrologyAsync(
+        MetrologyData data,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        Interlocked.Increment(ref controlOperationCount);
+        try
+        {
+            SerialOperationResult result = await Task.Run(() => WriteMetrologyCore(data), cancellationToken).ConfigureAwait(false);
+            PublishStatus();
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            return SerialOperationResult.Cancelled;
+        }
+        finally
+        {
+            Interlocked.Decrement(ref controlOperationCount);
+        }
+    }
+
+    public async Task<SerialOperationResult> SetSelectedKeyAsync(
+        uint key,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        Interlocked.Increment(ref controlOperationCount);
+        try
+        {
+            return await Task.Run(() => SetSelectedKeyCore(key), cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return SerialOperationResult.Cancelled;
+        }
+        finally
+        {
+            Interlocked.Decrement(ref controlOperationCount);
+        }
+    }
+
+    public async Task<SerialOperationResult> RequestAirCalibrationAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        Interlocked.Increment(ref controlOperationCount);
+        try
+        {
+            return await Task.Run(RequestAirCalibrationCore, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return SerialOperationResult.Cancelled;
+        }
+        finally
+        {
+            Interlocked.Decrement(ref controlOperationCount);
+        }
     }
 
     private SerialOperationResult ConnectCore(bool resetSession)
@@ -305,6 +392,12 @@ public sealed class SerialDeviceService : IDisposable
     {
         while (!cancellationToken.IsCancellationRequested)
         {
+            if (Volatile.Read(ref controlOperationCount) > 0)
+            {
+                await Task.Delay(50, cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
             if (!IsConnected)
             {
                 SerialOperationResult reconnect = ConnectCore(resetSession: false);
@@ -392,12 +485,161 @@ public sealed class SerialDeviceService : IDisposable
                 && metrologyCommand == CommandMetrology
                 && metrologyPayload.Length == BinaryLayoutConstants.MetrologyDataSize)
             {
-                Metrology = new DeviceMetrologySummary(
-                    BinaryPrimitives.ReadUInt32LittleEndian(metrologyPayload.AsSpan(0, 4)),
-                    BinaryPrimitives.ReadUInt32LittleEndian(metrologyPayload.AsSpan(4, 4)),
-                    BinaryPrimitives.ReadUInt32LittleEndian(metrologyPayload.AsSpan(72, 4)));
+                UpdateMetrologyCache(MemoryMarshal.Read<MetrologyData>(metrologyPayload));
             }
         }
+    }
+
+    private MetrologyReadResult RequestMetrologyCore()
+    {
+        lock (ioSync)
+        {
+            SerialOperationResult result = ExchangeControlPacketCore(
+                CommandMetrology,
+                [],
+                out byte responseCommand,
+                out byte[] payload);
+            if (result != SerialOperationResult.Success)
+            {
+                return new MetrologyReadResult(result, default);
+            }
+
+            if (responseCommand != CommandMetrology || payload.Length != BinaryLayoutConstants.MetrologyDataSize)
+            {
+                return new MetrologyReadResult(SerialOperationResult.InvalidResponse, default);
+            }
+
+            MetrologyData data = MemoryMarshal.Read<MetrologyData>(payload);
+            UpdateMetrologyCache(data);
+            return new MetrologyReadResult(SerialOperationResult.Success, data);
+        }
+    }
+
+    private SerialOperationResult WriteMetrologyCore(MetrologyData data)
+    {
+        if (!IsConnected)
+        {
+            return SerialOperationResult.NotConnected;
+        }
+
+        Thread.Sleep(2000);
+        byte[] bytes = new byte[BinaryLayoutConstants.MetrologyDataSize];
+        MemoryMarshal.Write(bytes.AsSpan(), in data);
+        MetrologyData applied = data;
+
+        lock (ioSync)
+        {
+            SerialOperationResult result = ExchangeControlPacketCore(
+                CommandMetrology,
+                bytes,
+                out byte responseCommand,
+                out byte[] responsePayload);
+            if (result != SerialOperationResult.Success)
+            {
+                return result;
+            }
+
+            if (responseCommand != CommandMetrology
+                || responsePayload.Length is not (0 or 1 or BinaryLayoutConstants.MetrologyDataSize))
+            {
+                return SerialOperationResult.InvalidResponse;
+            }
+
+            if (responsePayload.Length == BinaryLayoutConstants.MetrologyDataSize)
+            {
+                applied = MemoryMarshal.Read<MetrologyData>(responsePayload);
+            }
+
+            UpdateMetrologyCache(applied);
+        }
+
+        Thread.Sleep(300);
+        MetrologyReadResult verification = RequestMetrologyCore();
+        if (verification.IsSuccess
+            && (verification.Data.Signature != data.Signature || verification.Data.Serial != data.Serial))
+        {
+            return SerialOperationResult.InvalidResponse;
+        }
+
+        return SerialOperationResult.Success;
+    }
+
+    private SerialOperationResult SetSelectedKeyCore(uint key)
+    {
+        Span<byte> payload = stackalloc byte[sizeof(uint)];
+        BinaryPrimitives.WriteUInt32LittleEndian(payload, key);
+        lock (ioSync)
+        {
+            SerialOperationResult result = ExchangeControlPacketCore(
+                CommandSelectedKey,
+                payload,
+                out byte responseCommand,
+                out _);
+            if (result == SerialOperationResult.Timeout)
+            {
+                return SerialOperationResult.Success;
+            }
+
+            return result == SerialOperationResult.Success && responseCommand != CommandSelectedKey
+                ? SerialOperationResult.InvalidResponse
+                : result;
+        }
+    }
+
+    private SerialOperationResult RequestAirCalibrationCore()
+    {
+        if (!IsConnected)
+        {
+            return SerialOperationResult.NotConnected;
+        }
+
+        Thread.Sleep(2000);
+        lock (ioSync)
+        {
+            SerialOperationResult result = ExchangeControlPacketCore(
+                CommandAirCalibration,
+                [],
+                out byte responseCommand,
+                out _);
+            return result == SerialOperationResult.Success && responseCommand != CommandAirCalibration
+                ? SerialOperationResult.InvalidResponse
+                : result;
+        }
+    }
+
+    private SerialOperationResult ExchangeControlPacketCore(
+        byte command,
+        ReadOnlySpan<byte> payload,
+        out byte responseCommand,
+        out byte[] responsePayload)
+    {
+        SerialPort? port = serialPort;
+        if (port?.IsOpen != true)
+        {
+            responseCommand = 0;
+            responsePayload = [];
+            return SerialOperationResult.NotConnected;
+        }
+
+        int previousTimeout = port.ReadTimeout;
+        try
+        {
+            port.ReadTimeout = ControlReadTimeoutMilliseconds;
+            return ExchangePacketCore(command, payload, out responseCommand, out responsePayload);
+        }
+        finally
+        {
+            if (port.IsOpen)
+            {
+                port.ReadTimeout = previousTimeout;
+            }
+        }
+    }
+
+    private void UpdateMetrologyCache(MetrologyData data)
+    {
+        CurrentMetrology = data;
+        Metrology = new DeviceMetrologySummary(data.Signature, data.Serial, data.SondeDiameterMm);
     }
 
     private SerialOperationResult ExchangePacketCore(
