@@ -1,227 +1,226 @@
-﻿# AMK Data Visualization - план миграции логики
+# AMK Data Visualization — план миграции
 
 Дата создания: 2026-07-06
-Исходный проект: `C:\Users\Admin\Desktop\Amk-Horizon-New-Chart`
-Целевой проект: `C:\Users\Admin\Desktop\AMK-Data-Visualization`
 
-## 1. Цель миграции
+Последняя актуализация: **2026-07-14**
 
-Новый проект должен воспроизвести всю пользовательскую и расчетную логику `Amk-Horizon-New-Chart`, но перенести ее из Win32 C++ в современную модульную архитектуру WinUI 3 / .NET 10. Первая цель - поведенческий паритет. Визуальное обновление и улучшение UX выполняются только после фиксации контрактов данных, расчетов и сценариев.
+- исходный проект: `C:\Users\Admin\Desktop\Amk-Horizon-New-Chart`;
+- C++-исходники: `C:\Users\Admin\Desktop\Amk-Horizon-New-Chart\Amk-Horizon-New-Chart`;
+- целевой проект: `C:\Users\Admin\Desktop\AMK-Data-Visualization`.
+
+## 1. Цель
+
+Перенести пользовательскую, файловую, приборную и расчётную логику
+`Amk-Horizon-New-Chart` из Win32/C++ в модульное приложение WinUI 3 / .NET 10.
+Первый приоритет — поведенческий паритет. Современный дизайн допустим только как
+визуальная реализация старых сценариев и не должен незаметно менять бизнес-логику.
 
 ## 2. Непереговорные правила
 
-- Старое приложение остается источником истины по поведению до тех пор, пока новая реализация не пройдет parity-проверку.
-- Бинарные форматы, индексация каналов, единицы измерения и расчетные формулы переносятся без смысловых изменений.
-- Любое изменение поведения должно быть явно описано как новая бизнес-логика, а не как часть технического переноса.
-- Сначала переносятся модели, форматы и расчеты; затем строится UI.
-- Сборка не считается полной проверкой: для UI-изменений нужно отдельно подтверждать запуск окна и основные сценарии.
-- Современный WinUI-дизайн допустим только как визуальная реализация старой схемы. Расположение элементов главного окна, русские подписи, меню, панели графиков и статусная строка должны переноситься из `Amk-Horizon-New-Chart` без произвольных перестановок, включая промежуточные вертикали.
+- Старое приложение остаётся источником истины до ручной parity-проверки.
+- Binary layout, размеры кадров, смещения, индексация каналов, единицы и формулы
+  переносятся без смысловых изменений.
+- Любое намеренное улучшение поведения документируется отдельно от миграции.
+- UI не должен самостоятельно расшифровывать canonical данные или выполнять
+  расчёты, принадлежащие Core/Charting/Metrology.
+- Успешная сборка подтверждает компиляцию, но не работу на реальном файле,
+  корректность графика или COM-обмен.
+- Автоматизированных тестовых проектов в решении нет по решению владельца;
+  функциональный паритет проверяется вручную.
 
-## 3. Текущие источники истины старого проекта
+## 3. Источники истины старого проекта
 
-Основные документы:
+### Документы
 
-- `doc/README.md` - обзор возможностей и текущая архитектура.
-- `doc/TECHNICAL_REFERENCE.md` - инварианты графиков, UI, координат, расчетов и модулей.
-- `doc/ANALYSIS_GP_TOOL_DATA.md` - главная спецификация `GP_TOOL_DATA`, `METROLOGY_DATA`, capabilities и adapter-driven parsing.
-- `doc/FILE_FORMATS_ANALYSIS.md` - фактическое чтение `.bin`, `.biv`, `.DEV`.
-- `doc/FILE_VALIDATION_FOR_5TX_MODEL.md` - правила валидации входных файлов.
-- `doc/COM_5TX_GP_POLLING_AND_METROLOGY.md` - COM polling и метрология.
-- `doc/ues_phase_from_computer_5tx.md` - расчет phase/rho from computer.
-- `doc/PROJECT_STATUS.md` - актуальные границы стабильности и оставшиеся риски.
+- `doc/README.md` — обзор приложения;
+- `doc/TECHNICAL_REFERENCE.md` — UI, графики, координаты и инварианты;
+- `doc/ANALYSIS_GP_TOOL_DATA.md` — `GP_TOOL_DATA`, `METROLOGY_DATA`, capabilities;
+- `doc/FILE_FORMATS_ANALYSIS.md` — `.bin`, `.biv`, `.DEV`;
+- `doc/FILE_VALIDATION_FOR_5TX_MODEL.md` — валидация 5Tx;
+- `doc/COM_5TX_GP_POLLING_AND_METROLOGY.md` — polling и метрология;
+- `doc/ues_phase_from_computer_5tx.md` — УЭС/фазы «на компьютере»;
+- `doc/PROJECT_STATUS.md` — актуальные ограничения старого приложения.
 
-Основные C++-модули:
+### C++-модули
 
-- `ToolDataTypes.h`, `ToolDataAdapters.h/.cpp`, `ToolDataAccess.h` - бинарные структуры, capabilities, adapter registry.
-- `DataModule.h/.cpp` - загрузка файлов, canonical storage, derived cache, range/export.
-- `SerialModule.h/.cpp` - COM-протокол, команды, запись потока, polling, чтение метрологии.
-- `MetrologyModule.h/.cpp` - метрология, подписи, параметры прибора.
-- `ChartManager.h/.cpp` - координация UI, режимы источника данных, graph 2, COM live/file view.
-- `ChartModule.h/.cpp` - отрисовка, масштабирование, координаты, LOD, crosshair.
-- `CurveSelectionModule.h/.cpp` - кривые, пресеты, цвета, phase/rho from sonde/computer.
-- `SchematicModule.h/.cpp` - схема прибора и выбор каналов.
-- `FileConstructorModule.h/.cpp` - сборка canonical `.bin` из сегментов.
-- `NotesModule.h/.cpp` - заметки, sidecar, hit-test маркеров.
-- `DeviceExchangeLog.h/.cpp`, `DeviceLogPanel.h/.cpp` - лог обмена с прибором.
-- `AutoUpdateModule.h/.cpp`, `installer/setup.iss` - обновление и поставка.
+- `ToolDataTypes.*`, `ToolDataAdapters.*`, `ToolDataAccess.h` — binary contracts;
+- `DataModule.*` — файлы, canonical storage, расчёты и range export;
+- `ChartManager.*`, `ChartModule.*` — источники графиков, geometry и rendering;
+- `CurveSelectionModule.*`, `SchematicModule.*` — выбор кривых и пресеты;
+- `SerialModule.*` — протокол, команды, polling и запись;
+- `MetrologyModule.*` — метрологические формулы и параметры;
+- `DeviceExchangeLog.*`, `DeviceLogPanel.*` — журнал обмена;
+- `NotesModule.*` — заметки и sidecar;
+- `FileConstructorModule.*` — конструктор файлов;
+- `AutoUpdateModule.*`, `installer/setup.iss` — обновление и поставка.
 
 ## 4. Целевая архитектура
 
-Текущая заготовка решения:
+| Проект | Назначение | Состояние |
+| --- | --- | --- |
+| `AMK.DataVisualization.App` | WinUI shell, окна, orchestration | частично реализован |
+| `AMK.DataVisualization.Core` | binary layout, domain models, adapters, access-view | базовый объём реализован |
+| `AMK.DataVisualization.IO` | чтение файлов, repository, range export | базовый объём реализован |
+| `AMK.DataVisualization.Hardware` | COM, packet protocol, polling, recording | первая вертикаль реализована |
+| `AMK.DataVisualization.Charting` | конфигурации и подготовка серий | базовый объём реализован |
+| `AMK.DataVisualization.Metrology` | вычисления «на компьютере» | пока пустой контейнер |
+| `AMK.DataVisualization.Reporting` | отчёты, печать, экспорт | пока пустой контейнер |
 
-- `AMK.DataVisualization.App` - WinUI 3 shell, страницы, команды, привязки, навигация.
-- `AMK.DataVisualization.Core` - бинарные структуры, доменные модели, capabilities, enums, общие контракты.
-- `AMK.DataVisualization.IO` - чтение/валидация `.bin`, `.biv`, `.DEV`, sidecar-сегменты, экспорт диапазонов.
-- `AMK.DataVisualization.Hardware` - COM-порты, протокол `[CMD][LEN][PAYLOAD][CRC16]`, polling, запись потока.
-- `AMK.DataVisualization.Metrology` - расчетные формулы, phase/rho, метрология, подписи, проверки совместимости.
-- `AMK.DataVisualization.Charting` - подготовка рядов, координаты, LOD, hit-test, модели графиков.
-- `AMK.DataVisualization.Reporting` - отчеты, экспорт, печать, будущие документы.
+## 5. Этапы
 
-Автоматизированные тестовые проекты не входят в решение. Сборка используется как проверка компиляции, а функциональный паритет подтверждается владельцем проекта вручную на реальных `.bin/.biv/.DEV`.
+### Этап 0. Базовая конфигурация — выполнен
 
-## 5. Этапы переноса
+- [x] WinUI 3 / `net10.0-windows10.0.26100.0`.
+- [x] Только `x64`.
+- [x] Unpackaged/self-contained Windows App SDK.
+- [x] Модульное решение `.slnx`.
+- [x] Явные зависимости Windows App SDK и `System.IO.Ports`.
 
-### Этап 0. Базовая конфигурация проекта
+### Этап 1. Фиксация parity — выполняется вручную
 
-Статус: выполнен 2026-07-06.
+- [ ] Утвердить постоянный набор контрольных `.bin/.biv/.DEV`.
+- [ ] Зафиксировать по каждому файлу signature, capabilities, число кадров,
+  диапазон температур и ожидаемые series.
+- [ ] Составить таблицу UI-сценариев Graph 1/Graph 2 и COM live/file.
+- [ ] Фиксировать результаты ручных сравнений со старым приложением.
 
-Задачи:
+### Этап 2. Core — базовый объём выполнен
 
-- Перевести WinUI-проект на `net10.0-windows10.0.26100.0`.
-- Использовать `x64` как основную платформу.
-- Включить unpackaged/self-contained Windows App SDK, чтобы повторить удобную desktop-модель `LOOP_NEXT`.
-- Зафиксировать `Microsoft.WindowsAppSDK`, `Microsoft.Windows.SDK.BuildTools`, `CommunityToolkit.Mvvm` и `System.IO.Ports` явно.
-- Создать модульные проекты под будущие слои.
-- Проверить сборку.
+- [x] `GpToolData` и `MetrologyData`, по 240 байт.
+- [x] Semantic accessors для frequency/transmitter и silent-каналов.
+- [x] `ToolCapabilities`, `ToolRecordMetadata`, `ParsedToolFrame`.
+- [x] `UniversalCanonicalAdapter`, registry и access-view.
+- [ ] Добавлять новые типы приборов только через adapter/capabilities слой.
 
-### Этап 1. Фиксация поведения старого приложения
+### Этап 3. IO — базовый объём выполнен, sidecar не перенесён
 
-Задачи:
+- [x] Валидация `.bin`, `.biv`, `.DEV`.
+- [x] Физические кадры 240 и 251 байт, `.DEV` payload offset 11.
+- [x] Materialize в canonical records + metadata.
+- [x] Stateful `ToolDataRepository` и `DataVersion`.
+- [x] Metadata summary диапазонов.
+- [x] `SaveDataRange` и `SaveFileExcludingRange`.
+- [ ] Ручная проверка всех форматов и range export.
+- [ ] Sidecar-сегменты и миграция старого пространства хранения.
 
-- Собрать набор контрольных файлов `.bin`, `.biv`, `.DEV`.
-- Зафиксировать ожидаемые свойства: signature, frame count, temperature range, tool capabilities, graph-ready series.
-- Зафиксировать контрольные сценарии UI: один график, два графика, graph 2 linked/independent, COM live + просмотр файла, возврат `К прибору`.
-- Создать таблицу parity-кейсов: вход, ожидаемый результат, источник истины, статус.
+### Этап 4. Metrology — не начат
 
-### Этап 2. Core: бинарные структуры и capabilities
+Текущий `AMK.DataVisualization.Metrology` не содержит прикладного кода.
 
-Статус: начат 2026-07-06. Первая версия `GpToolData`, `MetrologyData`, capabilities, `UniversalCanonicalAdapter`, `ToolDataAdapterRegistry` и `ToolDataAccessView` перенесена.
+- [ ] Перенести проверки наличия/совместимости метрологии и signature.
+- [ ] Перенести `get_condition`, `formula_simmetry`, `simmetry`, `SIGNAL`,
+  `RO_ARG` без изменения математики.
+- [ ] Реализовать phase/rho `FromComputer` отдельно от canonical `FromSonde`.
+- [ ] Зафиксировать историческую область T1..T4.
+- [ ] Согласовать стратегию T5: parity старого поведения или отдельное расширение.
+- [ ] Сравнить `from_sonde`, `from_computer`, `difference` на контрольных данных.
 
-Задачи:
+Важно: наличие `SmtComputationMode.FromComputer` в моделях и UI не означает,
+что расчёт уже реализован. Текущий `ChartDataCalculator` читает phase/rho из
+canonical полей прибора.
 
-- [x] Перенести `GP_TOOL_DATA` размером 240 байт.
-- [x] Перенести `METROLOGY_DATA` размером 240 байт.
-- [x] Реализовать accessor-методы для `[freqIdx][txIdx]`, чтобы не размазывать индексную арифметику по UI.
-- [x] Перенести decode toolCode из signature: тип прибора, число передатчиков, модификация.
-- [x] Перенести `ToolCapabilities`, `ToolRecordMetadata`, `ParsedToolFrame`.
-- [x] Перенести `UniversalCanonicalAdapter` и registry.
-- [x] Сохранить бинарный размер `GpToolData` и `MetrologyData` в 240 байт через явную layout-модель.
+### Этап 5. Hardware — первая вертикаль реализована
 
-### Этап 3. IO: файлы и canonical storage
+- [x] COM discovery.
+- [x] 125000/8N1, DTR/RTS, таймауты.
+- [x] `[CMD][LEN][PAYLOAD][CRC16]`, CRC16 Modbus polynomial `0xA001`.
+- [x] `0x11` — чтение canonical кадра.
+- [x] `0x13` — чтение метрологии.
+- [x] `0x16` — чтение signature.
+- [x] Polling 500–30000 мс и автоматическое переподключение.
+- [x] Новый canonical `.bin` и дозапись существующего файла.
+- [x] `%LOCALAPPDATA%` settings store.
+- [x] Legacy-структура окна «Подключение к прибору».
+- [ ] Ручная проверка на физическом приборе.
+- [ ] Команды `0x12`, `0x17`, `0x1a`, selected key и air calibration.
+- [ ] `DeviceExchangeLog` и немодальное окно лога.
 
-Статус: начат 2026-07-07. Первая версия file-validation/file-loading и stateful canonical storage и range export перенесены в `AMK.DataVisualization.IO`: `.bin/.biv/.DEV`, signature offset, physical frame size, adapter parsing, materialize в `GpToolData + ToolRecordMetadata`, `ToolDataRepository`, `dataVersion`, record/metadata access, range metadata summary, canonical save range и cut range.
+### Этап 6. Charting — данные и статический renderer реализованы частично
 
-Задачи:
+- [x] Типы series и частоты 400/2000 кГц.
+- [x] Aligned series и `NaN`-разрывы.
+- [x] Phase normalization и `57295.7795 mdeg/rad`.
+- [x] `CurveDefinition`, `ChartConfiguration`, axis grouping.
+- [x] Комбинированные конфигурации и preset-слой.
+- [x] Graph 1/Graph 2 с независимыми конфигурациями.
+- [x] Linked/independent repository Graph 2.
+- [x] Single/dual Y-axis.
+- [x] X по кадрам или температуре.
+- [x] Grid, legacy nice-step и фиксированный числовой формат.
+- [x] Legacy-совместимые легенды.
+- [ ] Полная ручная parity-проверка на реальных файлах.
+- [ ] Surf/crossplot X-axis.
+- [ ] Zoom, scroll, undo/reset, crosshair, cursor coordinates.
+- [ ] LOD/downsampling и cache-инварианты.
+- [ ] Общий geometry path для draw/hit-test/notes/crosshair.
 
-- [x] Перенести валидацию расширений `.bin`, `.biv`, `.DEV`.
-- [x] Реализовать чтение signature с правильного смещения: начало кадра для `.bin/.biv`, после 11 байт для `.DEV`.
-- [x] Реализовать physical frame size: 240 для `.bin/.biv`, 251 для `.DEV`.
-- [x] Реализовать materialize через `ToolDataAdapterRegistry` в canonical `GP_TOOL_DATA + ToolRecordMetadata`.
-- [x] Перенести stateful-часть `DataModule`: `ApplyLoadedData`, `ClearData`, `AddData`, `AddDataBatch`, `AddParsedData`, `dataVersion`, `LoadedFileName`, доступ к records/metadata.
-- [x] Перенести `TryDescribeRangeMetadata`, `TryAnalyzeExportRange`, `TryGetRangeMetadataSummary`.
-- [ ] Проверить вручную на реальных файлах загрузку `.bin/.biv/.DEV`, версионирование repository, canonical save range и cut range.
-- [x] Перенести range export, save range, cut range: `SaveDataRange` пишет canonical 240-byte records, `SaveFileExcludingRange` сохраняет исходные physical frames при совпадающем формате.
-- [ ] Перенести sidecar-сегменты `%LOCALAPPDATA%\AMK-Horizon-New-Chart\segments\...` с новым пространством хранения и миграцией старых sidecar.
-### Этап 4. Metrology: расчеты и from computer/from sonde
+### Этап 7. UI — shell и два ключевых окна реализованы частично
 
-Задачи:
+- [x] Legacy-порядок главного shell и статусная строка.
+- [x] Двойной режим и controls Graph 2.
+- [x] Открытие `.bin/.biv/.DEV` через picker.
+- [x] Немодальная «Схема прибора» с отдельным состоянием Graph 1/Graph 2.
+- [x] Полный текущий набор быстрых пресетов.
+- [x] Capability-aware T1..T5 и единая жёлтая рамка выбора.
+- [x] Собственная taskbar-кнопка окна схемы.
+- [x] Выверенная владельцем компоновка окна схемы, включая DPI-safe footer.
+- [x] Прямое открытие и legacy-компоновка окна подключения.
+- [ ] Рабочие range/zoom/cursor controls.
+- [ ] Notes UI и маркеры.
+- [ ] Окно метрологии.
+- [ ] Конструктор файлов.
+- [ ] Логи, документация и проверка обновлений.
 
-- Перенести нормализацию фаз и перевод единиц: амплитуда в mV, фаза в mdeg.
-- Перенести `get_condition`, `formula_simmetry`, `simmetry`, `SIGNAL`, `RO_ARG` без изменения математики.
-- Отдельно оформить текущее ограничение: часть `from_computer` исторически работает по T1..T4.
-- Решить и документировать стратегию для T5: сохранить старое поведение или добавить согласованную 5Tx-логику отдельной задачей.
-- Перенести проверки наличия метрологии и совпадения signature.
-- Добавить сравнение `from_sonde`, `from_computer`, `difference`.
+### Этап 8. Reporting, installer, update — не начат
 
-### Этап 5. Hardware: COM, polling и запись
+- [ ] Отчёты, печать и экспорт.
+- [ ] Inno Setup installer.
+- [ ] Стратегия автообновления.
+- [ ] Синхронное versioning приложения, installer и документации.
 
-Статус: начат 2026-07-13. Перенесена первая вертикаль реального времени: COM discovery, подключение 125000/8N1, пакетный CRC16-протокол, чтение `0x11`/`0x13`/`0x16`, polling, автоматическое переоткрытие порта, canonical-запись и WinUI-настройки подключения. Команды изменения состояния прибора и журнал обмена остаются следующими задачами; работа с физическим прибором требует ручной проверки.
+## 6. Текущие рабочие вертикали
 
-Задачи:
+### Файл → график
 
-- [x] Перенести COM-протокол `[CMD:1][LEN:2][PAYLOAD][CRC16:2]`.
-- [ ] Перенести все команды `0x11`, `0x12`, `0x13`, `0x16`, `0x17`, `0x1a` и связанные сценарии; чтение `0x11`/`0x13`/`0x16` уже реализовано.
-- [ ] Перенести чтение подписи, чтение метрологии, polling кадров, air calibration; чтение и polling уже реализованы, air calibration остается.
-- [x] Реализовать `System.IO.Ports` transport с таймаутами, отменой и автоматическим переподключением.
-- [x] Перенести запись canonical-потока кадров в новый файл и дозапись существующего `.bin`.
-- [x] Перенести `lastComPort`, интервал и параметры записи в `%LOCALAPPDATA%` settings store.
-- [ ] Перенести `DeviceExchangeLog` как потокобезопасный сервис логирования.
-- [ ] Подтвердить протокол, частоту опроса, переподключение и файлы записи на физическом приборе.
+`FileOpenPicker` → `ToolDataFileReader` → `ToolDataRepository` →
+`ChartConfiguration` → `ChartDataCalculator` → `LineChartControl`.
 
-### Этап 6. Charting: данные графиков и геометрия
+### Прибор → live-график и запись
 
-Статус: начат 2026-07-07, продолжен 2026-07-13. Перенесены aligned data-series слой, модели конфигурации кривых, группировка по двум Y-осям, расчет комбинированных конфигураций и preset-слой. WinUI shell применяет независимые конфигурации Graph 1/Graph 2, отображает несколько серий, компактную legacy-легенду пресета, полную сетку и числовые метки активных осей; частота вынесена в заголовок графика. Ось X работает по номеру кадра или температуре. Расчеты и состояние метрологии для SMT-режима «на компьютере» еще не перенесены.
+`SerialDeviceService` → packet/CRC validation → `ParsedToolFrame` → primary
+`ToolDataRepository` → Graph 1 / linked Graph 2; параллельно canonical recording.
 
-Задачи:
+## 7. Границы готовности
 
-- [x] Перенести `DataType`, `FrequencyBand`, `Transmitter` для базовых графических рядов.
-- [x] Перенести aligned multi-series расчет для `PHASE_DIFFERENCE`, `AMPLITUDE_RATIO`, `AMPLITUDE_RX1`, `AMPLITUDE_RX2`, `PHASE_SMT`, `RHO_SMT`, silent amplitude/phase и `TEMPERATURE`.
-- [x] Сохранить старую семантику пропусков: отсутствующие/невидимые значения добавляются как `NaN`, чтобы не ломать X-alignment.
-- [x] Сохранить phase normalization и conversion `57295.7795 mdeg/rad`.
-- [ ] Проверить вручную расчет рядов и конфигураций графика на реальных файлах после завершения окна «Схема прибора».
-- [x] Перенести модели `ChartConfiguration`, curve definitions и axis grouping.
-- [x] Перенести `CalculateSingleCurveData`, `CalculateCustomCurveData` и `CalculateChartDataFromConfiguration`.
-- [x] Сохранить совместимость `CalculateSingleCurveData`: `valueScale` применяется после расчета; `RHO_SMT` и `TEMPERATURE` удаляют точки вне `minY/maxY`, остальные типы сохраняют aligned-ряд.
-- [x] Перенести source-state для одного/двух графиков: Graph 1 как primary repository, Graph 2 в linked или independent mode.
-- [x] Поддержать первый минимальный сценарий одного графика с одной кривой.
-- [x] Поддержать применение независимых конфигураций кривых в режимах одного и двух графиков; интерактивный parity графиков остается в последующих задачах.
-- [x] Поддержать Graph 2 в linked mode и independent file mode на уровне source-state и WinUI shell; parity-проверка с двумя реальными файлами остается отдельной задачей.
-- [x] Поддержать X-axis по `FRAME_NUMBER` и `TEMPERATURE` в текущем renderer.
-- [x] Перенести legacy nice-step для шкал: кадры по X подписываются только целыми числами, ноль отображается как `0`, числовые подписи не используют экспоненциальный формат.
-- [ ] Поддержать оставшиеся X-axis `Surf` и crossplot-сценарии.
-- [x] Поддержать отрисовку single-axis и dual-axis; Y zoom target остается отдельной задачей.
-- [ ] Перенести zoom, scroll, undo/reset, crosshair, cursor coordinate fields.
-- [ ] Перенести LOD/downsampling и cache-инварианты.
-- [ ] Обеспечить единый geometry path для draw, screen-to-data, crosshair, notes и hit-test.
-### Этап 7. UI: WinUI shell и рабочие сценарии
+Функция считается:
 
-Задачи:
+- **реализованной**, когда кодовая вертикаль существует;
+- **build-verified**, когда всё решение собирается без ошибок;
+- **runtime-verified**, когда открыто нужное окно и пройден UI-сценарий;
+- **parity-verified**, только после сравнения со старым приложением на тех же
+  данных или приборе.
 
-- [x] Построить первый shell по старой схеме окна: верхнее меню, компактная панель управления графиком, рабочая область графика и нижняя статусная строка.
-- [x] Привести панели Graph 1/Graph 2 к legacy-порядку и равному интервалу controls; сохранить полную подпись `Двойной режим`, правое выравнивание координатных полей и проверить отсутствие наложений через UI Automation.
-- [x] Подключить сценарий открытия `.bin/.biv/.DEV` через WinUI picker и загрузку в `ToolDataRepository`.
-- [x] Показать первый график по default `CurveDefinition` (`AmplitudeRx1`, `T1`, `400 kHz`) через `ChartDataCalculator`.
-- [ ] Довести основной shell до полного паритета со старым окном: второй график, graph 2 controls, scroll/undo controls, cursor fields, notes controls, status parts.
-- [x] Перенести немодальную схему прибора, независимые состояния Graph 1/Graph 2 и capability-aware доступность T1..T5.
-- [x] Перенести пресеты кривых: амплитуды R1/R2, отношения, разности фаз, silent, температура, УЭС и симметричные фазы в режиме «на приборе».
-- [x] Восстановить полный legacy-порядок быстрых пресетов, единое желтое выделение элементов и отдельную кнопку окна схемы на панели задач.
-- [x] Уплотнить окно схемы: silent-кнопки вмещают подписи, нижняя граница списка совпадает с рядом silent-пресетов, а `Применить`/`Отмена` выровнены по высоте с `Температура`.
-- [x] Перенести формат комбинированной легенды: общий функциональный тип на ось, краткие обозначения кривых и разделитель `|` между осевыми группами.
-- [x] Подключить окно настроек COM и кнопки включения/паузы опроса к primary repository графиков.
-- [ ] Перенести метрологические вычисления УЭС/симметричных фаз «на компьютере»; до этого выбора окно использует legacy-предупреждение об отсутствии метрологических данных.
-- Перенести немодальный лог обмена с прибором.
-- Перенести notes UI и визуализацию маркеров.
-- Перенести окно конструктора файлов.
-- Проверить поведение на обычном и широком экране, без наложения текста и элементов.
+В документации нельзя заменять один статус другим.
 
-### Этап 8. Reporting, installer, update
+## 8. Основные риски
 
-Задачи:
+- Тихая ошибка binary layout даст визуально правдоподобные, но неверные графики.
+- `FromComputer` нельзя имитировать чтением `FromSonde`.
+- Graph 2 и COM live/file нельзя сводить к одному глобальному repository.
+- Фиксированные размеры WinUI нужно проверять при фактическом DPI-масштабировании.
+- Производительность нужно измерять на больших реальных файлах после переноса
+  LOD/cache, а не выводить из текущей сборки.
 
-- Перенести отчетные и экспортные сценарии.
-- Подготовить Inno Setup installer по модели `LOOP_NEXT`.
-- Решить стратегию автообновления: сохранить текущую HTTP/FTP-модель или заменить на отдельный корпоративный updater.
-- Синхронизировать versioning: `.csproj`, installer, release notes, документация.
+## 9. Порядок продолжения
 
-## 6. Минимальная первая вертикаль реализации
+Если владелец не назначил другую пользовательскую проблему:
 
-Первая рабочая вертикаль должна быть маленькой, но настоящей:
+1. завершить ручную проверку последних UI-изменений;
+2. перенести Metrology / `FromComputer`;
+3. перенести оставшиеся serial-команды и лог обмена;
+4. перенести интерактивную геометрию графика;
+5. перенести notes/sidecar и конструктор файлов;
+6. затем reporting, installer и update.
 
-1. Открыть `.bin`.
-2. Распознать signature и capabilities.
-3. Прочитать кадры в canonical `GP_TOOL_DATA`.
-4. Показать один график с одной выбранной кривой.
-5. Поддержать zoom и координаты курсора.
-6. Сравнить значения с текущим приложением на одном контрольном файле.
-
-Статус: пункты 1-4 реализованы в первой WinUI-вертикали и build/launch verified. Сценарий выбора реального файла через picker нужно отдельно зафиксировать вручную или автоматизированным UI-прогоном; пункты 5-6 остаются следующими parity-задачами.
-
-## 7. Риски
-
-- Ошибки в бинарной укладке приведут к тихо неправильным графикам.
-- Нельзя переносить UI-логику раньше data model: появится красивый интерфейс без гарантии паритета.
-- `from_computer` для 5Tx требует отдельного решения по T5, чтобы не выдать улучшение за перенос.
-- Производительность графиков нужно проверять на реальных больших файлах, а не на маленьких демо-данных.
-- Graph 2 independent mode и COM live/file view легко сломать, если источник данных будет глобальным состоянием.
-
-## 8. Правило обновления этого плана
-
-Этот файл описывает общий маршрут. Текущий ход работ, задачи сессии и фактические статусы фиксируются в `docs/SESSION_TASKS.md`.
-
-
-
-
-
-
-
-
+Оперативное состояние и конкретный следующий шаг фиксируются в
+`SESSION_TASKS.md`.

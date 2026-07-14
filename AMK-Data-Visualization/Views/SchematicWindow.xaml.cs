@@ -19,7 +19,7 @@ namespace AMK.DataVisualization.App.Views;
 public sealed partial class SchematicWindow : Window
 {
     private const int WindowWidth = 820;
-    private const int WindowHeight = 577;
+    private const int WindowHeight = 569;
     private const int WindowOwnerIndex = -8;
     private const int WindowExtendedStyleIndex = -20;
     private const int ClassIconIndex = -14;

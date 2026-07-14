@@ -1,450 +1,368 @@
-# AMK-Data-Visualization Migration Handoff
+# AMK Data Visualization — handoff для новой сессии
 
-> Статус на 2026-07-08. Документ фиксирует контекст переноса логики из
-> `C:\Users\Admin\Desktop\Amk-Horizon-New-Chart` в новый проект
-> `C:\Users\Admin\Desktop\AMK-Data-Visualization`.
->
-> В новой сессии желательно открыть рабочей папкой именно
-> `C:\Users\Admin\Desktop\AMK-Data-Visualization`, потому что текущая сессия
-> имеет право записи только в старый проект.
+Снимок состояния: **2026-07-14**.
 
-## Цель миграции
+## 1. Контекст и рабочие папки
 
-Новый проект должен воспроизвести поведение старого приложения без изменения
-математики и пользовательской логики, но перенести ее в современную модульную
-архитектуру WinUI/C#:
+- целевой проект, в котором нужно продолжать работу:
+  `C:\Users\Admin\Desktop\AMK-Data-Visualization`;
+- старый проект — источник истины:
+  `C:\Users\Admin\Desktop\Amk-Horizon-New-Chart`;
+- C++-исходники старого приложения:
+  `C:\Users\Admin\Desktop\Amk-Horizon-New-Chart\Amk-Horizon-New-Chart`;
+- документация старого приложения:
+  `C:\Users\Admin\Desktop\Amk-Horizon-New-Chart\doc`.
 
-- `Core` - бинарные контракты, типы данных, capabilities, безопасные access-view.
-- `IO` - чтение `.bin/.biv/.DEV`, repository-state, range export.
-- `Hardware` - COM/polling слой: discovery, 125000/8N1 transport, CRC16 packets, live frames, canonical recording и connection settings.
-- `Metrology` - метрология и вычисления, связанные с прибором.
-- `Charting` - расчеты серий, конфигурации кривых, оси, геометрия графиков.
-- `Reporting` - будущие отчеты/экспорт.
-- WinUI App - оболочка, открытие файлов, визуализация и взаимодействие.
+Новый проект доступен для записи и является единственной целью изменений.
+Старый проект нужно читать и сравнивать, но не менять без отдельного запроса.
 
-Поведение старого C++ проекта считается источником истины. Любое расхождение
-должно быть либо исправлено, либо явно задокументировано как намеренное решение.
+## 2. Первые действия в новой сессии
 
-## Что уже перенесено в новый проект
+1. Открыть workspace `C:\Users\Admin\Desktop\AMK-Data-Visualization`.
+2. Прочитать этот файл полностью.
+3. Прочитать `SESSION_TASKS.md`, затем нужный этап `MIGRATION_PLAN.md`.
+4. Выполнить `git status --short`, чтобы не затереть незакоммиченные изменения.
+5. Сопоставить новый код с конкретным C++-участком старого проекта.
+6. После изменения собрать всё решение.
+7. Не называть build функциональной или parity-проверкой.
 
-Состояние ниже зафиксировано по предыдущей рабочей сессии. Перед продолжением
-нужно быстро перепроверить файлы и сборку `AMK-Data-Visualization`.
+## 3. Технологический профиль
 
-### 1. Базовая структура решения
+- WinUI 3;
+- `.NET 10`;
+- `x64`;
+- unpackaged приложение;
+- Windows App SDK self-contained;
+- главный проект: `AMK-Data-Visualization/AMK-Data-Visualization.csproj`;
+- решение: `AMK-Data-Visualization.slnx`;
+- автоматизированных тестовых проектов нет по просьбе владельца.
 
-В новом проекте создана модульная структура:
+Версия приложения в `.csproj` пока `0.1.0`; installer ещё не создан.
 
-- `AMK-Data-Visualization\AMK-Data-Visualization.csproj`
-- `src\AMK.DataVisualization.Core`
-- `src\AMK.DataVisualization.IO`
-- `src\AMK.DataVisualization.Hardware`
-- `src\AMK.DataVisualization.Metrology`
-- `src\AMK.DataVisualization.Charting`
-- `src\AMK.DataVisualization.Reporting`
+## 4. Архитектура нового проекта
 
-Документы нового проекта:
+| Слой | Ключевые файлы | Фактическое состояние |
+| --- | --- | --- |
+| App | `MainWindow.*`, `Views/*.xaml`, `Controls/LineChartControl.*` | shell, два графика, схема и подключение |
+| App services | `Services/ChartWorkspace.cs` | источники и конфигурации Graph 1/Graph 2 |
+| Core | `Binary/BinaryStructs.cs`, `Adapters/ToolDataAdapterRegistry.cs`, `Access/ToolDataAccessView.cs` | binary contracts и semantic access |
+| IO | `DataFiles/ToolDataFileReader.cs`, `ToolDataRepository.cs`, `ToolDataRangeExporter.cs` | файлы, repository, range export |
+| Charting | `Series/ChartDataCalculator.cs`, `Configuration/*.cs` | series, конфигурации, presets |
+| Hardware | `Serial/SerialDeviceService.cs`, `SerialContracts.cs`, `SerialConnectionSettingsStore.cs` | COM/polling/recording |
+| Metrology | только `.csproj` | прикладной код отсутствует |
+| Reporting | только `.csproj` | прикладной код отсутствует |
 
-- `docs\MIGRATION_PLAN.md`
-- `docs\SESSION_TASKS.md`
+## 5. Стабильные контракты данных
 
-### 2. Core: бинарные контракты и semantic access
+### Binary layout
 
-Перенесены ключевые контракты:
+- `GpToolData`: 240 байт;
+- `MetrologyData`: 240 байт;
+- `.bin/.biv`: physical frame 240 байт, signature offset 0;
+- `.DEV`: physical frame 251 байт, payload offset 11;
+- materialize выполняется через `ToolDataAdapterRegistry`;
+- UI и IO не должны вручную вычислять индексы полей canonical структуры.
 
-- `GpToolData`
-- `MetrologyData`
-- `BinaryLayoutConstants`
-- `BinaryLayoutVerifier`
-- `FileFormat`
-- `DeviceType`
-- `ToolDataKind`
-- `ToolCapabilities`
-- `ToolRecordMetadata`
-- `ToolIdentity`
-- `UniversalCanonicalAdapter`
-- `ToolDataAdapterRegistry`
-- `ParsedToolFrame`
-- `ToolDataAccessView`
-- `MeasurementView`
+### Repository
 
-Важные инварианты:
+`ToolDataRepository` владеет canonical records и metadata, поддерживает:
 
-- canonical payload остается `240` байт.
-- `.DEV` имеет физический кадр `251` байт: `11` байт заголовка + `240` байт payload.
-- Семантический доступ к данным должен идти через access-view, а не через
-  произвольные индексы массивов.
+- `LoadDataFromFile`;
+- `ApplyLoadedData`;
+- `ClearData`;
+- `AddData`, `AddDataBatch`, `AddParsedData`;
+- `DataVersion`;
+- `LoadedFileName`;
+- range metadata summary.
 
-Основные C++ источники:
+Пустой `AddDataBatch` не должен повышать `DataVersion`.
 
-- [`ToolDataTypes.h`](../Amk-Horizon-New-Chart/ToolDataTypes.h#L6) - `GP_TOOL_DATA`.
-- [`ToolDataAdapters.h`](../Amk-Horizon-New-Chart/ToolDataAdapters.h#L10) - `ParsedToolFrame`, `UniversalCanonicalAdapter`, registry.
-- [`ToolDataAdapters.cpp`](../Amk-Horizon-New-Chart/ToolDataAdapters.cpp#L5) - registry singleton и парсинг.
-- [`ToolDataAccess.h`](../Amk-Horizon-New-Chart/ToolDataAccess.h#L10) - `ToolDataAccessView`.
-- [`ToolDataAccess.h`](../Amk-Horizon-New-Chart/ToolDataAccess.h#L129) - `MeasurementView`.
+### Range export
 
-### 3. IO: загрузка файлов и repository-state
+- `SaveDataRange` пишет canonical 240-byte records;
+- `SaveFileExcludingRange` сохраняет исходную физическую форму кадров, когда
+  формат однороден, включая `.DEV` header/frame shape.
 
-Перенесена загрузка `.bin/.biv/.DEV`:
+## 6. Реализованные рабочие вертикали
 
-- `.bin/.biv`: физический кадр `240` байт, signature с offset `0`.
-- `.DEV`: физический кадр `251` байт, payload с offset `11`.
-- Результат загрузки материализуется в canonical `GpToolData` и
-  `ToolRecordMetadata`.
+### Открытие файла и график
 
-Перенесен repository-state:
+```text
+FileOpenPicker
+  → ToolDataFileReader
+  → ToolDataRepository
+  → ChartConfiguration
+  → ChartDataCalculator.CalculateChartDataFromConfiguration
+  → LineChartControl
+```
 
-- `ApplyLoadedData`
-- `ClearData`
-- `AddData`
-- `AddDataBatch`
-- `AddParsedData`
-- `DataVersion`
-- имя загруженного файла
-- доступ к records и metadata
-- summary по диапазонам metadata
+Поддерживаются `.bin`, `.biv`, `.DEV`, несколько curves, две Y-оси и X по
+номеру кадра или температуре.
 
-Основные C++ источники:
+### Graph 1 / Graph 2
 
-- [`DataModule.h`](../Amk-Horizon-New-Chart/DataModule.h#L103) - public API загрузки.
-- [`DataModule.cpp`](../Amk-Horizon-New-Chart/DataModule.cpp#L548) - `LoadDataFromFile`.
-- [`DataModule.cpp`](../Amk-Horizon-New-Chart/DataModule.cpp#L568) - `LoadDataFromFileResult`.
-- [`DataModule.cpp`](../Amk-Horizon-New-Chart/DataModule.cpp#L259) - `ParseRawFrameDetailed`.
-- [`DataModule.cpp`](../Amk-Horizon-New-Chart/DataModule.cpp#L763) - `GetMeasurementView`.
-- [`DataModule.cpp`](../Amk-Horizon-New-Chart/DataModule.cpp#L777) - `GetDataView`.
-- [`DataModule.cpp`](../Amk-Horizon-New-Chart/DataModule.cpp#L782) - `AddParsedData`.
+- Graph 1 всегда использует primary repository.
+- Graph 2 в `Стандартном режиме` читает primary repository.
+- Graph 2 в режиме `Отдельный файл` читает
+  `Graph2IndependentRepository`.
+- Конфигурации графиков независимы.
+- Переход между режимами не очищает Graph 1 и не уничтожает ранее загруженный
+  независимый источник Graph 2.
+- Все обращения к источнику Graph 2 идут через `ChartWorkspace`.
 
-### 4. IO: range export
+### COM live
 
-Перенесены:
+```text
+SerialDeviceService
+  → packet length / CRC16 validation
+  → ParsedToolFrame
+  → primary ToolDataRepository
+  → Graph 1 и linked Graph 2
+```
 
-- `SaveDataRange` - сохраняет выбранный диапазон как canonical `.bin`.
-- `SaveFileExcludingRange` - копирует исходные физические кадры и сохраняет
-  container layout, включая `.DEV` header/frame shape.
+Параллельно сервис может создавать canonical `.bin` или дописывать выбранный
+существующий файл.
 
-Основные C++ источники:
+## 7. Текущее окно «Схема прибора»
 
-- [`DataModule.h`](../Amk-Horizon-New-Chart/DataModule.h#L138) - public API range export.
-- [`DataModule.cpp`](../Amk-Horizon-New-Chart/DataModule.cpp#L806) - `SaveDataRange`.
-- [`DataModule.cpp`](../Amk-Horizon-New-Chart/DataModule.cpp#L832) - `SaveFileExcludingRange`.
+Ключевые файлы:
 
-### 5. Charting: первый слой расчета серий
+- `AMK-Data-Visualization/Views/SchematicWindow.xaml`;
+- `AMK-Data-Visualization/Views/SchematicWindow.xaml.cs`;
+- `src/AMK.DataVisualization.Charting/Configuration/SchematicConfigurationEditor.cs`;
+- `src/AMK.DataVisualization.Charting/Configuration/CurveSelectionService.cs`;
+- `src/AMK.DataVisualization.Charting/Configuration/SchematicSelection.cs`.
 
-Перенесен первый слой `ChartDataCalculator`:
+Поведение:
 
-- `PhaseDifference`
-- `AmplitudeRatio`
-- `AmplitudeRx1`
-- `AmplitudeRx2`
-- `PhaseSmt`
-- `RhoSmt`
-- silent amplitude RX1/RX2
-- silent phase difference
-- `Temperature`
+- окно немодальное;
+- одна window instance хранит отдельные editor-сессии Graph 1/Graph 2;
+- закрытие и `Отмена` скрывают окно;
+- `Применить` применяет конфигурацию к выбранному графику и не закрывает окно;
+- повторное открытие восстанавливает окно, включая состояние после сворачивания;
+- окно имеет `WS_EX_APPWINDOW`, собственную кнопку панели задач и иконки.
 
-Ключевые правила:
+Схема:
 
-- X-alignment сохраняется через `NaN` для отсутствующих значений.
-- Нормализация фазы соответствует старому `NormalizePhase`.
-- Перевод нормализованной фазы в millidegrees использует коэффициент
-  `57295.7795`.
-- Для `AmplitudeRatio` сохранен epsilon `1e-10f`, как в старом derived-cache пути.
-- Количество transmitter-серий определяется по metadata/capabilities, fallback - `5`.
+- порядок элементов: T5, T3, T1, R1, R2, T2, T4, Молч. R1, Молч. R2;
+- T1..T5 доступны с учётом capabilities текущего repository;
+- выбранный элемент получает только жёлтую рамку;
+- подписи элементов полужирные;
+- частоты: 400 и 2000 кГц;
+- X-axis: номер кадра или температура.
 
-Основные C++ источники:
+Быстрые пресеты:
 
-- [`DataModule.h`](../Amk-Horizon-New-Chart/DataModule.h#L142) - `CalculateChartData` overloads.
-- [`DataModule.cpp`](../Amk-Horizon-New-Chart/DataModule.cpp#L907) - общий entrypoint `CalculateChartData`.
-- [`DataModule.cpp`](../Amk-Horizon-New-Chart/DataModule.cpp#L919) - расчет по enabled transmitters и диапазонам.
-- [`DataModule.cpp`](../Amk-Horizon-New-Chart/DataModule.cpp#L1329) - `CalculateRatioData`.
-- [`DataModule.cpp`](../Amk-Horizon-New-Chart/DataModule.cpp#L1370) - `CalculateDifferenceData`.
-- [`DataModule.cpp`](../Amk-Horizon-New-Chart/DataModule.cpp#L1567) - `GetTemperatureData`.
+- амплитуды R1;
+- амплитуды R2;
+- отношения амплитуд;
+- разности фаз;
+- УЭС;
+- симметричные фазы;
+- амплитуды молчащего режима;
+- разность фаз молчащего режима;
+- температура.
 
-### 6. Charting: слой конфигурации кривых
+Последняя подтверждённая владельцем компоновка:
 
-Перенесены:
+- заголовок «Схема прибора» центрирован;
+- левый и правый рабочие блоки имеют равную ширину;
+- частота выровнена слева;
+- правая граница X-axis совпадает с правой границей `Амплитуды R2`;
+- `Применить` и `Отмена` находятся в двух равных колонках и не пересекаются при
+  текущем DPI;
+- `Температура` растянута от левой границы `Ампл. молч.` до правой границы
+  `Разн. фаз молч.`;
+- нижнее пустое пространство удалено;
+- текст ошибки конфигурации не выводится в окне, но `Применить` остаётся
+  недоступной для неверного выбора.
 
-- `CurveDefinition`
-- `ChartConfiguration`
-- `ElementType`
-- `XAxisType`
-- `SmtComputationMode`
-- `PresetType`
-- `UpdateAxisConfiguration`
-- `GroupCurvesByAxis`
-- `CalculateSingleCurveData`
-- `CalculateCustomCurveData`
-- `CalculateChartDataFromConfiguration`
+## 8. Renderer и легенда
 
-Ключевые правила:
-
-- disabled curves пропускаются.
-- `yAxisGroup == 0` идет в левую ось, `yAxisGroup == 1` - в правую ось.
-- остальные `yAxisGroup` игнорируются.
-- порядок кривых внутри оси сохраняется.
-- `valueScale` применяется после расчета.
-- в конфигурационном `CalculateSingleCurveData` только `RHO_SMT` и `TEMPERATURE` удаляют значения вне `minY/maxY`; остальные типы сохраняют aligned-ряд.
-
-### 7. Проверка на реальных данных
-
-Для IO и Charting использовались реальные файлы из:
-
-`C:\Users\Admin\Desktop\AMK_Data`
-
-Последняя зафиксированная проверка до удаления автоматизированных тестовых проектов:
-
-- `dotnet build` нового решения: успешно, `0 warnings / 0 errors`.
-
-С 2026-07-13 функциональный паритет проверяется владельцем проекта вручную на реальных приборных файлах; сборка подтверждает только компиляцию.
-
-### 8. Текущая WinUI-вертикаль
+Ключевой файл: `AMK-Data-Visualization/Controls/LineChartControl.xaml.cs`.
 
 Реализовано:
 
-- `FileOpenPicker` для `.bin`, `.biv`, `.DEV` и загрузка через `ToolDataRepository`.
-- Graph 1 и Graph 2 с linked/independent источниками через `ChartWorkspace`.
-- немодальное окно «Схема прибора» с ручным комбинированным выбором, capability-aware T1..T5, legacy-валидацией и отдельным editor session для каждого графика.
-- быстрые пресеты амплитуд R1/R2, отношений, разностей фаз, УЭС, симметричных фаз, silent-каналов и температуры.
-- применение `ChartConfiguration` к выбранному графику и multi-series расчет через `ChartDataCalculator.CalculateChartDataFromConfiguration`.
-- отрисовка левой/правой оси, X по номеру кадра или температуре и названия активного пресета через `LineChartControl`.
+- Canvas-rendering нескольких series;
+- single/dual Y-axis;
+- полная горизонтальная и вертикальная сетка;
+- подписи активных X/Y осей;
+- legacy nice-step `1/2/5/10`;
+- frame X-axis использует только целые значения;
+- ноль выводится как `0`;
+- числовые подписи не используют экспоненциальный формат;
+- X по температуре;
+- разрывы series по `NaN`;
+- перенос легенды по строкам без слипания;
+- частота находится в заголовке графика;
+- быстрый preset выводит тип один раз и короткие series labels;
+- комбинированная легенда группирует общий тип данных по оси;
+- левую и правую группы разделяет `|`.
 
-Проверено:
+Не реализовано:
 
-- build после переноса окна: успешно, `0 warnings / 0 errors`.
-- WinUI launch: основное окно и немодальная «Схема прибора» открываются и отвечают.
-- UI Automation подтвердила доступность controls, генерацию пресета «Амплитуды R1» и независимость незавершенных состояний Graph 1/Graph 2.
+- zoom/scroll;
+- crosshair и заполнение cursor-полей;
+- LOD/downsampling;
+- hit-test и notes geometry;
+- общая geometry-модель для draw и screen-to-data.
 
-Не зафиксировано автоматизированно:
+## 9. Текущее окно подключения
 
-- ручной выбор реального файла через picker и визуальное сравнение с текущим C++ приложением.
+Ключевые файлы:
 
-## Следующий шаг переноса
+- `AMK-Data-Visualization/Views/ConnectionSettingsWindow.xaml`;
+- `AMK-Data-Visualization/Views/ConnectionSettingsWindow.xaml.cs`;
+- `src/AMK.DataVisualization.Hardware/Serial/SerialDeviceService.cs`.
 
-Владелец проекта вручную проверяет окно на реальных `.bin/.biv/.DEV`: комбинированные наборы и все быстрые пресеты отдельно для Graph 1/Graph 2, распределение серий по осям и X по температуре. Успешная сборка и UI Automation не заменяют эту проверку.
+UI:
 
-После фиксации parity-результатов переносить метрологические вычисления УЭС/симметричных фаз «на компьютере», затем zoom, scroll, crosshair и координаты курсора.
+- заголовок `Подключение к прибору`;
+- COM-порт + `Обновить`;
+- блок `Статус`: состояние, кадр, пакеты;
+- блок `Запись в файл`: запись, дозапись, весь файл, имя файла, число кадров,
+  `Папка...`/`Файл...`, `Открыть`;
+- блок `Таймер`: интервал polling;
+- нижние кнопки `Подключить`, `Отключить`, `Закрыть`;
+- размер 600×680;
+- пункт верхнего меню открывает окно одним нажатием без flyout.
 
-## Уже использованные C++ участки для ChartConfiguration
+Settings path:
 
-### CurveDefinition
+`%LOCALAPPDATA%\AMK-Data-Visualization\connection-settings.json`
 
-Источник: [`SchematicModule.h`](../Amk-Horizon-New-Chart/SchematicModule.h#L35)
+Протокол:
 
-Поля, которые нужно сохранить:
+- 125000 baud, 8N1, no handshake, DTR/RTS enabled;
+- packet `[CMD:1][LEN:2][PAYLOAD][CRC16:2]`;
+- CRC16 с initial `0xFFFF` и polynomial `0xA001`;
+- `0x11`: canonical frame;
+- `0x13`: metrology;
+- `0x16`: signature;
+- polling interval 500–30000 мс;
+- автоматическое переподключение после ошибок.
 
-- `id`
-- `displayName`
-- `units`
-- `yAxisGroup`
-- `enabled`
-- `color`
-- `lineStyle`
-- `sourceElement`
-- `elementIndex`
-- `dataType`
-- `frequency`
-- `smtMode`
-- `valueScale`
+## 10. Важные ограничения
 
-Конструкторы:
+### Metrology / FromComputer
 
-- [`SchematicModule.cpp`](../Amk-Horizon-New-Chart/SchematicModule.cpp#L300) - default constructor.
-- [`SchematicModule.cpp`](../Amk-Horizon-New-Chart/SchematicModule.cpp#L309) - constructor with id/name/units/source/type/frequency.
+`SmtComputationMode.FromComputer` существует в моделях и окне схемы, но
+расчётный pipeline ещё не перенесён. `ChartDataCalculator` читает `PhaseSmt` и
+`RhoSmt` из canonical данных прибора и не использует `curve.SmtMode` для
+выполнения формул.
 
-Default values:
+Нельзя считать этот режим готовым даже при наличии считанной метрологии.
 
-- `yAxisGroup = 0`
-- `enabled = false`
-- `sourceElement = TRANSMITTER`
-- `elementIndex = 0`
-- `dataType = AMPLITUDE_RX1`
-- `frequency = FREQ_400_KHZ`
-- `smtMode = FROM_SONDE`
-- `valueScale = 1.0f`
+### Визуальные заглушки shell
 
-### ChartConfiguration
+- range apply/reset/load/cut и zoom-кнопки отключены;
+- cursor-поля read-only, но crosshair не реализован;
+- `Поток` не выполняет полный Surf-сценарий;
+- notes controls не имеют storage/rendering логики;
+- меню метрологии, конструктора, логов, обновления и документации не перенесены.
 
-Источник: [`SchematicModule.h`](../Amk-Horizon-New-Chart/SchematicModule.h#L114)
+### Пустые проекты
 
-Поля, которые нужно сохранить:
+- `AMK.DataVisualization.Metrology` — только `.csproj`;
+- `AMK.DataVisualization.Reporting` — только `.csproj`.
 
-- `curves`
-- `hasDualAxis`
-- `leftAxisUnits`
-- `rightAxisUnits`
-- `xAxisType`
-- `activePreset`
-- `presetDisplayName`
+## 11. Что подтверждено, а что нет
 
-Методы:
+Подтверждено:
 
-- [`SchematicModule.cpp`](../Amk-Horizon-New-Chart/SchematicModule.cpp#L390) - constructor.
-- [`SchematicModule.cpp`](../Amk-Horizon-New-Chart/SchematicModule.cpp#L396) - `Clear`.
-- [`SchematicModule.cpp`](../Amk-Horizon-New-Chart/SchematicModule.cpp#L406) - `IsEmpty`.
-- [`SchematicModule.cpp`](../Amk-Horizon-New-Chart/SchematicModule.cpp#L410) - `Copy`.
-- [`SchematicModule.cpp`](../Amk-Horizon-New-Chart/SchematicModule.cpp#L422) - `AddCurve`.
-- [`SchematicModule.cpp`](../Amk-Horizon-New-Chart/SchematicModule.cpp#L427) - `RemoveCurve`.
-- [`SchematicModule.cpp`](../Amk-Horizon-New-Chart/SchematicModule.cpp#L434) - `UpdateAxisConfiguration`.
+- решение собирается в `Debug x64` с `0 warnings / 0 errors`;
+- основное окно и немодальные окна ранее запускались;
+- владелец вручную подтвердил актуальную компоновку окна схемы и окна
+  подключения;
+- UI Automation ранее подтверждала независимость editor-состояний Graph 1/Graph 2.
 
-Поведение `UpdateAxisConfiguration`:
+Не считать подтверждённым без новой ручной фиксации:
 
-- disabled curves пропускаются.
-- `yAxisGroup == 0` включает левую ось.
-- `yAxisGroup == 1` включает правую ось.
-- `leftAxisUnits` и `rightAxisUnits` берутся с первой включенной кривой
-  соответствующей оси.
-- `hasDualAxis = hasLeftAxis && hasRightAxis`.
-- units неиспользуемых осей очищаются.
+- полный паритет всех series на реальных `.bin/.biv/.DEV`;
+- linked/independent Graph 2 с двумя контрольными файлами;
+- range export/cut на всех форматах;
+- COM-протокол, reconnect и запись на физическом приборе;
+- корректность любых `FromComputer` результатов;
+- производительность на больших файлах.
 
-### GroupCurvesByAxis
+## 12. Рекомендуемый следующий блок
 
-Источник: [`DataModule.cpp`](../Amk-Horizon-New-Chart/DataModule.cpp#L1307)
+Если владелец не сообщает о новой UI-регрессии, продолжать с Metrology:
 
-Правила:
+1. прочитать старые `doc/ues_phase_from_computer_5tx.md` и
+   `doc/COM_5TX_GP_POLLING_AND_METROLOGY.md`;
+2. проследить `FROM_COMPUTER` от `CurveSelectionModule` до старых формул;
+3. перенести вычисления в `AMK.DataVisualization.Metrology`;
+4. не помещать формулы в App или `LineChartControl`;
+5. отдельно решить T5, потому что часть старой логики ограничена T1..T4;
+6. подключить результат к `ChartDataCalculator` через явный контракт;
+7. проверить `from_sonde`, `from_computer`, `difference` на одинаковых данных.
 
-- output списки очищаются.
-- disabled curves пропускаются.
-- `yAxisGroup == 0` идет в left axis.
-- `yAxisGroup == 1` идет в right axis.
-- остальные значения игнорируются.
+После Metrology рекомендуемый порядок: оставшиеся serial-команды и log →
+интерактивная geometry графика → notes/sidecar → file constructor → reporting и
+installer.
 
-### CalculateCustomCurveData
+## 13. Основные C++-якоря
 
-Источники:
+Пути ниже считаются относительно корня старого проекта.
 
-- [`DataModule.cpp`](../Amk-Horizon-New-Chart/DataModule.cpp#L1148) - overload без диапазонов.
-- [`DataModule.cpp`](../Amk-Horizon-New-Chart/DataModule.cpp#L1162) - overload с `minX/maxX/minY/maxY`.
+### Binary и файлы
 
-Правила:
+- `Amk-Horizon-New-Chart/ToolDataTypes.h` — `GP_TOOL_DATA`;
+- `Amk-Horizon-New-Chart/ToolDataAdapters.*` — adapters и registry;
+- `Amk-Horizon-New-Chart/ToolDataAccess.h` — semantic access;
+- `Amk-Horizon-New-Chart/DataModule.cpp` — file load, repository-like state,
+  series calculations и range export.
 
-- `leftAxisData` и `rightAxisData` очищаются.
-- если данных нет или список кривых пустой - return.
-- кривые группируются через `GroupCurvesByAxis`.
-- данные левой оси рассчитываются в порядке `leftAxisCurves`.
-- данные правой оси рассчитываются в порядке `rightAxisCurves`.
-- каждая кривая рассчитывается через `CalculateSingleCurveData`.
+### Схема и конфигурации
 
-### CalculateSingleCurveData
+- `Amk-Horizon-New-Chart/SchematicModule.h` — `CurveDefinition`,
+  `ChartConfiguration`;
+- `Amk-Horizon-New-Chart/SchematicModule.cpp` — окно и axis configuration;
+- `Amk-Horizon-New-Chart/CurveSelectionModule.cpp:871` — preset entrypoint;
+- `Amk-Horizon-New-Chart/CurveSelectionModule.cpp:919` — full curve set;
+- `Amk-Horizon-New-Chart/CurveSelectionModule.cpp:1021` — validation;
+- `Amk-Horizon-New-Chart/CurveSelectionModule.cpp:1618` — silent amplitude;
+- `Amk-Horizon-New-Chart/CurveSelectionModule.cpp:1631` — silent phase;
+- `Amk-Horizon-New-Chart/CurveSelectionModule.cpp:1786` и далее — быстрые presets.
 
-Источники:
+### Графики
 
-- [`DataModule.cpp`](../Amk-Horizon-New-Chart/DataModule.cpp#L1190) - overload без диапазонов.
-- [`DataModule.cpp`](../Amk-Horizon-New-Chart/DataModule.cpp#L1201) - overload с диапазонами.
+- `Amk-Horizon-New-Chart/ChartManager.cpp:4077` — применение конфигурации;
+- `Amk-Horizon-New-Chart/ChartModule.cpp:1420` — dual-axis draw;
+- `Amk-Horizon-New-Chart/ChartModule.cpp:2188` — dual-axis legend;
+- `Amk-Horizon-New-Chart/ChartModule.cpp:3002` — temperature-X dual-axis;
+- `Amk-Horizon-New-Chart/ChartModule.cpp:3133` — temperature grid;
+- `Amk-Horizon-New-Chart/ChartModule.cpp:3386` — temperature drawing.
 
-Dispatch по `curve.dataType`:
+### COM и метрология
 
-- `AMPLITUDE_RATIO` -> `CalculateRatioData(curve.elementIndex, curve.frequency, ...)`
-- `PHASE_DIFFERENCE` -> `CalculateDifferenceData(curve.elementIndex, curve.frequency, ...)`
-- `AMPLITUDE_RX1` -> `CalculateAmplitudeData(curve.elementIndex, 0, curve.frequency, ...)`
-- `AMPLITUDE_RX2` -> `CalculateAmplitudeData(curve.elementIndex, 1, curve.frequency, ...)`
-- `PHASE_SMT` -> `CalculatePhaseData(curve.elementIndex, 0, curve.frequency, ...)`
-- `RHO_SMT` -> direct `TryGetRhoSmt(...)` path
-- `SILENT_AMPLITUDE_RX1` -> `CalculateSilentAmplitudeData(0, curve.frequency, ...)`
-- `SILENT_AMPLITUDE_RX2` -> `CalculateSilentAmplitudeData(1, curve.frequency, ...)`
-- `SILENT_PHASE_DIFFERENCE` -> `CalculateSilentPhaseDifferenceData(curve.frequency, ...)`
-- `TEMPERATURE` -> `GetTemperatureData(...)` + `minY/maxY` filter
+- `Amk-Horizon-New-Chart/SerialModule.*` — команды, packet framing, polling;
+- `Amk-Horizon-New-Chart/MetrologyModule.*` — данные и вычисления;
+- `doc/COM_5TX_GP_POLLING_AND_METROLOGY.md` — сценарий COM;
+- `doc/ues_phase_from_computer_5tx.md` — phase/rho from computer.
 
-Совместимость, которую нельзя потерять:
+Перед использованием line anchors нужно перепроверить их в текущем checkout
+старого проекта: файлы могли измениться после первоначального анализа.
 
-- Для большинства серий Y-фильтр не применяется в `CalculateSingleCurveData`;
-  используются helper-методы, которые сохраняют X-alignment.
-- Для `RHO_SMT` и `TEMPERATURE` значения вне `minY/maxY` не заменяются `NaN`,
-  а удаляются из выходного массива.
-- После расчета применяется `curve.valueScale`, если он не равен `1.0f`.
-- `NaN * valueScale` остается `NaN`; это ожидаемое поведение.
+## 14. Проверка
 
-### CalculateChartDataFromConfiguration
-
-Источники:
-
-- [`DataModule.cpp`](../Amk-Horizon-New-Chart/DataModule.cpp#L1536) - overload без диапазонов.
-- [`DataModule.cpp`](../Amk-Horizon-New-Chart/DataModule.cpp#L1550) - overload с диапазонами.
-
-Правила:
-
-- очищает axis data.
-- если данных нет или `config.curves.empty()` - return.
-- делегирует в `CalculateCustomCurveData(config.curves, ...)`.
-
-## Перенесенный preset-слой и следующие блоки
-
-### Presets и CurveSelectionModule
-
-Следующие C++ участки использованы как источник истины для уже перенесенного preset-слоя; zoom-aware расчет и полный cache/rendering parity остаются следующими задачами:
-
-- [`CurveSelectionModule.cpp`](../Amk-Horizon-New-Chart/CurveSelectionModule.cpp#L871) - `CreatePresetConfiguration`.
-- [`CurveSelectionModule.cpp`](../Amk-Horizon-New-Chart/CurveSelectionModule.cpp#L919) - `BuildFullCurveSet`.
-- [`CurveSelectionModule.cpp`](../Amk-Horizon-New-Chart/CurveSelectionModule.cpp#L1021) - `ValidateConfiguration`.
-- [`CurveSelectionModule.cpp`](../Amk-Horizon-New-Chart/CurveSelectionModule.cpp#L1070) - `CalculateCurveData`.
-- [`CurveSelectionModule.cpp`](../Amk-Horizon-New-Chart/CurveSelectionModule.cpp#L1197) - zoom-aware `CalculateCurveData`.
-- [`CurveSelectionModule.cpp`](../Amk-Horizon-New-Chart/CurveSelectionModule.cpp#L1618) - silent amplitude curve factory.
-- [`CurveSelectionModule.cpp`](../Amk-Horizon-New-Chart/CurveSelectionModule.cpp#L1631) - silent phase curve factory.
-- [`CurveSelectionModule.cpp`](../Amk-Horizon-New-Chart/CurveSelectionModule.cpp#L1651) - `GetCurveColorForAxis`.
-- [`CurveSelectionModule.cpp`](../Amk-Horizon-New-Chart/CurveSelectionModule.cpp#L1747) - `RefreshCurveColors`.
-- [`CurveSelectionModule.cpp`](../Amk-Horizon-New-Chart/CurveSelectionModule.cpp#L1786) - `CreateAllAmplitudesR1Preset`.
-- [`CurveSelectionModule.cpp`](../Amk-Horizon-New-Chart/CurveSelectionModule.cpp#L1805) - `CreateAllAmplitudesR2Preset`.
-- [`CurveSelectionModule.cpp`](../Amk-Horizon-New-Chart/CurveSelectionModule.cpp#L1824) - `CreateAmplitudeRatiosPreset`.
-- [`CurveSelectionModule.cpp`](../Amk-Horizon-New-Chart/CurveSelectionModule.cpp#L1843) - `CreatePhaseDifferencesPreset`.
-- [`CurveSelectionModule.cpp`](../Amk-Horizon-New-Chart/CurveSelectionModule.cpp#L1863) - `CreateRhoSmtPreset`.
-- [`CurveSelectionModule.cpp`](../Amk-Horizon-New-Chart/CurveSelectionModule.cpp#L1872) - `CreatePhaseSmtPreset`.
-
-### ChartManager / ChartModule rendering pipeline
-
-Переносить после расчетов и preset слоя:
-
-- [`ChartManager.cpp`](../Amk-Horizon-New-Chart/ChartManager.cpp#L853) - cache invalidation.
-- [`ChartManager.cpp`](../Amk-Horizon-New-Chart/ChartManager.cpp#L1045) - curve snapshot cache.
-- [`ChartManager.cpp`](../Amk-Horizon-New-Chart/ChartManager.cpp#L1100) - temperature axis cache.
-- [`ChartManager.cpp`](../Amk-Horizon-New-Chart/ChartManager.cpp#L1914) - `LoadDataFromFile`.
-- [`ChartManager.cpp`](../Amk-Horizon-New-Chart/ChartManager.cpp#L4077) - `ApplyCurveConfiguration`.
-- [`ChartManager.cpp`](../Amk-Horizon-New-Chart/ChartManager.cpp#L4092) - `GetChartConfiguration`.
-- [`ChartModule.cpp`](../Amk-Horizon-New-Chart/ChartModule.cpp#L1420) - dual-axis chart draw path.
-- [`ChartModule.cpp`](../Amk-Horizon-New-Chart/ChartModule.cpp#L2188) - dual-axis legend.
-- [`ChartModule.cpp`](../Amk-Horizon-New-Chart/ChartModule.cpp#L3002) - temperature-X dual-axis overload.
-- [`ChartModule.cpp`](../Amk-Horizon-New-Chart/ChartModule.cpp#L3133) - temperature grid.
-- [`ChartModule.cpp`](../Amk-Horizon-New-Chart/ChartModule.cpp#L3386) - temperature data drawing.
-
-## Ручная проверка ChartConfiguration
-
-Автоматизированные тестовые проекты удалены 2026-07-13. После завершения окна
-«Схема прибора» владелец проекта проверяет на реальных `.bin/.biv/.DEV`:
-
-1. применение комбинированных и быстрых пресетов к Graph 1 и Graph 2;
-2. порядок включенных кривых и распределение по левой/правой оси;
-3. доступность T1..T5 в соответствии с capabilities загруженного файла;
-4. поведение пустой конфигурации и отключенных кривых;
-5. расчет `TEMPERATURE`, `RHO_SMT`, масштабирование `valueScale` и сохранение разрывов `NaN`;
-6. независимость конфигураций и источников данных Graph 1/Graph 2.
-
-Результаты такой проверки нужно фиксировать отдельно от успешной сборки.
-
-## Команды проверки
-
-В новой сессии из `C:\Users\Admin\Desktop\AMK-Data-Visualization`:
+Сборка из корня нового проекта:
 
 ```powershell
-dotnet build .\AMK-Data-Visualization.slnx -p:Platform=x64 -p:UseSharedCompilation=false
+dotnet build .\AMK-Data-Visualization.slnx -c Debug -p:Platform=x64 --no-restore
 ```
 
-Если меняется WinUI startup или визуальная вертикаль, после build нужно реально
-запустить приложение и подтвердить главное окно `Amk-Horizon-New-Chart` и
-соответствующее рабочее окно, а не считать один только build полной проверкой.
+`git diff --check` используется для проверки whitespace/conflict markers.
 
-## Правила ведения документации при переносе
+Если владелец просит только внедрить код и оставляет runtime-проверку себе, не
+запускать приложение автоматически. В итоговом сообщении явно указать, что
+подтверждена только сборка.
 
-В новом проекте после каждого шага обновлять:
+## 15. Правило обновления документов
 
-- `docs\MIGRATION_PLAN.md` - долгосрочный план и статус этапов.
-- `docs\SESSION_TASKS.md` - текущие задачи, что сделано в этой сессии, что
-  осталось, какие проверки прошли.
-
-В документации всегда разделять:
-
-- уже реализовано;
-- реализовано, но не проверено на реальных данных;
-- build-verified;
-- runtime-verified;
-- осталось перенести.
-
-Нельзя заменять source-backed поведение предположениями. Если логика кажется
-странной, сначала найти соответствующий C++ участок и перенести поведение
-точь-в-точь, затем отдельно обсуждать возможное улучшение.
+- этот handoff обновлять при изменении архитектурных контрактов, реализованных
+  вертикалей и точки продолжения;
+- `MIGRATION_PLAN.md` обновлять при смене статуса этапов;
+- `SESSION_TASKS.md` обновлять после каждой завершённой пользовательской задачи;
+- `README.md` держать кратким входом и не превращать в журнал истории.
