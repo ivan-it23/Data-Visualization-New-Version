@@ -12,7 +12,8 @@ public enum DeviceType
 {
     Unknown = 0,
     Autonom = 1,
-    Lwd = 2
+    Lwd = 2,
+    Cartograph = 3
 }
 
 public enum ToolDataKind
@@ -69,4 +70,9 @@ public readonly record struct ToolIdentity(
     int TransmitterCount,
     int Modification,
     ToolDataKind Kind,
-    string DisplayName);
+    string DisplayName)
+{
+    public bool IsCartographLwd4TxMode =>
+        DeviceType == DeviceType.Cartograph
+        && TransmitterCount == 4;
+}

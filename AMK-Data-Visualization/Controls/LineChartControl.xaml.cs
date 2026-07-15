@@ -1,6 +1,7 @@
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
 using System.Globalization;
@@ -25,6 +26,12 @@ public sealed record ChartZoomRequestedEventArgs(
     (double Min, double Max)? LeftYRange,
     (double Min, double Max)? RightYRange);
 
+public sealed record ChartXScrollRequestedEventArgs(int StartIndex);
+
+public sealed record ChartYScrollRequestedEventArgs(
+    (double Min, double Max)? LeftYRange,
+    (double Min, double Max)? RightYRange);
+
 public sealed partial class LineChartControl : UserControl
 {
     private readonly List<ChartRenderSeries> series = [];
@@ -42,8 +49,15 @@ public sealed partial class LineChartControl : UserControl
     private AxisScale? currentRightScale;
     private Point? dragStart;
     private Rectangle? selectionRectangle;
+    private AxisScrollContext? leftYScrollContext;
+    private AxisScrollContext? rightYScrollContext;
+    private bool updatingScrollBars;
 
     public event EventHandler<ChartZoomRequestedEventArgs>? ZoomRequested;
+
+    public event EventHandler<ChartXScrollRequestedEventArgs>? HorizontalScrollRequested;
+
+    public event EventHandler<ChartYScrollRequestedEventArgs>? VerticalScrollRequested;
 
     public bool IsFlowMode { get; set; }
     private string emptyStateMessage = "Нет данных графика";
@@ -96,6 +110,39 @@ public sealed partial class LineChartControl : UserControl
         Render();
     }
 
+    public void ConfigureScrollBars(
+        int totalRecordCount,
+        int visibleStartIndex,
+        int visibleEndIndex,
+        bool showHorizontal)
+    {
+        updatingScrollBars = true;
+
+        int visibleCount = visibleEndIndex >= visibleStartIndex
+            ? visibleEndIndex - visibleStartIndex + 1
+            : 0;
+        int maximumStart = Math.Max(0, totalRecordCount - visibleCount);
+        bool horizontalVisible = showHorizontal && visibleCount > 0 && maximumStart > 0;
+        if (horizontalVisible)
+        {
+            HorizontalAxisScrollBar.Minimum = 0;
+            HorizontalAxisScrollBar.Maximum = maximumStart;
+            HorizontalAxisScrollBar.ViewportSize = visibleCount;
+            HorizontalAxisScrollBar.SmallChange = Math.Max(1, Math.Round(maximumStart / 100.0));
+            HorizontalAxisScrollBar.LargeChange = Math.Max(1, visibleCount);
+            HorizontalAxisScrollBar.Value = Math.Clamp(visibleStartIndex, 0, maximumStart);
+            HorizontalAxisScrollBar.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            HorizontalAxisScrollBar.Visibility = Visibility.Collapsed;
+        }
+
+        ConfigureVerticalScrollBar();
+        updatingScrollBars = false;
+        UpdateScrollBarLayout(currentPlot, ActualWidth, ActualHeight);
+    }
+
     public void ClearSeries(string emptyTitle = "Файл не загружен")
     {
         series.Clear();
@@ -108,6 +155,7 @@ public sealed partial class LineChartControl : UserControl
         requestedLeftRange = null;
         requestedRightRange = null;
         emptyStateMessage = "Нет данных графика";
+        HideScrollBars();
         Render();
     }
 
@@ -123,6 +171,7 @@ public sealed partial class LineChartControl : UserControl
         requestedLeftRange = null;
         requestedRightRange = null;
         emptyStateMessage = message;
+        HideScrollBars();
         Render();
     }
 
@@ -152,6 +201,7 @@ public sealed partial class LineChartControl : UserControl
             Math.Max(1, width - plotPadding.Left - plotPadding.Right),
             Math.Max(1, height - plotPadding.Top - plotPadding.Bottom));
         currentPlot = plot;
+        UpdateScrollBarLayout(plot, width, height);
 
         List<float> allFinite = series.SelectMany(item => item.Values).Where(float.IsFinite).ToList();
         if (allFinite.Count == 0)
@@ -164,16 +214,20 @@ public sealed partial class LineChartControl : UserControl
             return;
         }
 
-        (double Min, double Max)? leftRange = requestedLeftRange ?? GetAxisRange(0);
-        (double Min, double Max)? rightRange = requestedRightRange ?? GetAxisRange(1);
+        (double Min, double Max)? leftRange = requestedLeftRange is { } requestedLeft
+            ? ApplyDisplayPadding(requestedLeft)
+            : GetAxisRange(0);
+        (double Min, double Max)? rightRange = requestedRightRange is { } requestedRight
+            ? ApplyDisplayPadding(requestedRight)
+            : GetAxisRange(1);
         int pointCount = series.Count == 0 ? 0 : series.Max(item => item.Values.Count);
         (float Min, float Max) xRange = GetXRange(pointCount);
         bool isFrameAxis = string.Equals(xAxisTitle, "Номер кадра", StringComparison.Ordinal);
         AxisScale? leftScale = leftRange is { } left
-            ? CreateAxisScale(left.Min, left.Max, Math.Max(2, (int)(plot.Height / 55)), includeZero: false, integerStep: false, expandBounds: requestedLeftRange is null)
+            ? CreateAxisScale(left.Min, left.Max, Math.Max(2, (int)(plot.Height / 55)), includeZero: false, integerStep: false, expandBounds: false)
             : null;
         AxisScale? rightScale = rightRange is { } right
-            ? CreateAxisScale(right.Min, right.Max, Math.Max(2, (int)(plot.Height / 55)), includeZero: false, integerStep: false, expandBounds: requestedRightRange is null)
+            ? CreateAxisScale(right.Min, right.Max, Math.Max(2, (int)(plot.Height / 55)), includeZero: false, integerStep: false, expandBounds: false)
             : null;
         currentLeftScale = leftScale;
         currentRightScale = rightScale;
@@ -450,7 +504,21 @@ public sealed partial class LineChartControl : UserControl
             max += 1.0f;
         }
 
-        return (min, max);
+        return ApplyDisplayPadding((min, max));
+    }
+
+    private static (double Min, double Max) ApplyDisplayPadding((double Min, double Max) range)
+    {
+        double min = Math.Min(range.Min, range.Max);
+        double max = Math.Max(range.Min, range.Max);
+        double span = max - min;
+        if (!(span > 0) || !double.IsFinite(span))
+        {
+            span = 1;
+        }
+
+        double padding = span * 0.05;
+        return (min - padding, max + padding);
     }
 
     private void DrawLeftYAxisLabels(Rect plot, AxisScale scale, string units)
@@ -691,6 +759,118 @@ public sealed partial class LineChartControl : UserControl
         return value.ToString($"F{precision}", CultureInfo.CurrentCulture);
     }
 
+    private void ConfigureVerticalScrollBar()
+    {
+        leftYScrollContext = BuildAxisScrollContext(GetAxisRange(0), requestedLeftRange);
+        rightYScrollContext = BuildAxisScrollContext(GetAxisRange(1), requestedRightRange);
+        AxisScrollContext? primary = leftYScrollContext ?? rightYScrollContext;
+        if (primary is not { } context)
+        {
+            VerticalAxisScrollBar.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        VerticalAxisScrollBar.Minimum = 0;
+        VerticalAxisScrollBar.Maximum = context.MaximumOffset;
+        VerticalAxisScrollBar.ViewportSize = context.ViewRange;
+        VerticalAxisScrollBar.SmallChange = Math.Max(context.MaximumOffset / 100.0, 0.000001);
+        VerticalAxisScrollBar.LargeChange = Math.Max(context.ViewRange, VerticalAxisScrollBar.SmallChange);
+        VerticalAxisScrollBar.Value = context.Value;
+        VerticalAxisScrollBar.Visibility = Visibility.Visible;
+    }
+
+    private static AxisScrollContext? BuildAxisScrollContext(
+        (double Min, double Max)? dataRange,
+        (double Min, double Max)? selectedRange)
+    {
+        if (dataRange is not { } data || selectedRange is not { } selected)
+        {
+            return null;
+        }
+
+        double selectedMin = Math.Min(selected.Min, selected.Max);
+        double selectedMax = Math.Max(selected.Min, selected.Max);
+        double viewRange = selectedMax - selectedMin;
+        if (!(viewRange > 0) || !double.IsFinite(viewRange))
+        {
+            return null;
+        }
+
+        double fullMin = Math.Min(data.Min, data.Max);
+        double fullMax = Math.Max(data.Min, data.Max);
+        double totalRange = fullMax - fullMin;
+        if (!(totalRange > viewRange))
+        {
+            double dataCenter = (fullMin + fullMax) / 2.0;
+            double expandedHalf = viewRange * 0.75;
+            fullMin = dataCenter - expandedHalf;
+            fullMax = dataCenter + expandedHalf;
+            totalRange = fullMax - fullMin;
+        }
+
+        double maximumOffset = Math.Max(0, totalRange - viewRange);
+        double value = Math.Clamp(fullMax - selectedMax, 0, maximumOffset);
+        return new AxisScrollContext(fullMin, fullMax, viewRange, maximumOffset, value);
+    }
+
+    private void HorizontalAxisScrollBar_Scroll(object sender, ScrollEventArgs e)
+    {
+        if (updatingScrollBars)
+        {
+            return;
+        }
+
+        HorizontalScrollRequested?.Invoke(
+            this,
+            new ChartXScrollRequestedEventArgs((int)Math.Round(e.NewValue)));
+    }
+
+    private void VerticalAxisScrollBar_Scroll(object sender, ScrollEventArgs e)
+    {
+        if (updatingScrollBars)
+        {
+            return;
+        }
+
+        AxisScrollContext? primary = leftYScrollContext ?? rightYScrollContext;
+        if (primary is not { } context)
+        {
+            return;
+        }
+
+        double ratio = context.MaximumOffset > 0
+            ? Math.Clamp(e.NewValue / context.MaximumOffset, 0, 1)
+            : 0;
+        VerticalScrollRequested?.Invoke(
+            this,
+            new ChartYScrollRequestedEventArgs(
+                leftYScrollContext?.GetRange(ratio),
+                rightYScrollContext?.GetRange(ratio)));
+    }
+
+    private void UpdateScrollBarLayout(Rect plot, double width, double height)
+    {
+        if (width <= 0 || height <= 0 || plot.Width <= 0 || plot.Height <= 0)
+        {
+            return;
+        }
+
+        double horizontalRight = Math.Max(4, width - plot.Right);
+        double horizontalBottom = Math.Max(2, height - plot.Bottom + 2);
+        HorizontalAxisScrollBar.Margin = new Thickness(plot.Left, 0, horizontalRight, horizontalBottom);
+        VerticalAxisScrollBar.Margin = new Thickness(0, plot.Top, 4, Math.Max(0, height - plot.Bottom));
+    }
+
+    private void HideScrollBars()
+    {
+        updatingScrollBars = true;
+        HorizontalAxisScrollBar.Visibility = Visibility.Collapsed;
+        VerticalAxisScrollBar.Visibility = Visibility.Collapsed;
+        leftYScrollContext = null;
+        rightYScrollContext = null;
+        updatingScrollBars = false;
+    }
+
     private void ChartCanvas_PointerPressed(object sender, PointerRoutedEventArgs e)
     {
         Point point = e.GetCurrentPoint(ChartCanvas).Position;
@@ -872,6 +1052,22 @@ public sealed partial class LineChartControl : UserControl
     }
 
     private readonly record struct AxisScale(double Min, double Max, double Step);
+
+    private readonly record struct AxisScrollContext(
+        double FullMin,
+        double FullMax,
+        double ViewRange,
+        double MaximumOffset,
+        double Value)
+    {
+        public (double Min, double Max) GetRange(double ratio)
+        {
+            double offset = Math.Clamp(ratio, 0, 1) * MaximumOffset;
+            double max = FullMax - offset;
+            double min = Math.Max(FullMin, max - ViewRange);
+            return (min, min + ViewRange);
+        }
+    }
 
     private sealed record LegendToken(TextBlock Label, ChartRenderSeries? Series, double Width, double LabelWidth);
 }

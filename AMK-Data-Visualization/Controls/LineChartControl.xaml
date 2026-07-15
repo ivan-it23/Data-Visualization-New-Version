@@ -13,5 +13,27 @@
             PointerReleased="ChartCanvas_PointerReleased"
             PointerCaptureLost="ChartCanvas_PointerCaptureLost"
             SizeChanged="ChartCanvas_SizeChanged" />
+
+        <ScrollBar
+            x:Name="HorizontalAxisScrollBar"
+            Height="14"
+            HorizontalAlignment="Stretch"
+            VerticalAlignment="Bottom"
+            AutomationProperties.Name="Прокрутка графика по оси X"
+            IsTabStop="True"
+            Orientation="Horizontal"
+            Scroll="HorizontalAxisScrollBar_Scroll"
+            Visibility="Collapsed" />
+
+        <ScrollBar
+            x:Name="VerticalAxisScrollBar"
+            Width="14"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Stretch"
+            AutomationProperties.Name="Прокрутка графика по оси Y"
+            IsTabStop="True"
+            Orientation="Vertical"
+            Scroll="VerticalAxisScrollBar_Scroll"
+            Visibility="Collapsed" />
     </Grid>
 </UserControl>

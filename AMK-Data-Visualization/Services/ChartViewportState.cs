@@ -110,6 +110,51 @@ internal sealed class ChartViewportState
         return true;
     }
 
+    public bool TryScrollXTo(int recordCount, int requestedStartIndex)
+    {
+        if (recordCount <= 0 || IsFlowEnabled || !HasCustomXRange)
+        {
+            return false;
+        }
+
+        ChartIndexRange visible = GetVisibleRange(recordCount);
+        int visibleCount = visible.EndIndex - visible.StartIndex + 1;
+        if (visibleCount <= 0 || visibleCount >= recordCount)
+        {
+            return false;
+        }
+
+        int maximumStart = recordCount - visibleCount;
+        int newStart = Math.Clamp(requestedStartIndex, 0, maximumStart);
+        startIndex = newStart;
+        endIndex = newStart + visibleCount - 1;
+        IsToLatest = false;
+        return true;
+    }
+
+    public bool TrySetScrolledYRanges(
+        (double Min, double Max)? leftYRange,
+        (double Min, double Max)? rightYRange)
+    {
+        (double Min, double Max)? normalizedLeft = Normalize(leftYRange);
+        (double Min, double Max)? normalizedRight = Normalize(rightYRange);
+        bool changed = false;
+
+        if (LeftYRange is not null && normalizedLeft is not null)
+        {
+            LeftYRange = normalizedLeft;
+            changed = true;
+        }
+
+        if (RightYRange is not null && normalizedRight is not null)
+        {
+            RightYRange = normalizedRight;
+            changed = true;
+        }
+
+        return changed;
+    }
+
     public bool ApplyDragZoom(
         int recordCount,
         double startFraction,

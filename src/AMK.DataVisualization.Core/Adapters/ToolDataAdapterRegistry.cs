@@ -25,6 +25,9 @@ public interface IToolDataAdapter
 
 public sealed class UniversalCanonicalAdapter : IToolDataAdapter
 {
+    // Картограф с четырьмя передатчиками использует тот же 240-байтовый
+    // GP_TOOL_DATA, что и LWD. Модификация не участвует в распознавании режима.
+
     public ToolDataKind Kind => ToolDataKind.Unknown;
 
     public ToolCapabilities Capabilities => ToolCapabilities.Empty;
@@ -33,7 +36,7 @@ public sealed class UniversalCanonicalAdapter : IToolDataAdapter
 
     public bool CanHandleSignature(uint signature)
     {
-        return ToolDataAdapterRegistry.DecodeToolCode(signature) > 0;
+        return IsSupportedToolCode(ToolDataAdapterRegistry.DecodeToolCode(signature));
     }
 
     public bool SupportsFileFormat(FileFormat format)
@@ -50,6 +53,11 @@ public sealed class UniversalCanonicalAdapter : IToolDataAdapter
         }
 
         GpToolData canonicalData = MemoryMarshal.Read<GpToolData>(rawFrame);
+        if (!CanHandleSignature(canonicalData.Signature))
+        {
+            return false;
+        }
+
         uint toolCode = ToolDataAdapterRegistry.DecodeToolCode(canonicalData.Signature);
         ToolDataKind kind = DetermineKindFromToolCode(toolCode);
         ToolCapabilities capabilities = BuildCapabilities(toolCode);
@@ -64,12 +72,18 @@ public sealed class UniversalCanonicalAdapter : IToolDataAdapter
         {
             1 => DeviceType.Autonom,
             2 => DeviceType.Lwd,
+            3 => DeviceType.Cartograph,
             _ => DeviceType.Unknown
         };
     }
 
     public static int DetermineTransmitterCount(uint toolCode)
     {
+        if (IsCartographLwd4TxMode(toolCode))
+        {
+            return 4;
+        }
+
         int tensDigit = (int)((toolCode / 10u) % 10u);
         return tensDigit is >= 3 and <= 5 ? tensDigit : BinaryLayoutConstants.MaxTransmitterCount;
     }
@@ -85,7 +99,27 @@ public sealed class UniversalCanonicalAdapter : IToolDataAdapter
         {
             DeviceType.Autonom => ToolDataKind.Autonom,
             DeviceType.Lwd => ToolDataKind.Lwd,
+            DeviceType.Cartograph when IsCartographLwd4TxMode(toolCode) => ToolDataKind.Lwd,
             _ => ToolDataKind.Unknown
+        };
+    }
+
+    public static bool IsCartographLwd4TxMode(uint toolCode)
+    {
+        int encodedTransmitterCount = (int)((toolCode / 10u) % 10u);
+        return DetermineDeviceType(toolCode) == DeviceType.Cartograph
+            && encodedTransmitterCount == 4;
+    }
+
+    public static bool IsSupportedToolCode(uint toolCode)
+    {
+        int encodedTransmitterCount = (int)((toolCode / 10u) % 10u);
+        return DetermineDeviceType(toolCode) switch
+        {
+            DeviceType.Autonom => encodedTransmitterCount is >= 3 and <= 5,
+            DeviceType.Lwd => encodedTransmitterCount is >= 3 and <= 5,
+            DeviceType.Cartograph => IsCartographLwd4TxMode(toolCode),
+            _ => false
         };
     }
 
@@ -123,6 +157,11 @@ public sealed class UniversalCanonicalAdapter : IToolDataAdapter
 
     public static string BuildDisplayName(uint toolCode)
     {
+        if (IsCartographLwd4TxMode(toolCode))
+        {
+            return "Картограф->LWD-4TX";
+        }
+
         string typeName = DetermineDeviceType(toolCode) switch
         {
             DeviceType.Autonom => "Автоном",

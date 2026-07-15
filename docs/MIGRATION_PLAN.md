@@ -90,7 +90,9 @@
 - [x] Semantic accessors для frequency/transmitter и silent-каналов.
 - [x] `ToolCapabilities`, `ToolRecordMetadata`, `ParsedToolFrame`.
 - [x] `UniversalCanonicalAdapter`, registry и access-view.
-- [ ] Добавлять новые типы приборов только через adapter/capabilities слой.
+- [x] `Картограф` в режиме `LWD 4tx`: тип и 4 Tx определяются из signature без
+  привязки к модификации; используется общий `GpToolData`, T5 отсутствует.
+- [ ] Следующие типы приборов добавлять только через adapter/capabilities слой.
 
 ### Этап 3. IO — базовый объём выполнен, sidecar не перенесён
 
@@ -137,6 +139,8 @@
 - [x] `0x17` — selected key.
 - [x] `0x1a` — автокалибровка нулей воздуха.
 - [x] Polling 500–30000 мс и автоматическое переподключение.
+- [x] Для `Картограф -> LWD-4TX` перенесены разрешение нулевого CRC только на
+  кадрах данных, повтор после таймаута и обязательная проверка signature кадра.
 - [x] Новый canonical `.bin` и дозапись существующего файла.
 - [x] `%LOCALAPPDATA%` settings store.
 - [x] Legacy-структура окна «Подключение к прибору».
@@ -159,8 +163,9 @@
 - [ ] Полная ручная parity-проверка на реальных файлах.
 - [ ] Surf/crossplot X-axis.
 - [x] X Range, drag-zoom, пошаговый undo/reset zoom и независимое viewport-состояние двух графиков.
-- [x] `Поток`: последние N записей, follow-latest и Y-only drag-zoom.
-- [ ] Scroll, crosshair, cursor coordinates.
+- [x] `Поток`: последние N записей, follow-latest, Y-only drag-zoom и Y-scroll.
+- [x] X/Y-scroll для zoom и X-scroll для диапазона из полей; в `Поток` X-scroll скрыт, Y-scroll доступен.
+- [ ] Crosshair и cursor coordinates.
 - [ ] LOD/downsampling и cache-инварианты.
 - [ ] Общий geometry path для draw/hit-test/notes/crosshair.
 

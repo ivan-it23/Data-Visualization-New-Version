@@ -35,6 +35,10 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         GraphControl.ZoomRequested += (_, args) => ApplyPointerZoom(1, args);
         Graph2Control.ZoomRequested += (_, args) => ApplyPointerZoom(2, args);
+        GraphControl.HorizontalScrollRequested += (_, args) => ScrollGraphX(1, args);
+        Graph2Control.HorizontalScrollRequested += (_, args) => ScrollGraphX(2, args);
+        GraphControl.VerticalScrollRequested += (_, args) => ScrollGraphY(1, args);
+        Graph2Control.VerticalScrollRequested += (_, args) => ScrollGraphY(2, args);
         ShowLegacyEmptyState(1, hasData: false);
         ShowLegacyEmptyState(2, hasData: false);
         UpdateDualModeLayout();
@@ -448,6 +452,11 @@ public sealed partial class MainWindow : Window
             viewport.LeftYRange,
             viewport.RightYRange);
         graphControl.IsFlowMode = viewport.IsFlowEnabled;
+        graphControl.ConfigureScrollBars(
+            repository.DataSize,
+            visibleRange.StartIndex,
+            visibleRange.EndIndex,
+            !viewport.IsFlowEnabled && viewport.HasCustomXRange);
         UpdateRangeControls(graphNumber);
     }
 
@@ -626,6 +635,36 @@ public sealed partial class MainWindow : Window
         }
         RenderGraph(graphNumber);
         SetStatus($"График {graphNumber}: zoom применён");
+    }
+
+    private void ScrollGraphX(int graphNumber, ChartXScrollRequestedEventArgs args)
+    {
+        ToolDataRepository repository = chartWorkspace.GetRepositoryForGraph(graphNumber);
+        ChartViewportState viewport = chartWorkspace.GetViewportForGraph(graphNumber);
+        if (!viewport.TryScrollXTo(repository.DataSize, args.StartIndex))
+        {
+            return;
+        }
+
+        ChartIndexRange visibleRange = viewport.GetVisibleRange(repository.DataSize);
+        SetRangeText(
+            graphNumber,
+            visibleRange.StartIndex.ToString(),
+            visibleRange.EndIndex.ToString());
+        RenderGraph(graphNumber);
+        SetStatus($"График {graphNumber}: участок {visibleRange.StartIndex}–{visibleRange.EndIndex}");
+    }
+
+    private void ScrollGraphY(int graphNumber, ChartYScrollRequestedEventArgs args)
+    {
+        ChartViewportState viewport = chartWorkspace.GetViewportForGraph(graphNumber);
+        if (!viewport.TrySetScrolledYRanges(args.LeftYRange, args.RightYRange))
+        {
+            return;
+        }
+
+        RenderGraph(graphNumber);
+        SetStatus($"График {graphNumber}: прокрутка по оси Y");
     }
 
     private (string From, string To) GetRangeText(int graphNumber)

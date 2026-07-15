@@ -24,6 +24,7 @@ public sealed class SerialDeviceService : IDisposable
     private const int MinimumPacketSize = PacketHeaderSize + PacketCrcSize;
     private const int MaximumPacketSize = 4096;
     private const int FailuresBeforeReopen = 8;
+    private const int CartographLwd4TxPreReceiveDelayMilliseconds = 50;
 
     private readonly object ioSync = new();
     private readonly object lifecycleSync = new();
@@ -360,6 +361,9 @@ public sealed class SerialDeviceService : IDisposable
                 consecutiveFailures = 0;
                 if (resetSession)
                 {
+                    DeviceSignature = null;
+                    Metrology = null;
+                    CurrentMetrology = null;
                     Interlocked.Exchange(ref packetsReceived, 0);
                     Interlocked.Exchange(ref packetErrors, 0);
                     Interlocked.Exchange(ref recordedFrames, 0);
@@ -449,7 +453,23 @@ public sealed class SerialDeviceService : IDisposable
         rawPayload = [];
         lock (ioSync)
         {
-            SerialOperationResult result = ExchangePacketCore(CommandData, [], out byte responseCommand, out byte[] payload);
+            bool isCartographLwd4Tx = TryGetCartographLwd4TxExpectedSignature(out uint expectedSignature);
+            SerialOperationResult result = ExchangePacketCore(
+                CommandData,
+                [],
+                out byte responseCommand,
+                out byte[] payload,
+                acceptZeroCrc: isCartographLwd4Tx);
+            if (isCartographLwd4Tx && result == SerialOperationResult.Timeout)
+            {
+                result = ExchangePacketCore(
+                    CommandData,
+                    [],
+                    out responseCommand,
+                    out payload,
+                    acceptZeroCrc: true);
+            }
+
             if (result != SerialOperationResult.Success)
             {
                 return result;
@@ -463,6 +483,11 @@ public sealed class SerialDeviceService : IDisposable
             if (!ToolDataAdapterRegistry.Default.TryParseRawFrame(payload, out frame))
             {
                 return SerialOperationResult.InvalidSignature;
+            }
+
+            if (isCartographLwd4Tx && frame.CanonicalData.Signature != expectedSignature)
+            {
+                return SerialOperationResult.CrcError;
             }
 
             rawPayload = payload;
@@ -642,11 +667,24 @@ public sealed class SerialDeviceService : IDisposable
         Metrology = new DeviceMetrologySummary(data.Signature, data.Serial, data.SondeDiameterMm);
     }
 
+    private bool TryGetCartographLwd4TxExpectedSignature(out uint signature)
+    {
+        signature = CurrentMetrology?.Signature ?? DeviceSignature ?? 0u;
+        if (signature == 0u)
+        {
+            return false;
+        }
+
+        var identity = UniversalCanonicalAdapter.BuildIdentity(signature);
+        return identity.IsCartographLwd4TxMode;
+    }
+
     private SerialOperationResult ExchangePacketCore(
         byte command,
         ReadOnlySpan<byte> payload,
         out byte responseCommand,
-        out byte[] responsePayload)
+        out byte[] responsePayload,
+        bool acceptZeroCrc = false)
     {
         responseCommand = 0;
         responsePayload = [];
@@ -662,6 +700,10 @@ public sealed class SerialDeviceService : IDisposable
             port.DiscardOutBuffer();
             byte[] packet = BuildPacket(command, payload);
             port.Write(packet, 0, packet.Length);
+            if (acceptZeroCrc)
+            {
+                Thread.Sleep(CartographLwd4TxPreReceiveDelayMilliseconds);
+            }
 
             byte[] header = ReadExactly(port, PacketHeaderSize);
             int totalLength = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1, 2));
@@ -674,7 +716,7 @@ public sealed class SerialDeviceService : IDisposable
             byte[] response = new byte[totalLength];
             header.CopyTo(response, 0);
             tail.CopyTo(response, PacketHeaderSize);
-            if (!ValidateCrc(response))
+            if (!ValidateCrc(response, acceptZeroCrc))
             {
                 return SerialOperationResult.CrcError;
             }
@@ -786,7 +828,7 @@ public sealed class SerialDeviceService : IDisposable
         return crc;
     }
 
-    private static bool ValidateCrc(ReadOnlySpan<byte> packet)
+    private static bool ValidateCrc(ReadOnlySpan<byte> packet, bool acceptZeroCrc = false)
     {
         if (packet.Length < MinimumPacketSize)
         {
@@ -795,7 +837,7 @@ public sealed class SerialDeviceService : IDisposable
 
         ushort calculated = CalculateCrc16(packet[..^PacketCrcSize]);
         ushort received = BinaryPrimitives.ReadUInt16LittleEndian(packet[^PacketCrcSize..]);
-        return calculated == received;
+        return calculated == received || (acceptZeroCrc && received == 0);
     }
 
     private static int GetPortNumber(string portName)

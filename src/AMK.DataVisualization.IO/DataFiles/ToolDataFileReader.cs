@@ -10,7 +10,7 @@ public static class ToolDataFileReader
     private const string UnsupportedFormatMessage = "Неподдерживаемый формат файла";
     private const string OpenErrorMessage = "Не удалось открыть файл данных";
     private const string ShortFileMessage = "Файл слишком короткий или не содержит корректную сигнатуру";
-    private const string UnsupportedSignatureMessage = "Файл содержит неподдерживаемую сигнатуру или формат. Поддерживаются приборы с canonical GP_TOOL_DATA (240 байт на кадр).";
+    private const string UnsupportedSignatureMessage = "Файл содержит неподдерживаемую сигнатуру или формат. Поддерживаются Автономный, LWD и Картограф с четырьмя передатчиками в режиме LWD 4tx с canonical GP_TOOL_DATA по 240 байт на кадр.";
     private const string InvalidSizeMessage = "Файл имеет неправильный размер или повреждён. Ожидается кратность 240 (или 251 для .DEV) байт.";
 
     public static FileFormat DetectFileFormat(string fileName)
