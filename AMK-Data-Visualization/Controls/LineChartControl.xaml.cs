@@ -5,6 +5,7 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
 using System.Globalization;
 using Windows.Foundation;
+using Microsoft.UI.Xaml.Input;
 using Windows.UI;
 
 namespace AMK.DataVisualization.App.Controls;
@@ -18,6 +19,12 @@ public sealed record ChartRenderSeries(
     int ColorRef,
     int YAxisGroup);
 
+public sealed record ChartZoomRequestedEventArgs(
+    double StartFraction,
+    double EndFraction,
+    (double Min, double Max)? LeftYRange,
+    (double Min, double Max)? RightYRange);
+
 public sealed partial class LineChartControl : UserControl
 {
     private readonly List<ChartRenderSeries> series = [];
@@ -27,6 +34,18 @@ public sealed partial class LineChartControl : UserControl
     private IReadOnlyList<float> xValues = [];
     private string xAxisTitle = "Номер кадра";
     private string presetDisplayName = string.Empty;
+    private (double Min, double Max)? requestedLeftRange;
+    private (double Min, double Max)? requestedRightRange;
+    private Rect currentPlot;
+    private AxisScale? currentXScale;
+    private AxisScale? currentLeftScale;
+    private AxisScale? currentRightScale;
+    private Point? dragStart;
+    private Rectangle? selectionRectangle;
+
+    public event EventHandler<ChartZoomRequestedEventArgs>? ZoomRequested;
+
+    public bool IsFlowMode { get; set; }
     private string emptyStateMessage = "Нет данных графика";
 
     public LineChartControl()
@@ -59,7 +78,9 @@ public sealed partial class LineChartControl : UserControl
         string rightUnits,
         IReadOnlyList<float> sourceXValues,
         string horizontalAxisTitle,
-        string activePresetDisplayName)
+        string activePresetDisplayName,
+        (double Min, double Max)? leftDisplayRange = null,
+        (double Min, double Max)? rightDisplayRange = null)
     {
         series.Clear();
         series.AddRange(sourceSeries);
@@ -69,6 +90,8 @@ public sealed partial class LineChartControl : UserControl
         xValues = sourceXValues;
         xAxisTitle = horizontalAxisTitle;
         presetDisplayName = activePresetDisplayName;
+        requestedLeftRange = leftDisplayRange;
+        requestedRightRange = rightDisplayRange;
         emptyStateMessage = "Нет данных графика";
         Render();
     }
@@ -82,6 +105,8 @@ public sealed partial class LineChartControl : UserControl
         xValues = [];
         xAxisTitle = "Номер кадра";
         presetDisplayName = string.Empty;
+        requestedLeftRange = null;
+        requestedRightRange = null;
         emptyStateMessage = "Нет данных графика";
         Render();
     }
@@ -95,6 +120,8 @@ public sealed partial class LineChartControl : UserControl
         xValues = [];
         xAxisTitle = "Номер кадра";
         presetDisplayName = string.Empty;
+        requestedLeftRange = null;
+        requestedRightRange = null;
         emptyStateMessage = message;
         Render();
     }
@@ -124,33 +151,40 @@ public sealed partial class LineChartControl : UserControl
             plotPadding.Top,
             Math.Max(1, width - plotPadding.Left - plotPadding.Right),
             Math.Max(1, height - plotPadding.Top - plotPadding.Bottom));
+        currentPlot = plot;
 
         List<float> allFinite = series.SelectMany(item => item.Values).Where(float.IsFinite).ToList();
         if (allFinite.Count == 0)
         {
+            currentXScale = null;
+            currentLeftScale = null;
+            currentRightScale = null;
             DrawPlotFrame(plot, hasRightAxis);
             DrawEmptyState(plot);
             return;
         }
 
-        (float LeftMin, float LeftMax)? leftRange = GetAxisRange(0);
-        (float LeftMin, float LeftMax)? rightRange = GetAxisRange(1);
+        (double Min, double Max)? leftRange = requestedLeftRange ?? GetAxisRange(0);
+        (double Min, double Max)? rightRange = requestedRightRange ?? GetAxisRange(1);
         int pointCount = series.Count == 0 ? 0 : series.Max(item => item.Values.Count);
         (float Min, float Max) xRange = GetXRange(pointCount);
         bool isFrameAxis = string.Equals(xAxisTitle, "Номер кадра", StringComparison.Ordinal);
         AxisScale? leftScale = leftRange is { } left
-            ? CreateAxisScale(left.LeftMin, left.LeftMax, Math.Max(2, (int)(plot.Height / 55)), includeZero: true, integerStep: false, expandBounds: true)
+            ? CreateAxisScale(left.Min, left.Max, Math.Max(2, (int)(plot.Height / 55)), includeZero: false, integerStep: false, expandBounds: requestedLeftRange is null)
             : null;
         AxisScale? rightScale = rightRange is { } right
-            ? CreateAxisScale(right.LeftMin, right.LeftMax, Math.Max(2, (int)(plot.Height / 55)), includeZero: true, integerStep: false, expandBounds: true)
+            ? CreateAxisScale(right.Min, right.Max, Math.Max(2, (int)(plot.Height / 55)), includeZero: false, integerStep: false, expandBounds: requestedRightRange is null)
             : null;
+        currentLeftScale = leftScale;
+        currentRightScale = rightScale;
         AxisScale xScale = CreateAxisScale(
             xRange.Min,
             xRange.Max,
             Math.Max(2, (int)(plot.Width / 100)),
-            includeZero: isFrameAxis,
+            includeZero: false,
             integerStep: isFrameAxis,
             expandBounds: false);
+        currentXScale = xScale;
 
         DrawPlotFrame(plot, hasRightAxis);
         DrawGrid(plot, leftScale, xScale);
@@ -396,7 +430,7 @@ public sealed partial class LineChartControl : UserControl
         ChartCanvas.Children.Add(message);
     }
 
-    private (float LeftMin, float LeftMax)? GetAxisRange(int axisGroup)
+    private (double Min, double Max)? GetAxisRange(int axisGroup)
     {
         List<float> finite = series
             .Where(item => item.YAxisGroup == axisGroup)
@@ -530,8 +564,10 @@ public sealed partial class LineChartControl : UserControl
                 ChartCanvas.Children.Add(segment);
             }
 
-            double x = MapX(plot, xValue, minX, maxX);
-            double y = MapY(plot, value, minY, maxY);
+            double clampedX = Math.Clamp(xValue, minX, maxX);
+            double clampedY = Math.Clamp(value, minY, maxY);
+            double x = MapX(plot, clampedX, minX, maxX);
+            double y = MapY(plot, clampedY, minY, maxY);
             segment.Points.Add(new Point(x, y));
         }
     }
@@ -653,6 +689,151 @@ public sealed partial class LineChartControl : UserControl
         }
 
         return value.ToString($"F{precision}", CultureInfo.CurrentCulture);
+    }
+
+    private void ChartCanvas_PointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        Point point = e.GetCurrentPoint(ChartCanvas).Position;
+        if (!currentPlot.Contains(point))
+        {
+            return;
+        }
+
+        dragStart = point;
+        ChartCanvas.CapturePointer(e.Pointer);
+        selectionRectangle = new Rectangle
+        {
+            Fill = new SolidColorBrush(Colors.DodgerBlue) { Opacity = 0.14 },
+            Stroke = new SolidColorBrush(Colors.DodgerBlue) { Opacity = 0.85 },
+            StrokeThickness = 1
+        };
+        ChartCanvas.Children.Add(selectionRectangle);
+        e.Handled = true;
+    }
+
+    private void ChartCanvas_PointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        if (dragStart is not { } start || selectionRectangle is null)
+        {
+            return;
+        }
+
+        Point current = ClampToPlot(e.GetCurrentPoint(ChartCanvas).Position);
+        UpdateSelectionRectangle(start, current);
+        e.Handled = true;
+    }
+
+    private void ChartCanvas_PointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (dragStart is not { } start)
+        {
+            return;
+        }
+
+        Point end = ClampToPlot(e.GetCurrentPoint(ChartCanvas).Position);
+        ChartCanvas.ReleasePointerCapture(e.Pointer);
+        ClearSelection();
+
+        double width = Math.Abs(end.X - start.X);
+        double height = Math.Abs(end.Y - start.Y);
+        if ((!IsFlowMode && (width <= 10 || height <= 10)) || (IsFlowMode && height <= 10))
+        {
+            return;
+        }
+
+        double startFraction = ResolveSelectionFraction(start.X);
+        double endFraction = ResolveSelectionFraction(end.X);
+        ZoomRequested?.Invoke(this, new ChartZoomRequestedEventArgs(
+            startFraction,
+            endFraction,
+            ToSelectedYRange(start.Y, end.Y, currentLeftScale),
+            ToSelectedYRange(start.Y, end.Y, currentRightScale)));
+        e.Handled = true;
+    }
+
+    private double ResolveSelectionFraction(double screenX)
+    {
+        double displayFraction = Math.Clamp((screenX - currentPlot.Left) / currentPlot.Width, 0, 1);
+        if (xValues.Count <= 1 || currentXScale is not { } scale)
+        {
+            return displayFraction;
+        }
+
+        double selectedX = scale.Min + displayFraction * (scale.Max - scale.Min);
+        int closestIndex = 0;
+        double closestDistance = double.PositiveInfinity;
+        for (int index = 0; index < xValues.Count; index++)
+        {
+            float value = xValues[index];
+            if (!float.IsFinite(value))
+            {
+                continue;
+            }
+
+            double distance = Math.Abs(value - selectedX);
+            if (distance < closestDistance)
+            {
+                closestDistance = distance;
+                closestIndex = index;
+            }
+        }
+
+        if (double.IsPositiveInfinity(closestDistance))
+        {
+            return displayFraction;
+        }
+
+        return closestIndex / (double)(xValues.Count - 1);
+    }
+
+    private void ChartCanvas_PointerCaptureLost(object sender, PointerRoutedEventArgs e)
+    {
+        ClearSelection();
+    }
+
+    private Point ClampToPlot(Point point)
+    {
+        return new Point(
+            Math.Clamp(point.X, currentPlot.Left, currentPlot.Right),
+            Math.Clamp(point.Y, currentPlot.Top, currentPlot.Bottom));
+    }
+
+    private void UpdateSelectionRectangle(Point start, Point end)
+    {
+        if (selectionRectangle is null)
+        {
+            return;
+        }
+
+        double left = IsFlowMode ? currentPlot.Left : Math.Min(start.X, end.X);
+        double width = IsFlowMode ? currentPlot.Width : Math.Abs(end.X - start.X);
+        Canvas.SetLeft(selectionRectangle, left);
+        Canvas.SetTop(selectionRectangle, Math.Min(start.Y, end.Y));
+        selectionRectangle.Width = width;
+        selectionRectangle.Height = Math.Abs(end.Y - start.Y);
+    }
+
+    private (double Min, double Max)? ToSelectedYRange(double firstY, double secondY, AxisScale? scale)
+    {
+        if (scale is not { } axis)
+        {
+            return null;
+        }
+
+        double first = axis.Max - ((firstY - currentPlot.Top) / currentPlot.Height) * (axis.Max - axis.Min);
+        double second = axis.Max - ((secondY - currentPlot.Top) / currentPlot.Height) * (axis.Max - axis.Min);
+        return (Math.Min(first, second), Math.Max(first, second));
+    }
+
+    private void ClearSelection()
+    {
+        if (selectionRectangle is not null)
+        {
+            ChartCanvas.Children.Remove(selectionRectangle);
+        }
+
+        selectionRectangle = null;
+        dragStart = null;
     }
 
     private static double MapX(Rect plot, double value, double min, double max)

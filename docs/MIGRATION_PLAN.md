@@ -2,7 +2,7 @@
 
 Дата создания: 2026-07-06
 
-Последняя актуализация: **2026-07-14**
+Последняя актуализация: **2026-07-15**
 
 - исходный проект: `C:\Users\Admin\Desktop\Amk-Horizon-New-Chart`;
 - C++-исходники: `C:\Users\Admin\Desktop\Amk-Horizon-New-Chart\Amk-Horizon-New-Chart`;
@@ -116,6 +116,12 @@
   сохраняется legacy fallback к canonical данным прибора.
 - [x] Расчётная smoke-проверка: 240 байт, condition `0x1F/0x07`, контрольная
   матрица `[-1,0,0,0,1]`, обратный расчёт 25 → 24,9951.
+- [x] Немодальное DPI-aware окно метрологии: русские смысловые подписи,
+  штатные WinUI ComboBox, типы `Автономный` / `LWD` / `Картограф`, геометрия и
+  частоты только для чтения при установленном `L/F только для чтения`.
+- [x] Runtime-путь открытия окна и переключение 12 полей L1/L2/F1/F2 проверены;
+  layout сигнатуры, палитры и воздушных калибровок выровнен по фактическим
+  границам контролов.
 - [ ] Сравнить `from_sonde` и `from_computer` со старым приложением на одном
   реальном файле и метрологии.
 
@@ -152,7 +158,9 @@
 - [x] Legacy-совместимые легенды.
 - [ ] Полная ручная parity-проверка на реальных файлах.
 - [ ] Surf/crossplot X-axis.
-- [ ] Zoom, scroll, undo/reset, crosshair, cursor coordinates.
+- [x] X Range, drag-zoom, пошаговый undo/reset zoom и независимое viewport-состояние двух графиков.
+- [x] `Поток`: последние N записей, follow-latest и Y-only drag-zoom.
+- [ ] Scroll, crosshair, cursor coordinates.
 - [ ] LOD/downsampling и cache-инварианты.
 - [ ] Общий geometry path для draw/hit-test/notes/crosshair.
 
@@ -168,8 +176,12 @@
 - [x] Выверенная владельцем компоновка окна схемы, включая DPI-safe footer.
 - [x] Прямое открытие и legacy-компоновка окна подключения.
 - [x] Немодальное окно «Метрология» с исходной расстановкой полей и кнопок.
-- [x] Чтение/запись зонда, файл, L/F read-only и автокалибровка воздуха.
-- [ ] Рабочие range/zoom/cursor controls.
+- [x] Чтение/запись зонда, файл, установленный по умолчанию режим
+  `L/F только для чтения` и автокалибровка воздуха.
+- [x] Финальная компоновка окна метрологии проверена владельцем после серии
+  DPI/layout-уточнений 14–15 июля 2026 года.
+- [x] Range apply/reset, save selected range и cut current/copy для Graph 1.
+- [ ] Append-варианты range/cut, sidecar-сегменты и cursor controls.
 - [ ] Notes UI и маркеры.
 - [ ] Конструктор файлов.
 - [ ] Логи, документация и проверка обновлений.
@@ -192,6 +204,14 @@
 
 `SerialDeviceService` → packet/CRC validation → `ParsedToolFrame` → primary
 `ToolDataRepository` → Graph 1 / linked Graph 2; параллельно canonical recording.
+
+### Метрология → вычисления на компьютере
+
+`MetrologyWindow` → `SerialDeviceService` или 240-байтовый файл →
+`MetrologySession` → `ChartDataCalculator` → `MetrologyCalculator` → УЭС или
+симметризованные фазы `FromComputer`. До успешного чтения метрологии эти режимы
+недоступны; при несовпадении signature сохраняется legacy fallback к данным
+прибора.
 
 ## 7. Границы готовности
 
@@ -218,8 +238,8 @@
 
 Если владелец не назначил другую пользовательскую проблему:
 
-1. завершить ручную проверку последних UI-изменений;
-2. выполнить parity-проверку Metrology / `FromComputer` на реальных данных;
+1. выполнить parity-проверку Metrology / `FromComputer` на реальных данных;
+2. проверить чтение, запись и автокалибровку метрологии на физическом приборе;
 3. перенести лог обмена;
 4. перенести интерактивную геометрию графика;
 5. перенести notes/sidecar и конструктор файлов;

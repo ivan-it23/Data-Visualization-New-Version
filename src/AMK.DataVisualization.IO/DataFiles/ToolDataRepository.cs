@@ -10,6 +10,8 @@ public sealed class ToolDataRepository
     private readonly List<GpToolData> records = [];
     private readonly List<ToolRecordMetadata> recordMetadata = [];
     private string loadedFileName = string.Empty;
+    private string loadedFilePath = string.Empty;
+    private FileFormat loadedFileFormat = FileFormat.Unknown;
     private ulong dataVersion;
 
     public IReadOnlyList<GpToolData> Records => records;
@@ -17,6 +19,10 @@ public sealed class ToolDataRepository
     public IReadOnlyList<ToolRecordMetadata> RecordMetadata => recordMetadata;
 
     public string LoadedFileName => loadedFileName;
+
+    public string LoadedFilePath => loadedFilePath;
+
+    public FileFormat LoadedFileFormat => loadedFileFormat;
 
     public ulong DataVersion => dataVersion;
 
@@ -26,7 +32,7 @@ public sealed class ToolDataRepository
 
     public void LoadDataFromFile(string fileName)
     {
-        ApplyLoadedData(ToolDataFileReader.LoadDataFromFile(fileName));
+        ApplyLoadedData(ToolDataFileReader.LoadDataFromFile(fileName), fileName);
     }
 
     public bool TryLoadDataFromFile(string fileName, out string? errorMessage)
@@ -37,11 +43,11 @@ public sealed class ToolDataRepository
             return false;
         }
 
-        ApplyLoadedData(result);
+        ApplyLoadedData(result, fileName);
         return HasData;
     }
 
-    public void ApplyLoadedData(DataLoadResult loadedData)
+    public void ApplyLoadedData(DataLoadResult loadedData, string? sourceFilePath = null)
     {
         if (loadedData.Records.Count != loadedData.RecordMetadata.Count)
         {
@@ -53,6 +59,8 @@ public sealed class ToolDataRepository
         records.AddRange(loadedData.Records);
         recordMetadata.AddRange(loadedData.RecordMetadata);
         loadedFileName = loadedData.LoadedFileName;
+        loadedFilePath = string.IsNullOrWhiteSpace(sourceFilePath) ? string.Empty : Path.GetFullPath(sourceFilePath);
+        loadedFileFormat = loadedData.Format;
         dataVersion++;
         InvalidateDerivedCaches();
     }
@@ -62,6 +70,8 @@ public sealed class ToolDataRepository
         records.Clear();
         recordMetadata.Clear();
         loadedFileName = string.Empty;
+        loadedFilePath = string.Empty;
+        loadedFileFormat = FileFormat.Unknown;
         dataVersion++;
         InvalidateDerivedCaches();
     }

@@ -26,6 +26,10 @@ internal sealed class ChartWorkspace
 
     public ToolDataRepository Graph2IndependentRepository { get; } = new();
 
+    public ChartViewportState Graph1Viewport { get; } = new();
+
+    public ChartViewportState Graph2Viewport { get; } = new();
+
     public ChartConfiguration Graph1Configuration { get; private set; }
 
     public ChartConfiguration Graph2Configuration { get; private set; }
@@ -56,6 +60,16 @@ internal sealed class ChartWorkspace
         {
             1 => Graph1Configuration,
             2 => Graph2Configuration,
+            _ => throw new ArgumentOutOfRangeException(nameof(graphNumber))
+        };
+    }
+
+    public ChartViewportState GetViewportForGraph(int graphNumber)
+    {
+        return graphNumber switch
+        {
+            1 => Graph1Viewport,
+            2 => Graph2Viewport,
             _ => throw new ArgumentOutOfRangeException(nameof(graphNumber))
         };
     }

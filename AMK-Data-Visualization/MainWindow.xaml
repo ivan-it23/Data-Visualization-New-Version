@@ -120,44 +120,49 @@
                     Padding="4,1"
                     InputScope="Number" />
                 <Button
+                    x:Name="Graph1ApplyRangeButton"
                     Width="26"
                     Height="24"
                     MinWidth="0"
                     Padding="0"
                     Content="✓"
-                    IsEnabled="False"
+                    Click="Graph1ApplyRangeButton_Click"
                     ToolTipService.ToolTip="Применить" />
                 <Button
+                    x:Name="Graph1ResetRangeButton"
                     Width="26"
                     Height="24"
                     MinWidth="0"
                     Padding="0"
                     Content="↺"
-                    IsEnabled="False"
+                    Click="Graph1ResetRangeButton_Click"
                     ToolTipService.ToolTip="Сбросить" />
                 <Button
+                    x:Name="Graph1SaveRangeButton"
                     Width="26"
                     Height="24"
                     MinWidth="0"
                     Padding="0"
                     Content="↓"
-                    IsEnabled="False"
-                    ToolTipService.ToolTip="Загрузить" />
+                    Click="Graph1SaveRangeButton_Click"
+                    ToolTipService.ToolTip="Сохранить выбранный отрезок" />
                 <Button
+                    x:Name="Graph1CutRangeButton"
                     Width="26"
                     Height="24"
                     MinWidth="0"
                     Padding="0"
                     Content="✂"
-                    IsEnabled="False"
+                    Click="Graph1CutRangeButton_Click"
                     ToolTipService.ToolTip="Вырезать отрезок" />
                 <Button
+                    x:Name="Graph1ResetZoomButton"
                     Width="65"
                     Height="24"
                     MinWidth="0"
                     Padding="0"
                     Content="↺ Zoom"
-                    IsEnabled="False"
+                    Click="Graph1ResetZoomButton_Click"
                     ToolTipService.ToolTip="Сбросить Zoom" />
             </StackPanel>
 
@@ -173,7 +178,9 @@
                     MinWidth="0"
                     VerticalAlignment="Center"
                     Content="Поток"
-                    FontWeight="SemiBold" />
+                    FontWeight="SemiBold"
+                    Checked="Chart1SurfCheckBox_Changed"
+                    Unchecked="Chart1SurfCheckBox_Changed" />
                 <TextBox
                     x:Name="Chart1SurfTextBox"
                     Width="45"
@@ -182,7 +189,8 @@
                     Padding="4,1"
                     HorizontalContentAlignment="Center"
                     InputScope="Number"
-                    Text="100" />
+                    Text="100"
+                    LostFocus="Chart1SurfTextBox_LostFocus" />
                 <Button
                     x:Name="PollingToggleButton"
                     Width="32"
@@ -258,12 +266,14 @@
                 Orientation="Horizontal"
                 Spacing="4">
                 <Button
+                    x:Name="Graph1UndoZoomButton"
                     Width="22"
                     Height="20"
                     MinWidth="0"
                     Padding="0"
                     Content="↶"
                     IsEnabled="False"
+                    Click="Graph1UndoZoomButton_Click"
                     ToolTipService.ToolTip="Отменить последний zoom" />
                 <CheckBox
                     x:Name="Chart1ShowNotesCheckBox"
@@ -312,43 +322,51 @@
                         Padding="4,1"
                         InputScope="Number" />
                     <Button
+                        x:Name="Graph2ApplyRangeButton"
                         Width="26"
                         Height="24"
                         MinWidth="0"
                         Padding="0"
                         Content="✓"
-                        IsEnabled="False"
+                        Click="Graph2ApplyRangeButton_Click"
                         ToolTipService.ToolTip="Применить" />
                     <Button
+                        x:Name="Graph2ResetRangeButton"
                         Width="26"
                         Height="24"
                         MinWidth="0"
                         Padding="0"
                         Content="↺"
-                        IsEnabled="False"
+                        Click="Graph2ResetRangeButton_Click"
                         ToolTipService.ToolTip="Сбросить" />
                     <Button
+                        x:Name="Graph2ResetZoomButton"
                         Width="65"
                         Height="24"
                         MinWidth="0"
                         Padding="0"
                         Content="↺ Zoom"
-                        IsEnabled="False"
+                        Click="Graph2ResetZoomButton_Click"
                         ToolTipService.ToolTip="Сбросить Zoom" />
                     <CheckBox
+                        x:Name="Chart2SurfCheckBox"
                         MinHeight="0"
                         MinWidth="0"
                         VerticalAlignment="Center"
                         Content="Поток"
-                        FontWeight="SemiBold" />
+                        FontWeight="SemiBold"
+                        Checked="Chart2SurfCheckBox_Changed"
+                        Unchecked="Chart2SurfCheckBox_Changed" />
                     <TextBox
+                        x:Name="Chart2SurfTextBox"
                         Width="45"
                         Height="24"
                         MinHeight="0"
                         Padding="4,1"
                         HorizontalContentAlignment="Center"
                         InputScope="Number"
-                        Text="100" />
+                        Text="100"
+                        LostFocus="Chart2SurfTextBox_LostFocus" />
                     <Button
                         x:Name="Graph2ModeButton"
                         Width="24"
@@ -441,12 +459,14 @@
                 Spacing="4"
                 Visibility="Collapsed">
                 <Button
+                    x:Name="Graph2UndoZoomButton"
                     Width="22"
                     Height="20"
                     MinWidth="0"
                     Padding="0"
                     Content="↶"
                     IsEnabled="False"
+                    Click="Graph2UndoZoomButton_Click"
                     ToolTipService.ToolTip="Отменить последний zoom" />
                 <CheckBox
                     x:Name="Chart2ShowNotesCheckBox"

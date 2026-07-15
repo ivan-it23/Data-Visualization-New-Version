@@ -12,6 +12,7 @@ using AMK.DataVisualization.App.Views;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Windows.Storage.Pickers;
+using Microsoft.UI.Xaml.Controls;
 using WinRT.Interop;
 
 namespace AMK.DataVisualization.App;
@@ -27,10 +28,13 @@ public sealed partial class MainWindow : Window
     private ConnectionSettingsWindow? connectionSettingsWindow;
     private MetrologyWindow? metrologyWindow;
     private bool initialMaximizeApplied;
+    private bool updatingRangeControls;
 
     public MainWindow()
     {
         InitializeComponent();
+        GraphControl.ZoomRequested += (_, args) => ApplyPointerZoom(1, args);
+        Graph2Control.ZoomRequested += (_, args) => ApplyPointerZoom(2, args);
         ShowLegacyEmptyState(1, hasData: false);
         ShowLegacyEmptyState(2, hasData: false);
         UpdateDualModeLayout();
@@ -54,6 +58,11 @@ public sealed partial class MainWindow : Window
         try
         {
             chartWorkspace.Graph1Repository.LoadDataFromFile(file.Path);
+            chartWorkspace.Graph1Viewport.ResetAll();
+            if (!chartWorkspace.IsGraph2Independent)
+            {
+                chartWorkspace.Graph2Viewport.ResetAll();
+            }
             schematicWindow?.RefreshDataContext(1, 2);
             RenderGraph(1);
             RenderGraph(2);
@@ -195,6 +204,12 @@ public sealed partial class MainWindow : Window
             chartWorkspace.Graph1Repository.ClearData();
         }
 
+        chartWorkspace.Graph1Viewport.ResetAll();
+        if (!chartWorkspace.IsGraph2Independent)
+        {
+            chartWorkspace.Graph2Viewport.ResetAll();
+        }
+
         schematicWindow?.RefreshDataContext(1, 2);
         RenderGraph(1);
         if (!chartWorkspace.IsGraph2Independent)
@@ -266,6 +281,7 @@ public sealed partial class MainWindow : Window
             chartWorkspace.SetGraph2Mode(Graph2DataMode.IndependentFile);
             UpdateGraph2DataModeUi();
             chartWorkspace.Graph2IndependentRepository.LoadDataFromFile(file.Path);
+            chartWorkspace.Graph2Viewport.ResetAll();
             schematicWindow?.RefreshDataContext(2);
             RenderGraph(2);
             SetStatus("Готов");
@@ -283,6 +299,7 @@ public sealed partial class MainWindow : Window
     private void Graph2LinkedModeMenuItem_Click(object sender, RoutedEventArgs e)
     {
         chartWorkspace.SetGraph2Mode(Graph2DataMode.LinkedToGraph1);
+        chartWorkspace.Graph2Viewport.ResetAll();
         schematicWindow?.RefreshDataContext(2);
         UpdateGraph2DataModeUi();
         RenderGraph(2);
@@ -292,6 +309,7 @@ public sealed partial class MainWindow : Window
     private void Graph2IndependentModeMenuItem_Click(object sender, RoutedEventArgs e)
     {
         chartWorkspace.SetGraph2Mode(Graph2DataMode.IndependentFile);
+        chartWorkspace.Graph2Viewport.ResetAll();
         schematicWindow?.RefreshDataContext(2);
         UpdateGraph2DataModeUi();
         RenderGraph(2);
@@ -355,6 +373,7 @@ public sealed partial class MainWindow : Window
         ToolDataRepository repository = chartWorkspace.GetRepositoryForGraph(graphNumber);
         var graphControl = graphNumber == 1 ? GraphControl : Graph2Control;
         ChartConfiguration graphConfiguration = chartWorkspace.GetConfigurationForGraph(graphNumber);
+        ChartViewportState viewport = chartWorkspace.GetViewportForGraph(graphNumber);
 
         if (!repository.HasData || !repository.TryGetRecord(0, out var firstRecord))
         {
@@ -371,15 +390,24 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        ChartIndexRange visibleRange = viewport.GetVisibleRange(repository.DataSize);
         ConfiguredChartData chartData = ChartDataCalculator.CalculateChartDataFromConfiguration(
             repository.Records,
             repository.RecordMetadata,
             graphConfiguration,
+            visibleRange.StartIndex,
+            visibleRange.EndIndex,
+            -1e12,
+            1e12,
             metrologySession.Current);
-        List<float> xAxisData = ChartDataCalculator.CalculateXAxisData(
+        List<float> allXAxisData = ChartDataCalculator.CalculateXAxisData(
             repository.Records,
             repository.RecordMetadata,
             graphConfiguration.XAxisType);
+        List<float> xAxisData = allXAxisData
+            .Skip(visibleRange.StartIndex)
+            .Take(visibleRange.EndIndex - visibleRange.StartIndex + 1)
+            .ToList();
         GroupedCurves groupedCurves = ChartDataCalculator.GroupCurvesByAxis(graphConfiguration.Curves);
         List<ChartRenderSeries> renderSeries = [];
 
@@ -416,7 +444,11 @@ public sealed partial class MainWindow : Window
             graphConfiguration.RightAxisUnits,
             xAxisData,
             graphConfiguration.XAxisType == XAxisType.Temperature ? "Температура, °C" : "Номер кадра",
-            graphConfiguration.IsPresetActive ? graphConfiguration.PresetDisplayName : string.Empty);
+            graphConfiguration.IsPresetActive ? graphConfiguration.PresetDisplayName : string.Empty,
+            viewport.LeftYRange,
+            viewport.RightYRange);
+        graphControl.IsFlowMode = viewport.IsFlowEnabled;
+        UpdateRangeControls(graphNumber);
     }
 
     private static string GetPresetLegendLabel(CurveDefinition curve)
@@ -471,6 +503,313 @@ public sealed partial class MainWindow : Window
         return firstEnabledCurve?.Frequency == FrequencyBand.Freq2000KHz ? "2000 кГц" : "400 кГц";
     }
 
+    private void Graph1ApplyRangeButton_Click(object sender, RoutedEventArgs e) => ApplyTextRange(1);
+
+    private void Graph2ApplyRangeButton_Click(object sender, RoutedEventArgs e) => ApplyTextRange(2);
+
+    private void ApplyTextRange(int graphNumber)
+    {
+        ToolDataRepository repository = chartWorkspace.GetRepositoryForGraph(graphNumber);
+        (string from, string to) = GetRangeText(graphNumber);
+        if (!chartWorkspace.GetViewportForGraph(graphNumber).TryApplyXRange(repository.DataSize, from, to, out string error))
+        {
+            SetStatus(error);
+            return;
+        }
+
+        RenderGraph(graphNumber);
+        SetStatus($"График {graphNumber}: выбран участок {from}–{(string.IsNullOrWhiteSpace(to) ? repository.DataSize - 1 : to)}");
+    }
+
+    private void Graph1ResetRangeButton_Click(object sender, RoutedEventArgs e) => ResetRange(1);
+
+    private void Graph2ResetRangeButton_Click(object sender, RoutedEventArgs e) => ResetRange(2);
+
+    private void ResetRange(int graphNumber)
+    {
+        chartWorkspace.GetViewportForGraph(graphNumber).ResetRange();
+        SetRangeText(graphNumber, string.Empty, string.Empty);
+        RenderGraph(graphNumber);
+        SetStatus($"График {graphNumber}: диапазон сброшен");
+    }
+
+    private void Graph1ResetZoomButton_Click(object sender, RoutedEventArgs e) => ResetZoom(1);
+
+    private void Graph2ResetZoomButton_Click(object sender, RoutedEventArgs e) => ResetZoom(2);
+
+    private void Graph1UndoZoomButton_Click(object sender, RoutedEventArgs e) => UndoZoom(1);
+
+    private void Graph2UndoZoomButton_Click(object sender, RoutedEventArgs e) => UndoZoom(2);
+
+    private void UndoZoom(int graphNumber)
+    {
+        ChartViewportState viewport = chartWorkspace.GetViewportForGraph(graphNumber);
+        if (!viewport.TryUndoZoom())
+        {
+            return;
+        }
+
+        RenderGraph(graphNumber);
+        SetStatus($"График {graphNumber}: отменён последний zoom");
+    }
+
+    private void ResetZoom(int graphNumber)
+    {
+        chartWorkspace.GetViewportForGraph(graphNumber).ResetZoom();
+        SetRangeText(graphNumber, string.Empty, string.Empty);
+        RenderGraph(graphNumber);
+        SetStatus($"График {graphNumber}: zoom сброшен");
+    }
+
+    private void Chart1SurfCheckBox_Changed(object sender, RoutedEventArgs e) => ChangeFlowMode(1);
+
+    private void Chart2SurfCheckBox_Changed(object sender, RoutedEventArgs e) => ChangeFlowMode(2);
+
+    private void Chart1SurfTextBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (Chart1SurfCheckBox.IsChecked == true)
+        {
+            ChangeFlowMode(1);
+        }
+    }
+
+    private void Chart2SurfTextBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (Chart2SurfCheckBox.IsChecked == true)
+        {
+            ChangeFlowMode(2);
+        }
+    }
+
+    private void ChangeFlowMode(int graphNumber)
+    {
+        if (updatingRangeControls)
+        {
+            return;
+        }
+
+        ToolDataRepository repository = chartWorkspace.GetRepositoryForGraph(graphNumber);
+        bool enabled = graphNumber == 1 ? Chart1SurfCheckBox.IsChecked == true : Chart2SurfCheckBox.IsChecked == true;
+        string windowText = graphNumber == 1 ? Chart1SurfTextBox.Text : Chart2SurfTextBox.Text;
+        ChartViewportState viewport = chartWorkspace.GetViewportForGraph(graphNumber);
+        if (!viewport.TrySetFlow(enabled, windowText, repository.DataSize, out string error))
+        {
+            updatingRangeControls = true;
+            if (graphNumber == 1)
+            {
+                Chart1SurfCheckBox.IsChecked = false;
+            }
+            else
+            {
+                Chart2SurfCheckBox.IsChecked = false;
+            }
+            updatingRangeControls = false;
+            SetStatus(error);
+            return;
+        }
+
+        SetRangeText(graphNumber, string.Empty, string.Empty);
+        RenderGraph(graphNumber);
+        SetStatus(enabled ? $"График {graphNumber}: Поток ON ({viewport.FlowWindowSize})" : $"График {graphNumber}: Поток OFF");
+    }
+
+    private void ApplyPointerZoom(int graphNumber, ChartZoomRequestedEventArgs args)
+    {
+        ToolDataRepository repository = chartWorkspace.GetRepositoryForGraph(graphNumber);
+        ChartViewportState viewport = chartWorkspace.GetViewportForGraph(graphNumber);
+        if (!viewport.ApplyDragZoom(repository.DataSize, args.StartFraction, args.EndFraction, args.LeftYRange, args.RightYRange))
+        {
+            SetStatus(viewport.IsFlowEnabled
+                ? "Минимальный диапазон Y — 10 единиц"
+                : "Минимальный диапазон X — 10 записей");
+            return;
+        }
+        RenderGraph(graphNumber);
+        SetStatus($"График {graphNumber}: zoom применён");
+    }
+
+    private (string From, string To) GetRangeText(int graphNumber)
+    {
+        return graphNumber == 1
+            ? (XRangeFromTextBox.Text, XRangeToTextBox.Text)
+            : (XRange2FromTextBox.Text, XRange2ToTextBox.Text);
+    }
+
+    private void SetRangeText(int graphNumber, string from, string to)
+    {
+        if (graphNumber == 1)
+        {
+            XRangeFromTextBox.Text = from;
+            XRangeToTextBox.Text = to;
+        }
+        else
+        {
+            XRange2FromTextBox.Text = from;
+            XRange2ToTextBox.Text = to;
+        }
+    }
+
+    private void UpdateRangeControls(int graphNumber)
+    {
+        ToolDataRepository repository = chartWorkspace.GetRepositoryForGraph(graphNumber);
+        ChartViewportState viewport = chartWorkspace.GetViewportForGraph(graphNumber);
+        bool hasData = repository.HasData;
+        updatingRangeControls = true;
+        if (graphNumber == 1)
+        {
+            Graph1ApplyRangeButton.IsEnabled = hasData && !viewport.IsFlowEnabled;
+            Graph1ResetRangeButton.IsEnabled = hasData && viewport.HasCustomXRange;
+            Graph1SaveRangeButton.IsEnabled = hasData;
+            Graph1CutRangeButton.IsEnabled = hasData && !string.IsNullOrWhiteSpace(repository.LoadedFilePath);
+            Graph1ResetZoomButton.IsEnabled = hasData && viewport.IsZoomed;
+            Graph1UndoZoomButton.IsEnabled = hasData && viewport.CanUndoZoom;
+            Chart1SurfCheckBox.IsChecked = viewport.IsFlowEnabled;
+            Chart1SurfTextBox.Text = viewport.FlowWindowSize.ToString();
+        }
+        else
+        {
+            Graph2ApplyRangeButton.IsEnabled = hasData && !viewport.IsFlowEnabled;
+            Graph2ResetRangeButton.IsEnabled = hasData && viewport.HasCustomXRange;
+            Graph2ResetZoomButton.IsEnabled = hasData && viewport.IsZoomed;
+            Graph2UndoZoomButton.IsEnabled = hasData && viewport.CanUndoZoom;
+            Chart2SurfCheckBox.IsChecked = viewport.IsFlowEnabled;
+            Chart2SurfTextBox.Text = viewport.FlowWindowSize.ToString();
+        }
+        updatingRangeControls = false;
+    }
+
+    private async void Graph1SaveRangeButton_Click(object sender, RoutedEventArgs e)
+    {
+        ToolDataRepository repository = chartWorkspace.Graph1Repository;
+        if (!TryResolveGraph1OperationRange(out ChartIndexRange range))
+        {
+            SetStatus("Не удалось определить выбранный участок");
+            return;
+        }
+
+        FileSavePicker picker = new()
+        {
+            SuggestedStartLocation = PickerLocationId.Desktop,
+            SuggestedFileName = $"{repository.LoadedFileName}_range_{range.StartIndex}_{range.EndIndex}_{DateTime.Now:dd_MM_yyyy}"
+        };
+        picker.FileTypeChoices.Add("AMK BIN", [".bin"]);
+        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
+        Windows.Storage.StorageFile? file = await picker.PickSaveFileAsync();
+        if (file is null)
+        {
+            return;
+        }
+
+        bool saved = await Task.Run(() => repository.SaveDataRange(file.Path, range.StartIndex, range.EndIndex));
+        SetStatus(saved ? $"Сохранён участок {range.StartIndex}–{range.EndIndex}" : "Не удалось сохранить выбранный участок");
+    }
+
+    private async void Graph1CutRangeButton_Click(object sender, RoutedEventArgs e)
+    {
+        ToolDataRepository repository = chartWorkspace.Graph1Repository;
+        if (!TryResolveGraph1OperationRange(out ChartIndexRange range))
+        {
+            SetStatus("Не удалось определить выбранный участок");
+            return;
+        }
+
+        if (range.StartIndex == 0 && range.EndIndex == repository.DataSize - 1)
+        {
+            SetStatus("Нельзя вырезать весь файл");
+            return;
+        }
+
+        ContentDialog dialog = new()
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Вырезание выбранного участка",
+            Content = $"Удалить записи {range.StartIndex}–{range.EndIndex} из текущего файла или сохранить копию без них?",
+            PrimaryButtonText = "Из текущего файла",
+            SecondaryButtonText = "Сохранить копию",
+            CloseButtonText = "Отмена",
+            DefaultButton = ContentDialogButton.Close
+        };
+        ContentDialogResult choice = await dialog.ShowAsync();
+        if (choice == ContentDialogResult.None)
+        {
+            return;
+        }
+
+        if (choice == ContentDialogResult.Primary)
+        {
+            await CutRangeFromCurrentFile(repository, range);
+            return;
+        }
+
+        string extension = Path.GetExtension(repository.LoadedFilePath);
+        FileSavePicker picker = new()
+        {
+            SuggestedStartLocation = PickerLocationId.Desktop,
+            SuggestedFileName = $"{repository.LoadedFileName}_cut_{range.StartIndex}_{range.EndIndex}"
+        };
+        picker.FileTypeChoices.Add("AMK data", [extension]);
+        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
+        Windows.Storage.StorageFile? target = await picker.PickSaveFileAsync();
+        if (target is null)
+        {
+            return;
+        }
+
+        bool saved = await Task.Run(() => ToolDataRangeExporter.SaveFileExcludingRange(
+            repository.LoadedFilePath, target.Path, range.StartIndex, range.EndIndex));
+        SetStatus(saved ? "Копия без выбранного участка сохранена" : "Не удалось сохранить копию");
+    }
+
+    private async Task CutRangeFromCurrentFile(ToolDataRepository repository, ChartIndexRange range)
+    {
+        string source = repository.LoadedFilePath;
+        string extension = Path.GetExtension(source);
+        string temporary = Path.Combine(Path.GetDirectoryName(source)!, $".{Path.GetFileNameWithoutExtension(source)}.cut-{Guid.NewGuid():N}{extension}");
+        try
+        {
+            bool created = await Task.Run(() => ToolDataRangeExporter.SaveFileExcludingRange(source, temporary, range.StartIndex, range.EndIndex));
+            if (!created)
+            {
+                SetStatus("Не удалось подготовить файл без выбранного участка");
+                return;
+            }
+
+            _ = ToolDataFileReader.LoadDataFromFile(temporary);
+            File.Move(temporary, source, true);
+            repository.LoadDataFromFile(source);
+            chartWorkspace.Graph1Viewport.ResetAll();
+            if (!chartWorkspace.IsGraph2Independent)
+            {
+                chartWorkspace.Graph2Viewport.ResetAll();
+            }
+            RenderGraph(1);
+            if (!chartWorkspace.IsGraph2Independent)
+            {
+                RenderGraph(2);
+            }
+            UpdateStatusBarFileInfo();
+            SetStatus("Выбранный участок вырезан из текущего файла");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            SetStatus($"Ошибка вырезания: {ex.Message}");
+        }
+        finally
+        {
+            if (File.Exists(temporary))
+            {
+                File.Delete(temporary);
+            }
+        }
+    }
+
+    private bool TryResolveGraph1OperationRange(out ChartIndexRange range)
+    {
+        (string from, string to) = GetRangeText(1);
+        return chartWorkspace.Graph1Viewport.TryResolveOperationRange(
+            chartWorkspace.Graph1Repository.DataSize, from, to, out range);
+    }
+
     private void ShowLegacyEmptyState(int graphNumber, bool hasData)
     {
         var graphControl = graphNumber == 1 ? GraphControl : Graph2Control;
@@ -479,6 +818,7 @@ public sealed partial class MainWindow : Window
             hasData
                 ? "Нажмите 'Схема прибора' для настройки графика"
                 : "Сначала откройте файл данных");
+        UpdateRangeControls(graphNumber);
     }
 
     private void SetStatus(string text)

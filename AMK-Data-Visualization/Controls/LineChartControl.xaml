@@ -8,6 +8,10 @@
         <Canvas
             x:Name="ChartCanvas"
             Background="{ThemeResource LayerFillColorDefaultBrush}"
+            PointerPressed="ChartCanvas_PointerPressed"
+            PointerMoved="ChartCanvas_PointerMoved"
+            PointerReleased="ChartCanvas_PointerReleased"
+            PointerCaptureLost="ChartCanvas_PointerCaptureLost"
             SizeChanged="ChartCanvas_SizeChanged" />
     </Grid>
 </UserControl>
