@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.IO.Ports;
 using System.Runtime.InteropServices;
+using AMK.DataVisualization.Core;
 using AMK.DataVisualization.Core.Adapters;
 using AMK.DataVisualization.Core.Binary;
 
@@ -16,15 +17,27 @@ public sealed class SerialDeviceService : IDisposable
     private const int DefaultBaudRate = 125000;
     private const int MinimumPollInterval = 500;
     private const int MaximumPollInterval = 30000;
-    private const int ReadTimeoutMilliseconds = 1000;
+    private const int ReadTimeoutMilliseconds = 2000;
     private const int ControlReadTimeoutMilliseconds = 5000;
-    private const int WriteTimeoutMilliseconds = 1000;
+    private const int WriteTimeoutMilliseconds = 2000;
     private const int PacketHeaderSize = 3;
     private const int PacketCrcSize = 2;
     private const int MinimumPacketSize = PacketHeaderSize + PacketCrcSize;
     private const int MaximumPacketSize = 4096;
     private const int FailuresBeforeReopen = 8;
-    private const int CartographLwd4TxPreReceiveDelayMilliseconds = 50;
+    // LOOP_NEXT принимает 242 байта payload: два служебных байта (на реальном
+    // Cartograph 4tx это 0x05 0x06), затем 240 байт GP_TOOL_DATA/метрологии.
+    private const int LegacyServicePrefixSize = 2;
+    private const int LegacyPayloadSize = LegacyServicePrefixSize + BinaryLayoutConstants.GpToolDataSize;
+    private const int LegacyMetrologyReadAttempts = 3;
+    private const int LegacyFrameReadAttempts = 2;
+    private const int LegacyPostOpenDelayMilliseconds = 150;
+    private const int LegacyMetrologyPreReceiveDelayMilliseconds = 100;
+    private const int LegacyRetryDelayMilliseconds = 100;
+    private const int LegacyFramePreReceiveDelayMilliseconds = 50;
+    private const int LegacyMetrologyWritePreReceiveDelayMilliseconds = 150;
+    private const byte LegacyReadSubCommand = 0x05;
+    private const byte LegacyWriteSubCommand = 0xF5;
 
     private readonly object ioSync = new();
     private readonly object lifecycleSync = new();
@@ -42,9 +55,10 @@ public sealed class SerialDeviceService : IDisposable
     private uint lastFrameNumber;
     private string lastError = string.Empty;
     private string recordFilePath = string.Empty;
-    private string recordFolder = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+    private string recordFolder = SerialRecordingFolder.DefaultPath;
     private string appendFilePath = string.Empty;
     private bool recordingEnabled = true;
+    private bool useLegacyCartographProtocol;
     private bool disposed;
     private int controlOperationCount;
     private SerialConnectionState state = SerialConnectionState.Disconnected;
@@ -52,6 +66,11 @@ public sealed class SerialDeviceService : IDisposable
     public event EventHandler<SerialFrameReceivedEventArgs>? FrameReceived;
 
     public event EventHandler<SerialStatusChangedEventArgs>? StatusChanged;
+
+    public SerialDeviceService()
+    {
+        SerialRecordingFolder.TryEnsureExists(recordFolder);
+    }
 
     public SerialConnectionState State => state;
 
@@ -92,9 +111,8 @@ public sealed class SerialDeviceService : IDisposable
         lock (ioSync)
         {
             recordingEnabled = enabled;
-            recordFolder = string.IsNullOrWhiteSpace(folder)
-                ? Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory)
-                : folder;
+            recordFolder = SerialRecordingFolder.Resolve(folder);
+            SerialRecordingFolder.TryEnsureExists(recordFolder);
             appendFilePath = existingFilePath ?? string.Empty;
             CloseRecordStreamCore();
             recordFilePath = string.Empty;
@@ -124,6 +142,8 @@ public sealed class SerialDeviceService : IDisposable
         await StopPollingAsync().ConfigureAwait(false);
         desiredPortName = portName.Trim();
         desiredBaudRate = baudRate;
+        DeviceProtocolLog.BeginSession(desiredPortName, desiredBaudRate);
+        DeviceProtocolLog.Write($"CONNECT REQUEST | log={DeviceProtocolLog.LogPath}");
         SetState(SerialConnectionState.Connecting);
 
         SerialOperationResult result;
@@ -218,7 +238,9 @@ public sealed class SerialDeviceService : IDisposable
         DeviceSignature = null;
         Metrology = null;
         CurrentMetrology = null;
+        useLegacyCartographProtocol = false;
         consecutiveFailures = 0;
+        DeviceProtocolLog.Write("DISCONNECT COMPLETED");
         SetState(SerialConnectionState.Disconnected);
     }
 
@@ -344,6 +366,9 @@ public sealed class SerialDeviceService : IDisposable
             CloseSerialPortCore();
             try
             {
+                DeviceProtocolLog.Write(
+                    $"PORT OPEN START | port={desiredPortName} | baud={desiredBaudRate} | " +
+                    $"read_timeout={ReadTimeoutMilliseconds} | write_timeout={WriteTimeoutMilliseconds}");
                 SerialPort port = new(desiredPortName, desiredBaudRate, Parity.None, 8, StopBits.One)
                 {
                     Handshake = Handshake.None,
@@ -358,12 +383,14 @@ public sealed class SerialDeviceService : IDisposable
                 port.DiscardInBuffer();
                 port.DiscardOutBuffer();
                 serialPort = port;
+                Thread.Sleep(LegacyPostOpenDelayMilliseconds);
                 consecutiveFailures = 0;
                 if (resetSession)
                 {
                     DeviceSignature = null;
                     Metrology = null;
                     CurrentMetrology = null;
+                    useLegacyCartographProtocol = false;
                     Interlocked.Exchange(ref packetsReceived, 0);
                     Interlocked.Exchange(ref packetErrors, 0);
                     Interlocked.Exchange(ref recordedFrames, 0);
@@ -372,20 +399,26 @@ public sealed class SerialDeviceService : IDisposable
                 }
 
                 lastError = string.Empty;
+                DeviceProtocolLog.Write(
+                    $"PORT OPEN OK | port={port.PortName} | dtr={port.DtrEnable} | rts={port.RtsEnable} | " +
+                    $"data_bits={port.DataBits} | parity={port.Parity} | stop_bits={port.StopBits}");
                 return SerialOperationResult.Success;
             }
-            catch (UnauthorizedAccessException)
+            catch (UnauthorizedAccessException exception)
             {
+                DeviceProtocolLog.Write(exception, "PORT OPEN BUSY");
                 CloseSerialPortCore();
                 return SerialOperationResult.PortBusy;
             }
-            catch (IOException)
+            catch (IOException exception)
             {
+                DeviceProtocolLog.Write(exception, "PORT OPEN IO FAILURE");
                 CloseSerialPortCore();
                 return SerialOperationResult.PortNotFound;
             }
             catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
             {
+                DeviceProtocolLog.Write(exception, "PORT OPEN FAILURE");
                 CloseSerialPortCore();
                 return SerialOperationResult.ConnectionFailed;
             }
@@ -420,17 +453,24 @@ public sealed class SerialDeviceService : IDisposable
             if (result == SerialOperationResult.Success)
             {
                 consecutiveFailures = 0;
-                Interlocked.Increment(ref packetsReceived);
+                long acceptedPackets = Interlocked.Increment(ref packetsReceived);
                 lastFrameNumber = frame.CanonicalData.Frame;
                 WriteRecordCore(frame.CanonicalData);
                 RaiseFrameReceived(frame, rawPayload);
                 lastError = string.Empty;
+                DeviceProtocolLog.Write(
+                    $"POLL FRAME ACCEPTED | protocol={(useLegacyCartographProtocol ? "LEGACY_LOOP_NEXT" : "FRAMED_LEN")} | " +
+                    $"accepted_total={acceptedPackets} | frame={frame.CanonicalData.Frame} | " +
+                    $"signature=0x{frame.CanonicalData.Signature:X8}");
             }
             else
             {
                 consecutiveFailures++;
-                Interlocked.Increment(ref packetErrors);
+                long rejectedPackets = Interlocked.Increment(ref packetErrors);
                 lastError = ResultToDisplayText(result);
+                DeviceProtocolLog.Write(
+                    $"POLL FRAME REJECTED | protocol={(useLegacyCartographProtocol ? "LEGACY_LOOP_NEXT" : "FRAMED_LEN")} | " +
+                    $"result={result} | rejected_total={rejectedPackets} | consecutive_failures={consecutiveFailures}");
                 if (consecutiveFailures >= FailuresBeforeReopen)
                 {
                     lock (ioSync)
@@ -438,6 +478,7 @@ public sealed class SerialDeviceService : IDisposable
                         CloseSerialPortCore();
                     }
                     SetState(SerialConnectionState.Disconnected, "Связь потеряна, выполняется переподключение...");
+                    DeviceProtocolLog.Write("POLL REOPEN SCHEDULED | reason=consecutive_failures");
                     consecutiveFailures = 0;
                 }
             }
@@ -453,23 +494,17 @@ public sealed class SerialDeviceService : IDisposable
         rawPayload = [];
         lock (ioSync)
         {
-            bool isCartographLwd4Tx = TryGetCartographLwd4TxExpectedSignature(out uint expectedSignature);
+            if (useLegacyCartographProtocol)
+            {
+                return RequestLegacyCartographDataCore(out frame, out rawPayload);
+            }
+
+            DeviceProtocolLog.Write("DATA ROUTE | protocol=FRAMED_LEN");
             SerialOperationResult result = ExchangePacketCore(
                 CommandData,
                 [],
                 out byte responseCommand,
-                out byte[] payload,
-                acceptZeroCrc: isCartographLwd4Tx);
-            if (isCartographLwd4Tx && result == SerialOperationResult.Timeout)
-            {
-                result = ExchangePacketCore(
-                    CommandData,
-                    [],
-                    out responseCommand,
-                    out payload,
-                    acceptZeroCrc: true);
-            }
-
+                out byte[] payload);
             if (result != SerialOperationResult.Success)
             {
                 return result;
@@ -485,33 +520,180 @@ public sealed class SerialDeviceService : IDisposable
                 return SerialOperationResult.InvalidSignature;
             }
 
-            if (isCartographLwd4Tx && frame.CanonicalData.Signature != expectedSignature)
-            {
-                return SerialOperationResult.CrcError;
-            }
-
             rawPayload = payload;
             return SerialOperationResult.Success;
         }
+    }
+
+    private SerialOperationResult RequestLegacyCartographDataCore(
+        out ParsedToolFrame frame,
+        out byte[] rawPayload)
+    {
+        frame = default;
+        rawPayload = [];
+        SerialPort? port = serialPort;
+        if (port?.IsOpen != true)
+        {
+            return SerialOperationResult.NotConnected;
+        }
+
+        Span<byte> request = stackalloc byte[] { LegacyReadSubCommand, 0x00 };
+        SerialOperationResult lastResult = SerialOperationResult.Timeout;
+        DeviceProtocolLog.Write(
+            $"DATA ROUTE | protocol=LEGACY_LOOP_NEXT | expected_payload={LegacyPayloadSize} | attempts={LegacyFrameReadAttempts}");
+
+        for (int attempt = 1; attempt <= LegacyFrameReadAttempts; attempt++)
+        {
+            TryDiscardBuffers(port, discardOutput: false);
+            DeviceProtocolLog.Write($"LEGACY DATA ATTEMPT | attempt={attempt}/{LegacyFrameReadAttempts}");
+            SerialOperationResult sendResult = LegacyToolSerialTransport.Send(port, CommandData, request);
+            if (sendResult != SerialOperationResult.Success)
+            {
+                lastResult = sendResult;
+                break;
+            }
+
+            Thread.Sleep(LegacyFramePreReceiveDelayMilliseconds);
+            SerialOperationResult receiveResult = LegacyToolSerialTransport.Receive(
+                port,
+                LegacyPayloadSize,
+                acceptZeroCrc: true,
+                out byte responseCommand,
+                out byte[] payload);
+            lastResult = receiveResult;
+            if (receiveResult == SerialOperationResult.Timeout && attempt < LegacyFrameReadAttempts)
+            {
+                DeviceProtocolLog.Write("LEGACY DATA RETRY | reason=timeout");
+                continue;
+            }
+
+            if (receiveResult != SerialOperationResult.Success)
+            {
+                return receiveResult;
+            }
+
+            DeviceProtocolLog.Write(
+                $"LEGACY DATA PAYLOAD | response_cmd=0x{responseCommand:X2} | " +
+                $"service={Convert.ToHexString(payload.AsSpan(0, LegacyServicePrefixSize))}");
+            ReadOnlySpan<byte> canonicalPayload = payload.AsSpan(
+                LegacyServicePrefixSize,
+                BinaryLayoutConstants.GpToolDataSize);
+            if (!ToolDataAdapterRegistry.Default.TryParseRawFrame(canonicalPayload, out frame))
+            {
+                uint receivedSignature = BinaryPrimitives.ReadUInt32LittleEndian(canonicalPayload);
+                DeviceProtocolLog.Write(
+                    $"LEGACY DATA REJECTED | reason=unsupported_signature | signature=0x{receivedSignature:X8}");
+                return SerialOperationResult.InvalidSignature;
+            }
+
+            uint expectedSignature = CurrentMetrology?.Signature ?? DeviceSignature ?? 0u;
+            if (expectedSignature == 0u || frame.CanonicalData.Signature != expectedSignature)
+            {
+                DeviceProtocolLog.Write(
+                    $"LEGACY DATA REJECTED | reason=signature_mismatch | expected=0x{expectedSignature:X8} | " +
+                    $"received=0x{frame.CanonicalData.Signature:X8}");
+                return SerialOperationResult.CrcError;
+            }
+
+            ToolIdentity identity = UniversalCanonicalAdapter.BuildIdentity(frame.CanonicalData.Signature);
+            if (!identity.IsCartographLwd4TxMode)
+            {
+                DeviceProtocolLog.Write(
+                    $"LEGACY DATA REJECTED | reason=not_cartograph_4tx | tool_code={identity.ToolCode} | " +
+                    $"type={identity.DeviceType} | tx={identity.TransmitterCount} | modification={identity.Modification}");
+                return SerialOperationResult.InvalidSignature;
+            }
+
+            rawPayload = canonicalPayload.ToArray();
+            DeviceProtocolLog.Write(
+                $"LEGACY DATA ACCEPTED | signature=0x{frame.CanonicalData.Signature:X8} | " +
+                $"tool_code={identity.ToolCode} | type={identity.DeviceType} | tx={identity.TransmitterCount} | " +
+                $"modification={identity.Modification} | frame={frame.CanonicalData.Frame}");
+            return SerialOperationResult.Success;
+        }
+
+        return lastResult;
     }
 
     private void ProbeDeviceInformationCore()
     {
         lock (ioSync)
         {
-            if (ExchangePacketCore(CommandSignature, [], out byte signatureCommand, out byte[] signaturePayload) == SerialOperationResult.Success
+            DeviceProtocolLog.Write(
+                $"PROBE START | previous_protocol={(useLegacyCartographProtocol ? "LEGACY_LOOP_NEXT" : "UNKNOWN_OR_FRAMED")}");
+            if (useLegacyCartographProtocol)
+            {
+                ConfigureLegacyLineSignals(serialPort);
+                MetrologyReadResult knownLegacyResult = ReadLegacyMetrologyCore(
+                    preReceiveDelayMilliseconds: LegacyMetrologyPreReceiveDelayMilliseconds);
+                if (knownLegacyResult.IsSuccess && TryActivateLegacyCartographMode(knownLegacyResult.Data, "reconnect"))
+                {
+                    return;
+                }
+
+                DeviceProtocolLog.Write(
+                    $"PROBE LEGACY RECONNECT FAILED | result={knownLegacyResult.Result}; continuing with full detection");
+                useLegacyCartographProtocol = false;
+                ConfigureFramedLineSignals(serialPort);
+            }
+
+            SerialOperationResult signatureResult = ExchangePacketCore(
+                CommandSignature,
+                [],
+                out byte signatureCommand,
+                out byte[] signaturePayload);
+            DeviceProtocolLog.Write(
+                $"PROBE FRAMED SIGNATURE | result={signatureResult} | response_cmd=0x{signatureCommand:X2} | " +
+                $"payload_length={signaturePayload.Length}");
+            if (signatureResult == SerialOperationResult.Success
                 && signatureCommand == CommandSignature
                 && signaturePayload.Length >= sizeof(uint))
             {
                 DeviceSignature = BinaryPrimitives.ReadUInt32LittleEndian(signaturePayload);
+                LogIdentity("PROBE FRAMED SIGNATURE DECODED", DeviceSignature.Value);
             }
 
-            if (ExchangePacketCore(CommandMetrology, [], out byte metrologyCommand, out byte[] metrologyPayload) == SerialOperationResult.Success
+            SerialOperationResult metrologyResult = ExchangePacketCore(
+                CommandMetrology,
+                [],
+                out byte metrologyCommand,
+                out byte[] metrologyPayload);
+            DeviceProtocolLog.Write(
+                $"PROBE FRAMED METROLOGY | result={metrologyResult} | response_cmd=0x{metrologyCommand:X2} | " +
+                $"payload_length={metrologyPayload.Length}");
+            if (metrologyResult == SerialOperationResult.Success
                 && metrologyCommand == CommandMetrology
                 && metrologyPayload.Length == BinaryLayoutConstants.MetrologyDataSize)
             {
-                UpdateMetrologyCache(MemoryMarshal.Read<MetrologyData>(metrologyPayload));
+                MetrologyData data = MemoryMarshal.Read<MetrologyData>(metrologyPayload);
+                UpdateMetrologyCache(data);
+                ToolIdentity identity = LogIdentity("PROBE FRAMED METROLOGY DECODED", data.Signature);
+                if (identity.IsCartographLwd4TxMode)
+                {
+                    ConfigureLegacyLineSignals(serialPort);
+                    useLegacyCartographProtocol = true;
+                    DeviceProtocolLog.Write(
+                        "PROTOCOL SELECTED | protocol=LEGACY_LOOP_NEXT | source=framed_metrology_signature");
+                }
+
+                return;
             }
+
+            DeviceProtocolLog.Write(
+                "PROBE FALLBACK | target=LEGACY_LOOP_NEXT | reason=framed_metrology_not_available");
+            ConfigureLegacyLineSignals(serialPort);
+            TryDiscardBuffers(serialPort, discardOutput: true);
+            MetrologyReadResult legacyResult = ReadLegacyMetrologyCore(
+                preReceiveDelayMilliseconds: LegacyMetrologyPreReceiveDelayMilliseconds);
+            if (legacyResult.IsSuccess && TryActivateLegacyCartographMode(legacyResult.Data, "legacy_metrology"))
+            {
+                return;
+            }
+
+            DeviceProtocolLog.Write(
+                $"PROBE FINISHED WITHOUT LEGACY ACTIVATION | legacy_result={legacyResult.Result} | " +
+                $"device_signature={(DeviceSignature is uint value ? $"0x{value:X8}" : "unknown")}");
+            ConfigureFramedLineSignals(serialPort);
         }
     }
 
@@ -519,6 +701,22 @@ public sealed class SerialDeviceService : IDisposable
     {
         lock (ioSync)
         {
+            if (useLegacyCartographProtocol)
+            {
+                MetrologyReadResult legacyResult = ReadLegacyMetrologyCore(preReceiveDelayMilliseconds: 0);
+                if (!legacyResult.IsSuccess)
+                {
+                    return legacyResult;
+                }
+
+                if (!TryActivateLegacyCartographMode(legacyResult.Data, "manual_metrology_read"))
+                {
+                    return new MetrologyReadResult(SerialOperationResult.InvalidSignature, default);
+                }
+
+                return legacyResult;
+            }
+
             SerialOperationResult result = ExchangeControlPacketCore(
                 CommandMetrology,
                 [],
@@ -554,28 +752,41 @@ public sealed class SerialDeviceService : IDisposable
 
         lock (ioSync)
         {
-            SerialOperationResult result = ExchangeControlPacketCore(
-                CommandMetrology,
-                bytes,
-                out byte responseCommand,
-                out byte[] responsePayload);
-            if (result != SerialOperationResult.Success)
+            if (useLegacyCartographProtocol)
             {
-                return result;
-            }
+                SerialOperationResult legacyWriteResult = WriteLegacyMetrologyCore(data);
+                if (legacyWriteResult != SerialOperationResult.Success)
+                {
+                    return legacyWriteResult;
+                }
 
-            if (responseCommand != CommandMetrology
-                || responsePayload.Length is not (0 or 1 or BinaryLayoutConstants.MetrologyDataSize))
+                UpdateMetrologyCache(data);
+            }
+            else
             {
-                return SerialOperationResult.InvalidResponse;
-            }
+                SerialOperationResult result = ExchangeControlPacketCore(
+                    CommandMetrology,
+                    bytes,
+                    out byte responseCommand,
+                    out byte[] responsePayload);
+                if (result != SerialOperationResult.Success)
+                {
+                    return result;
+                }
 
-            if (responsePayload.Length == BinaryLayoutConstants.MetrologyDataSize)
-            {
-                applied = MemoryMarshal.Read<MetrologyData>(responsePayload);
-            }
+                if (responseCommand != CommandMetrology
+                    || responsePayload.Length is not (0 or 1 or BinaryLayoutConstants.MetrologyDataSize))
+                {
+                    return SerialOperationResult.InvalidResponse;
+                }
 
-            UpdateMetrologyCache(applied);
+                if (responsePayload.Length == BinaryLayoutConstants.MetrologyDataSize)
+                {
+                    applied = MemoryMarshal.Read<MetrologyData>(responsePayload);
+                }
+
+                UpdateMetrologyCache(applied);
+            }
         }
 
         Thread.Sleep(300);
@@ -591,6 +802,13 @@ public sealed class SerialDeviceService : IDisposable
 
     private SerialOperationResult SetSelectedKeyCore(uint key)
     {
+        if (useLegacyCartographProtocol)
+        {
+            DeviceProtocolLog.Write(
+                $"LEGACY CONTROL REJECTED | command=0x{CommandSelectedKey:X2} | reason=no_source_backed_LOOP_NEXT_contract");
+            return SerialOperationResult.InvalidResponse;
+        }
+
         Span<byte> payload = stackalloc byte[sizeof(uint)];
         BinaryPrimitives.WriteUInt32LittleEndian(payload, key);
         lock (ioSync)
@@ -619,6 +837,13 @@ public sealed class SerialDeviceService : IDisposable
         }
 
         Thread.Sleep(2000);
+        if (useLegacyCartographProtocol)
+        {
+            DeviceProtocolLog.Write(
+                $"LEGACY CONTROL REJECTED | command=0x{CommandAirCalibration:X2} | reason=no_source_backed_LOOP_NEXT_contract");
+            return SerialOperationResult.InvalidResponse;
+        }
+
         lock (ioSync)
         {
             SerialOperationResult result = ExchangeControlPacketCore(
@@ -629,6 +854,206 @@ public sealed class SerialDeviceService : IDisposable
             return result == SerialOperationResult.Success && responseCommand != CommandAirCalibration
                 ? SerialOperationResult.InvalidResponse
                 : result;
+        }
+    }
+
+    private MetrologyReadResult ReadLegacyMetrologyCore(int preReceiveDelayMilliseconds)
+    {
+        SerialPort? port = serialPort;
+        if (port?.IsOpen != true)
+        {
+            return new MetrologyReadResult(SerialOperationResult.NotConnected, default);
+        }
+
+        Span<byte> request = stackalloc byte[] { LegacyReadSubCommand, 0x00 };
+        SerialOperationResult lastResult = SerialOperationResult.Timeout;
+        DeviceProtocolLog.Write(
+            $"LEGACY METROLOGY START | attempts={LegacyMetrologyReadAttempts} | " +
+            $"pre_receive_delay_ms={preReceiveDelayMilliseconds} | expected_payload={LegacyPayloadSize}");
+
+        for (int attempt = 1; attempt <= LegacyMetrologyReadAttempts; attempt++)
+        {
+            TryDiscardBuffers(port, discardOutput: false);
+            DeviceProtocolLog.Write(
+                $"LEGACY METROLOGY ATTEMPT | attempt={attempt}/{LegacyMetrologyReadAttempts}");
+            SerialOperationResult sendResult = LegacyToolSerialTransport.Send(port, CommandMetrology, request);
+            if (sendResult != SerialOperationResult.Success)
+            {
+                lastResult = sendResult;
+            }
+            else
+            {
+                if (preReceiveDelayMilliseconds > 0)
+                {
+                    Thread.Sleep(preReceiveDelayMilliseconds);
+                }
+
+                SerialOperationResult receiveResult = LegacyToolSerialTransport.Receive(
+                    port,
+                    LegacyPayloadSize,
+                    acceptZeroCrc: false,
+                    out byte responseCommand,
+                    out byte[] payload);
+                lastResult = receiveResult;
+                if (receiveResult == SerialOperationResult.Success)
+                {
+                    DeviceProtocolLog.Write(
+                        $"LEGACY METROLOGY PAYLOAD | response_cmd=0x{responseCommand:X2} | " +
+                        $"service={Convert.ToHexString(payload.AsSpan(0, LegacyServicePrefixSize))}");
+                    MetrologyData data = MemoryMarshal.Read<MetrologyData>(
+                        payload.AsSpan(LegacyServicePrefixSize, BinaryLayoutConstants.MetrologyDataSize));
+                    LogIdentity("LEGACY METROLOGY DECODED", data.Signature);
+                    return new MetrologyReadResult(SerialOperationResult.Success, data);
+                }
+            }
+
+            DeviceProtocolLog.Write(
+                $"LEGACY METROLOGY ATTEMPT FAILED | attempt={attempt} | result={lastResult}");
+            if (attempt < LegacyMetrologyReadAttempts)
+            {
+                TryDiscardBuffers(port, discardOutput: false);
+                Thread.Sleep(LegacyRetryDelayMilliseconds);
+            }
+        }
+
+        return new MetrologyReadResult(lastResult, default);
+    }
+
+    private SerialOperationResult WriteLegacyMetrologyCore(MetrologyData data)
+    {
+        SerialPort? port = serialPort;
+        if (port?.IsOpen != true)
+        {
+            return SerialOperationResult.NotConnected;
+        }
+
+        byte[] request = new byte[LegacyPayloadSize];
+        request[0] = LegacyWriteSubCommand;
+        request[1] = 0x00;
+        MemoryMarshal.Write(request.AsSpan(LegacyServicePrefixSize), in data);
+        TryDiscardBuffers(port, discardOutput: true);
+        DeviceProtocolLog.Write(
+            $"LEGACY METROLOGY WRITE START | signature=0x{data.Signature:X8} | serial={data.Serial} | " +
+            $"payload_length={request.Length}");
+
+        SerialOperationResult sendResult = LegacyToolSerialTransport.Send(port, CommandMetrology, request);
+        if (sendResult != SerialOperationResult.Success)
+        {
+            return sendResult;
+        }
+
+        Thread.Sleep(LegacyMetrologyWritePreReceiveDelayMilliseconds);
+        SerialOperationResult receiveResult = LegacyToolSerialTransport.Receive(
+            port,
+            payloadLength: LegacyServicePrefixSize,
+            acceptZeroCrc: false,
+            out byte responseCommand,
+            out byte[] responsePayload);
+        DeviceProtocolLog.Write(
+            $"LEGACY METROLOGY WRITE RESULT | result={receiveResult} | response_cmd=0x{responseCommand:X2} | " +
+            $"response_payload={DeviceProtocolLog.FormatBytes(responsePayload)}");
+        return receiveResult;
+    }
+
+    private bool TryActivateLegacyCartographMode(MetrologyData data, string source)
+    {
+        ToolIdentity identity = LogIdentity($"LEGACY ACTIVATION CHECK | source={source}", data.Signature);
+        if (!identity.IsCartographLwd4TxMode)
+        {
+            DeviceProtocolLog.Write(
+                $"LEGACY ACTIVATION REJECTED | source={source} | tool_code={identity.ToolCode} | " +
+                $"type={identity.DeviceType} | tx={identity.TransmitterCount} | modification={identity.Modification}");
+            return false;
+        }
+
+        DeviceSignature = data.Signature;
+        UpdateMetrologyCache(data);
+        useLegacyCartographProtocol = true;
+        DeviceProtocolLog.Write(
+            $"PROTOCOL SELECTED | protocol=LEGACY_LOOP_NEXT | source={source} | signature=0x{data.Signature:X8} | " +
+            $"tool_code={identity.ToolCode} | type={identity.DeviceType} | tx={identity.TransmitterCount} | " +
+            $"modification={identity.Modification} | modification_used_for_routing=false");
+        return true;
+    }
+
+    private static ToolIdentity LogIdentity(string operation, uint signature)
+    {
+        ToolIdentity identity = UniversalCanonicalAdapter.BuildIdentity(signature);
+        DeviceProtocolLog.Write(
+            $"{operation} | signature=0x{signature:X8} | tool_code={identity.ToolCode} | " +
+            $"type={identity.DeviceType} | tx={identity.TransmitterCount} | modification={identity.Modification} | " +
+            $"cartograph_lwd_4tx={identity.IsCartographLwd4TxMode}");
+        return identity;
+    }
+
+    private static void TryDiscardBuffers(SerialPort? port, bool discardOutput)
+    {
+        if (port?.IsOpen != true)
+        {
+            return;
+        }
+
+        try
+        {
+            int bytesAvailable = port.BytesToRead;
+            port.DiscardInBuffer();
+            if (discardOutput)
+            {
+                port.DiscardOutBuffer();
+            }
+
+            DeviceProtocolLog.Write(
+                $"PORT BUFFERS DISCARDED | input_bytes={bytesAvailable} | output={discardOutput}");
+        }
+        catch (Exception exception)
+        {
+            DeviceProtocolLog.Write(exception, "PORT BUFFER DISCARD FAILED");
+        }
+    }
+
+    private static void ConfigureLegacyLineSignals(SerialPort? port)
+    {
+        ConfigureLineSignals(port, dtrEnable: false, rtsEnable: false, protocol: "LEGACY_LOOP_NEXT");
+    }
+
+    private static void ConfigureFramedLineSignals(SerialPort? port)
+    {
+        ConfigureLineSignals(port, dtrEnable: true, rtsEnable: true, protocol: "FRAMED_LEN");
+    }
+
+    private static void ConfigureLineSignals(
+        SerialPort? port,
+        bool dtrEnable,
+        bool rtsEnable,
+        string protocol)
+    {
+        if (port?.IsOpen != true)
+        {
+            return;
+        }
+
+        try
+        {
+            if (port.DtrEnable == dtrEnable && port.RtsEnable == rtsEnable)
+            {
+                DeviceProtocolLog.Write(
+                    $"PORT LINE SIGNALS UNCHANGED | protocol={protocol} | dtr={dtrEnable} | rts={rtsEnable}");
+                return;
+            }
+
+            port.DtrEnable = dtrEnable;
+            port.RtsEnable = rtsEnable;
+            TryDiscardBuffers(port, discardOutput: true);
+            Thread.Sleep(LegacyPostOpenDelayMilliseconds);
+            DeviceProtocolLog.Write(
+                $"PORT LINE SIGNALS APPLIED | protocol={protocol} | dtr={port.DtrEnable} | rts={port.RtsEnable} | " +
+                $"settle_delay_ms={LegacyPostOpenDelayMilliseconds}");
+        }
+        catch (Exception exception)
+        {
+            DeviceProtocolLog.Write(
+                exception,
+                $"PORT LINE SIGNALS FAILED | protocol={protocol} | requested_dtr={dtrEnable} | requested_rts={rtsEnable}");
         }
     }
 
@@ -667,24 +1092,11 @@ public sealed class SerialDeviceService : IDisposable
         Metrology = new DeviceMetrologySummary(data.Signature, data.Serial, data.SondeDiameterMm);
     }
 
-    private bool TryGetCartographLwd4TxExpectedSignature(out uint signature)
-    {
-        signature = CurrentMetrology?.Signature ?? DeviceSignature ?? 0u;
-        if (signature == 0u)
-        {
-            return false;
-        }
-
-        var identity = UniversalCanonicalAdapter.BuildIdentity(signature);
-        return identity.IsCartographLwd4TxMode;
-    }
-
     private SerialOperationResult ExchangePacketCore(
         byte command,
         ReadOnlySpan<byte> payload,
         out byte responseCommand,
-        out byte[] responsePayload,
-        bool acceptZeroCrc = false)
+        out byte[] responsePayload)
     {
         responseCommand = 0;
         responsePayload = [];
@@ -699,16 +1111,19 @@ public sealed class SerialDeviceService : IDisposable
             port.DiscardInBuffer();
             port.DiscardOutBuffer();
             byte[] packet = BuildPacket(command, payload);
+            DeviceProtocolLog.Write(
+                $"FRAMED TX | port={port.PortName} | cmd=0x{command:X2} | payload_length={payload.Length} | " +
+                $"packet_length={packet.Length} | packet={DeviceProtocolLog.FormatBytes(packet)}");
             port.Write(packet, 0, packet.Length);
-            if (acceptZeroCrc)
-            {
-                Thread.Sleep(CartographLwd4TxPreReceiveDelayMilliseconds);
-            }
 
             byte[] header = ReadExactly(port, PacketHeaderSize);
             int totalLength = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1, 2));
+            DeviceProtocolLog.Write(
+                $"FRAMED RX HEADER | header={Convert.ToHexString(header)} | declared_total_length={totalLength}");
             if (totalLength < MinimumPacketSize || totalLength > MaximumPacketSize)
             {
+                DeviceProtocolLog.Write(
+                    $"FRAMED RX REJECTED | reason=invalid_length | declared_total_length={totalLength}");
                 return SerialOperationResult.InvalidResponse;
             }
 
@@ -716,21 +1131,31 @@ public sealed class SerialDeviceService : IDisposable
             byte[] response = new byte[totalLength];
             header.CopyTo(response, 0);
             tail.CopyTo(response, PacketHeaderSize);
-            if (!ValidateCrc(response, acceptZeroCrc))
+            if (!ValidateCrc(response))
             {
+                ushort calculated = CalculateCrc16(response.AsSpan(0, totalLength - PacketCrcSize));
+                ushort received = BinaryPrimitives.ReadUInt16LittleEndian(response.AsSpan(totalLength - PacketCrcSize));
+                DeviceProtocolLog.Write(
+                    $"FRAMED RX CRC_ERROR | calculated=0x{calculated:X4} | received=0x{received:X4} | " +
+                    $"packet={DeviceProtocolLog.FormatBytes(response)}");
                 return SerialOperationResult.CrcError;
             }
 
             responseCommand = response[0];
             responsePayload = response.AsSpan(PacketHeaderSize, totalLength - MinimumPacketSize).ToArray();
+            DeviceProtocolLog.Write(
+                $"FRAMED RX OK | cmd=0x{responseCommand:X2} | payload_length={responsePayload.Length} | " +
+                $"packet={DeviceProtocolLog.FormatBytes(response)}");
             return SerialOperationResult.Success;
         }
-        catch (TimeoutException)
+        catch (TimeoutException exception)
         {
+            DeviceProtocolLog.Write(exception, $"FRAMED RX TIMEOUT | cmd=0x{command:X2}");
             return SerialOperationResult.Timeout;
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
+            DeviceProtocolLog.Write(exception, $"FRAMED EXCHANGE FAILED | cmd=0x{command:X2}");
             return SerialOperationResult.ConnectionFailed;
         }
     }
@@ -802,6 +1227,8 @@ public sealed class SerialDeviceService : IDisposable
         while (offset < count)
         {
             int read = port.Read(buffer, offset, count - offset);
+            DeviceProtocolLog.Write(
+                $"FRAMED RX CHUNK | read={read} | accumulated={offset + Math.Max(read, 0)}/{count}");
             if (read <= 0)
             {
                 throw new TimeoutException();
@@ -828,7 +1255,7 @@ public sealed class SerialDeviceService : IDisposable
         return crc;
     }
 
-    private static bool ValidateCrc(ReadOnlySpan<byte> packet, bool acceptZeroCrc = false)
+    private static bool ValidateCrc(ReadOnlySpan<byte> packet)
     {
         if (packet.Length < MinimumPacketSize)
         {
@@ -837,7 +1264,7 @@ public sealed class SerialDeviceService : IDisposable
 
         ushort calculated = CalculateCrc16(packet[..^PacketCrcSize]);
         ushort received = BinaryPrimitives.ReadUInt16LittleEndian(packet[^PacketCrcSize..]);
-        return calculated == received || (acceptZeroCrc && received == 0);
+        return calculated == received;
     }
 
     private static int GetPortNumber(string portName)
@@ -889,6 +1316,9 @@ public sealed class SerialDeviceService : IDisposable
         {
             if (serialPort.IsOpen)
             {
+                DeviceProtocolLog.Write(
+                    $"PORT CLOSE START | port={serialPort.PortName} | " +
+                    $"protocol={(useLegacyCartographProtocol ? "LEGACY_LOOP_NEXT" : "FRAMED_LEN")}");
                 serialPort.Close();
             }
         }
@@ -899,6 +1329,7 @@ public sealed class SerialDeviceService : IDisposable
         {
             serialPort.Dispose();
             serialPort = null;
+            DeviceProtocolLog.Write("PORT CLOSE COMPLETED");
         }
     }
 

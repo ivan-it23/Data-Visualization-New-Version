@@ -75,7 +75,9 @@ public sealed class SerialConnectionSettings
 
     public bool ShowFullExistingFile { get; set; }
 
-    public string RecordFolder { get; set; } = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+    public string RecordFolder { get; set; } = SerialRecordingFolder.DefaultPath;
+
+    public int RecordFolderSettingsVersion { get; set; }
 
     public string ExistingRecordFile { get; set; } = string.Empty;
 }

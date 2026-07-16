@@ -49,7 +49,7 @@ public readonly struct ToolDataAccessView
             return false;
         }
 
-        value = record.GetAmplitudeRx1(frequencyIndex, transmitterIndex);
+        value = ScaleAmplitude(record.GetAmplitudeRx1(frequencyIndex, transmitterIndex));
         return true;
     }
 
@@ -61,7 +61,7 @@ public readonly struct ToolDataAccessView
             return false;
         }
 
-        value = record.GetAmplitudeRx2(frequencyIndex, transmitterIndex);
+        value = ScaleAmplitude(record.GetAmplitudeRx2(frequencyIndex, transmitterIndex));
         return true;
     }
 
@@ -97,7 +97,7 @@ public readonly struct ToolDataAccessView
             return false;
         }
 
-        value = record.GetZeroAmplitudeRx1(frequencyIndex);
+        value = ScaleAmplitude(record.GetZeroAmplitudeRx1(frequencyIndex));
         return true;
     }
 
@@ -109,7 +109,7 @@ public readonly struct ToolDataAccessView
             return false;
         }
 
-        value = record.GetZeroAmplitudeRx2(frequencyIndex);
+        value = ScaleAmplitude(record.GetZeroAmplitudeRx2(frequencyIndex));
         return true;
     }
 
@@ -126,6 +126,11 @@ public readonly struct ToolDataAccessView
     }
 
     public float Temperature => IsValid ? record.Temperature : 0;
+
+    private float ScaleAmplitude(float value)
+    {
+        return value * Capabilities.AmplitudeScale;
+    }
 
     private bool CanReadChannel(int frequencyIndex, int transmitterIndex)
     {

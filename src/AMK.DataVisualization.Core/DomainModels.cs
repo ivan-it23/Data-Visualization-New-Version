@@ -26,6 +26,7 @@ public enum ToolDataKind
 public sealed record ToolCapabilities(
     ToolDataKind Kind,
     int TransmitterCount,
+    float AmplitudeScale,
     bool HasT5,
     bool HasSeparatePhaseRx,
     bool HasDeltaPhase,
@@ -43,6 +44,7 @@ public sealed record ToolCapabilities(
     public static ToolCapabilities Empty { get; } = new(
         ToolDataKind.Unknown,
         0,
+        1.0f,
         false,
         false,
         false,

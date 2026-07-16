@@ -25,6 +25,8 @@ public interface IToolDataAdapter
 
 public sealed class UniversalCanonicalAdapter : IToolDataAdapter
 {
+    private const float CartographLwdAmplitudeScale = 1.0f / 4096.0f;
+
     // Картограф с четырьмя передатчиками использует тот же 240-байтовый
     // GP_TOOL_DATA, что и LWD. Модификация не участвует в распознавании режима.
 
@@ -130,6 +132,7 @@ public sealed class UniversalCanonicalAdapter : IToolDataAdapter
         return new ToolCapabilities(
             kind,
             transmitterCount,
+            DetermineAmplitudeScale(toolCode),
             transmitterCount >= BinaryLayoutConstants.MaxTransmitterCount,
             HasSeparatePhaseRx: true,
             HasDeltaPhase: true,
@@ -143,6 +146,16 @@ public sealed class UniversalCanonicalAdapter : IToolDataAdapter
             SupportsDevContainer: true,
             SupportsComPolling: true,
             SupportsSilentData: true);
+    }
+
+    public static float DetermineAmplitudeScale(uint toolCode)
+    {
+        // Картограф в режиме LWD передаёт активные и молчащие амплитуды
+        // в Q12-масштабе. После нормализации значения совпадают с mV-контрактом
+        // обычного LWD; остальные поля структуры уже используют LWD-единицы.
+        return IsCartographLwd4TxMode(toolCode)
+            ? CartographLwdAmplitudeScale
+            : 1.0f;
     }
 
     public static ToolIdentity BuildIdentity(uint signature)

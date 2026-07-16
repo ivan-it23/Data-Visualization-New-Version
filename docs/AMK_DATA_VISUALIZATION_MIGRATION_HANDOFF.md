@@ -48,7 +48,7 @@
 | Core | `Binary/BinaryStructs.cs`, `Adapters/ToolDataAdapterRegistry.cs`, `Access/ToolDataAccessView.cs` | binary contracts и semantic access |
 | IO | `DataFiles/ToolDataFileReader.cs`, `ToolDataRepository.cs`, `ToolDataRangeExporter.cs` | файлы, repository, range export |
 | Charting | `Series/ChartDataCalculator.cs`, `Configuration/*.cs` | series, конфигурации, presets |
-| Hardware | `Serial/SerialDeviceService.cs`, `SerialContracts.cs`, `SerialConnectionSettingsStore.cs` | COM/polling/recording |
+| Hardware | `Serial/SerialDeviceService.cs`, `LegacyToolSerialTransport.cs`, `DeviceProtocolLog.cs` | dual COM transport, polling, recording и файловая диагностика |
 | Metrology | `MetrologySession.cs`, `MetrologyCalculator.cs` | файлы, состояние, 3/4/5Tx phase/rho FromComputer |
 | Reporting | только `.csproj` | прикладной код отсутствует |
 
@@ -74,10 +74,21 @@
   недоступным;
 - логический `ToolDataKind` этой ветки — `Lwd`, физический `DeviceType` —
   `Cartograph`;
+- semantic access-view применяет к активным и молчащим амплитудам коэффициент
+  `1 / 4096`, переводя Q12-представление Картографа в общий LWD-контракт `mV`;
+  отношение амплитуд остаётся безразмерным, а фазы, УЭС и температура не
+  масштабируются;
 - обычный `Картограф 5tx` не принимается этим adapter, потому что использует
   другую бинарную структуру;
 - при live-опросе нулевой CRC допускается только для этого режима; после такого
   приёма сигнатура кадра обязана совпасть с сигнатурой метрологии/прибора;
+- `LOOP_NEXT` transport читает фиксированный ответ
+  `[CMD:1][PAYLOAD:242][CRC16:2]`: первые два байта payload служебные, следующие
+  240 байт — `GpToolData`/`MetrologyData`; поле `LEN` в этой ветке не
+  интерпретируется;
+- фактический успешный ответ `LOOP_NEXT` для сигнатуры `0x00055349` начинается
+  `11 05 06 49 53 05 00`; прежний общий parser ошибочно принимал `05 06` за
+  длину `1541`, поэтому не мог принять ни одного такого кадра;
 
 ### Repository
 
@@ -130,14 +141,17 @@ FileOpenPicker
 
 ```text
 SerialDeviceService
-  → packet length / CRC16 validation
+  → normal: packet length / CRC16 validation
+  → Cartograph 4tx: fixed 242-byte LOOP_NEXT payload / CRC16 validation
   → ParsedToolFrame
   → primary ToolDataRepository
   → Graph 1 и linked Graph 2
 ```
 
 Параллельно сервис может создавать canonical `.bin` или дописывать выбранный
-существующий файл.
+существующий файл. `DeviceProtocolLog` с первой попытки подключения пишет в
+`<корень проекта>\CartographLwd4Tx.log` последовательность TX/RX, размеры,
+сырые head/tail, CRC, таймауты, выбор transport и причины отклонения кадров.
 
 ## 7. Текущее окно «Схема прибора»
 
@@ -247,7 +261,11 @@ SerialDeviceService
 
 - `AMK-Data-Visualization/Views/ConnectionSettingsWindow.xaml`;
 - `AMK-Data-Visualization/Views/ConnectionSettingsWindow.xaml.cs`;
-- `src/AMK.DataVisualization.Hardware/Serial/SerialDeviceService.cs`.
+- `src/AMK.DataVisualization.Hardware/Serial/SerialDeviceService.cs`;
+- `src/AMK.DataVisualization.Hardware/Serial/SerialConnectionSettingsStore.cs`;
+- `src/AMK.DataVisualization.Hardware/Serial/SerialRecordingFolder.cs`;
+- `src/AMK.DataVisualization.Hardware/Serial/LegacyToolSerialTransport.cs`;
+- `src/AMK.DataVisualization.Hardware/Serial/DeviceProtocolLog.cs`.
 
 UI:
 
@@ -265,10 +283,25 @@ Settings path:
 
 `%LOCALAPPDATA%\AMK-Data-Visualization\connection-settings.json`
 
+Папка записи:
+
+- default — системный рабочий стол + `AMK_Data`; папка создаётся при загрузке
+  настроек, конфигурировании записи и повторно непосредственно перед созданием
+  файла;
+- путь, выбранный пользователем через `Папка...`, сохраняется в settings и
+  используется при следующих запусках;
+- старое значение, равное корню рабочего стола и сохранённое прежней WinUI-
+  реализацией, одноразово мигрирует в `Desktop\AMK_Data`; версия настройки не
+  позволяет этой миграции переопределить последующий явный выбор пользователя.
+
 Протокол:
 
-- 125000 baud, 8N1, no handshake, DTR/RTS enabled;
-- packet `[CMD:1][LEN:2][PAYLOAD][CRC16:2]`;
+- 125000 baud, 8N1, no handshake;
+- обычный AMK transport: DTR/RTS enabled и packet
+  `[CMD:1][LEN:2][PAYLOAD][CRC16:2]`;
+- `Картограф LWD 4tx`: DTR/RTS disabled как в `LOOP_NEXT`, фиксированный packet
+  `[CMD:1][PAYLOAD:N][CRC16:2]`, запрос `{05 00}`, ответ `N=242`, canonical
+  структура со смещения 2;
 - CRC16 с initial `0xFFFF` и polynomial `0xA001`;
 - `0x11`: canonical frame;
 - `0x13`: metrology;
@@ -311,11 +344,13 @@ Settings path:
 
 - метрологический файл — ровно 240 байт;
 - чтение выполняется командой `0x13`;
-- запись отправляет `0x13` с payload 240 байт и затем верифицирует повторным
-  чтением;
-- selected key передаётся через `0x17`;
-- автокалибровка воздуха запускается через `0x1A`, затем метрология
-  перечитывается;
+- запись обычному прибору отправляет `0x13` с payload 240 байт; legacy-ветка
+  отправляет `0x13` с `{F5 00}` + 240 байт и принимает двухбайтовый ответ, после
+  чего обе ветки верифицируются повторным чтением;
+- selected key `0x17` и автокалибровка воздуха `0x1A` реализованы для обычного
+  length-framed transport; для legacy-ветки в `LOOP_NEXT` нет подтверждённого
+  аппаратного контракта, поэтому команды не отправляются вслепую и возвращают
+  `InvalidResponse` с записью причины в журнал;
 - для `Картограф -> LWD-4TX` (тип `Картограф`, 4 Tx, любая модификация) кадр
   `0x11` разбирается как canonical `GpToolData`; допускается нулевой CRC с
   обязательной проверкой совпадения signature;
@@ -331,9 +366,10 @@ signature кадра должна совпасть с метрологией, и
 к canonical `FromSonde`.
 
 Runtime подтверждён для открытия окна, итоговой компоновки, полного содержимого
-ComboBox и переключения read-only всех 12 полей L1/L2/F1/F2. Не подтверждены на
-физическом приборе чтение/запись/`0x17`/`0x1A`; численный parity `FromComputer`
-со старым приложением на одинаковом реальном файле также ещё не выполнен.
+ComboBox и переключения read-only всех 12 полей L1/L2/F1/F2. Новый фиксированный
+transport собран и статически проверен на фактической сигнатуре `0x00055349`, но
+ещё не подтверждён повторным запуском этого приложения с физическим прибором.
+Численный parity `FromComputer` со старым приложением также ещё не выполнен.
 
 ### Частично реализованные controls shell
 
@@ -366,17 +402,21 @@ ComboBox и переключения read-only всех 12 полей L1/L2/F1/F
 - полный паритет всех series на реальных `.bin/.biv/.DEV`;
 - linked/independent Graph 2 с двумя контрольными файлами;
 - range export/cut на всех форматах;
-- COM-протокол, reconnect и запись на физическом приборе;
+- повторный COM-тест fixed transport `Картограф LWD 4tx`, reconnect и запись на
+  физическом приборе с анализом `CartographLwd4Tx.log`;
+- создание `Desktop\AMK_Data` по умолчанию и сохранение вручную выбранной папки
+  записи после перезапуска;
 - parity результатов `FromComputer` со старым приложением на реальных данных;
 - производительность на больших файлах.
 
 ## 12. Рекомендуемый следующий блок
 
-Последняя UI-задача по метрологии завершена. Сначала выполнить ручную
-parity-проверку `from_sonde`/`from_computer` на одинаковых реальных данных и
-проверить чтение, запись, selected key и air calibration на физическом приборе.
-Затем рекомендуемый порядок: `DeviceExchangeLog` → интерактивная geometry
-графика → notes/sidecar → file constructor → reporting и installer.
+Сначала вручную проверить быстрые и комбинированные пресеты `Картограф LWD 4tx`
+после Q12-нормализации амплитуд. Затем выполнить ручную parity-проверку
+`from_sonde`/`from_computer` на одинаковых реальных данных и проверить
+чтение/запись метрологии на физическом приборе. Следующие блоки:
+немодальное окно лога → интерактивная geometry графика → notes/sidecar → file
+constructor → reporting и installer.
 
 ## 13. Основные C++-якоря
 
