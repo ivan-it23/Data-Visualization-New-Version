@@ -16,10 +16,12 @@
 
         <ScrollBar
             x:Name="HorizontalAxisScrollBar"
-            Height="14"
+            Canvas.ZIndex="100"
+            Height="16"
             HorizontalAlignment="Stretch"
             VerticalAlignment="Bottom"
             AutomationProperties.Name="Прокрутка графика по оси X"
+            IndicatorMode="MouseIndicator"
             IsTabStop="True"
             Orientation="Horizontal"
             Scroll="HorizontalAxisScrollBar_Scroll"
@@ -27,10 +29,12 @@
 
         <ScrollBar
             x:Name="VerticalAxisScrollBar"
-            Width="14"
+            Canvas.ZIndex="100"
+            Width="16"
             HorizontalAlignment="Right"
             VerticalAlignment="Stretch"
             AutomationProperties.Name="Прокрутка графика по оси Y"
+            IndicatorMode="MouseIndicator"
             IsTabStop="True"
             Orientation="Vertical"
             Scroll="VerticalAxisScrollBar_Scroll"

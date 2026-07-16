@@ -129,6 +129,12 @@ internal sealed class ChartViewportState
         startIndex = newStart;
         endIndex = newStart + visibleCount - 1;
         IsToLatest = false;
+
+        // Horizontal navigation changes the data represented by the viewport.
+        // Release the Y selection made by drag-zoom so the renderer recalculates
+        // both axes from the newly visible records, matching legacy AutoFitYForCurrentX.
+        LeftYRange = null;
+        RightYRange = null;
         return true;
     }
 

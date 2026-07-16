@@ -131,11 +131,11 @@ public sealed partial class LineChartControl : UserControl
             HorizontalAxisScrollBar.SmallChange = Math.Max(1, Math.Round(maximumStart / 100.0));
             HorizontalAxisScrollBar.LargeChange = Math.Max(1, visibleCount);
             HorizontalAxisScrollBar.Value = Math.Clamp(visibleStartIndex, 0, maximumStart);
-            HorizontalAxisScrollBar.Visibility = Visibility.Visible;
+            SetScrollBarVisibility(HorizontalAxisScrollBar, true);
         }
         else
         {
-            HorizontalAxisScrollBar.Visibility = Visibility.Collapsed;
+            SetScrollBarVisibility(HorizontalAxisScrollBar, false);
         }
 
         ConfigureVerticalScrollBar();
@@ -766,7 +766,7 @@ public sealed partial class LineChartControl : UserControl
         AxisScrollContext? primary = leftYScrollContext ?? rightYScrollContext;
         if (primary is not { } context)
         {
-            VerticalAxisScrollBar.Visibility = Visibility.Collapsed;
+            SetScrollBarVisibility(VerticalAxisScrollBar, false);
             return;
         }
 
@@ -776,7 +776,24 @@ public sealed partial class LineChartControl : UserControl
         VerticalAxisScrollBar.SmallChange = Math.Max(context.MaximumOffset / 100.0, 0.000001);
         VerticalAxisScrollBar.LargeChange = Math.Max(context.ViewRange, VerticalAxisScrollBar.SmallChange);
         VerticalAxisScrollBar.Value = context.Value;
-        VerticalAxisScrollBar.Visibility = Visibility.Visible;
+        SetScrollBarVisibility(VerticalAxisScrollBar, true);
+    }
+
+    private static void SetScrollBarVisibility(ScrollBar scrollBar, bool isVisible)
+    {
+        if (!isVisible)
+        {
+            scrollBar.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        // A standalone WinUI ScrollBar can remain in the NoIndicator visual state even
+        // when Visibility is Visible. Keep the desktop indicator active explicitly so
+        // zoom and manually selected ranges always expose their navigation controls.
+        scrollBar.IndicatorMode = ScrollingIndicatorMode.MouseIndicator;
+        scrollBar.Visibility = Visibility.Visible;
+        scrollBar.ApplyTemplate();
+        VisualStateManager.GoToState(scrollBar, "MouseIndicator", useTransitions: false);
     }
 
     private static AxisScrollContext? BuildAxisScrollContext(
@@ -864,8 +881,8 @@ public sealed partial class LineChartControl : UserControl
     private void HideScrollBars()
     {
         updatingScrollBars = true;
-        HorizontalAxisScrollBar.Visibility = Visibility.Collapsed;
-        VerticalAxisScrollBar.Visibility = Visibility.Collapsed;
+        SetScrollBarVisibility(HorizontalAxisScrollBar, false);
+        SetScrollBarVisibility(VerticalAxisScrollBar, false);
         leftYScrollContext = null;
         rightYScrollContext = null;
         updatingScrollBars = false;
