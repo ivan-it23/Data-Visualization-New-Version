@@ -16,8 +16,8 @@
   <mp:PhoneIdentity PhoneProductId="7e6858dc-a621-4bbf-bd68-8ceb622e2fb2" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
   <Properties>
-    <DisplayName>AMK-Data-Visualization</DisplayName>
-    <PublisherDisplayName>Admin</PublisherDisplayName>
+    <DisplayName>Визуализация данных</DisplayName>
+    <PublisherDisplayName>ООО НПФ "АМК ГОРИЗОНТ"</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
 
@@ -35,8 +35,8 @@
       Executable="$targetnametoken$.exe"
       EntryPoint="$targetentrypoint$">
       <uap:VisualElements
-        DisplayName="AMK-Data-Visualization"
-        Description="AMK-Data-Visualization"
+        DisplayName="Визуализация данных"
+        Description="Приложение для визуализации и анализа данных геофизических приборов"
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">

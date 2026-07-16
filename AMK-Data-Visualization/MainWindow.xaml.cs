@@ -24,15 +24,25 @@ public sealed partial class MainWindow : Window
     private readonly SerialDeviceService serialDeviceService = new();
     private readonly SerialConnectionSettingsStore serialSettingsStore = new();
     private readonly MetrologySession metrologySession = new();
+    private readonly AutoUpdateService autoUpdateService = new();
+    private readonly CancellationTokenSource autoUpdateCancellation = new();
     private SchematicWindow? schematicWindow;
     private ConnectionSettingsWindow? connectionSettingsWindow;
     private MetrologyWindow? metrologyWindow;
     private bool initialMaximizeApplied;
     private bool updatingRangeControls;
+    private bool startupUpdateCheckScheduled;
+    private bool updateCheckInProgress;
 
     public MainWindow()
     {
         InitializeComponent();
+        string iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "DataVisualization.ico");
+        if (File.Exists(iconPath))
+        {
+            AppWindow.SetIcon(iconPath);
+        }
+
         GraphControl.ZoomRequested += (_, args) => ApplyPointerZoom(1, args);
         Graph2Control.ZoomRequested += (_, args) => ApplyPointerZoom(2, args);
         GraphControl.HorizontalScrollRequested += (_, args) => ScrollGraphX(1, args);
@@ -110,6 +120,131 @@ public sealed partial class MainWindow : Window
             File.AppendAllText(Path.Combine(Path.GetTempPath(), "amk-metrology-window-error.txt"), exception + Environment.NewLine);
             throw;
         }
+    }
+
+    private async void CheckForUpdatesButton_Click(object sender, RoutedEventArgs e)
+    {
+        await RunUpdateCheckAsync(silent: false, autoUpdateCancellation.Token);
+    }
+
+    private async Task CheckForUpdatesAfterStartupAsync()
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(3), autoUpdateCancellation.Token);
+            await RunUpdateCheckAsync(silent: true, autoUpdateCancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private async Task RunUpdateCheckAsync(bool silent, CancellationToken cancellationToken)
+    {
+        if (updateCheckInProgress)
+        {
+            return;
+        }
+
+        updateCheckInProgress = true;
+        UpdateCheckButton.IsEnabled = false;
+        if (!silent)
+        {
+            SetStatus("Проверка обновлений...");
+        }
+
+        try
+        {
+            UpdateCheckResult update = await autoUpdateService.CheckForUpdateAsync(cancellationToken);
+            if (!update.IsSuccessful)
+            {
+                if (!silent)
+                {
+                    await ShowUpdateMessageAsync("Проверка обновлений", update.ErrorMessage);
+                    SetStatus("Не удалось проверить обновления");
+                }
+
+                return;
+            }
+
+            if (!update.IsAvailable)
+            {
+                if (!silent)
+                {
+                    string current = AutoUpdateService.FormatVersion(update.CurrentVersion);
+                    await ShowUpdateMessageAsync(
+                        "Проверка обновлений",
+                        $"Установлена последняя версия ({current}).");
+                    SetStatus("Установлена последняя версия");
+                }
+
+                return;
+            }
+
+            string currentVersion = AutoUpdateService.FormatVersion(update.CurrentVersion);
+            string remoteVersion = AutoUpdateService.FormatVersion(update.RemoteVersion);
+            ContentDialog prompt = new()
+            {
+                XamlRoot = Content.XamlRoot,
+                Title = "Обновление доступно",
+                Content = $"Доступна версия {remoteVersion}.\nТекущая версия: {currentVersion}.\n\nСкачать и установить обновление?",
+                PrimaryButtonText = "Скачать и установить",
+                CloseButtonText = "Позже",
+                DefaultButton = ContentDialogButton.Primary
+            };
+            if (await prompt.ShowAsync() != ContentDialogResult.Primary)
+            {
+                SetStatus("Обновление отложено");
+                return;
+            }
+
+            SetStatus($"Загрузка обновления {remoteVersion}...");
+            string installerPath = await autoUpdateService.DownloadInstallerAsync(update, cancellationToken);
+            if (!AutoUpdateService.StartInstaller(installerPath))
+            {
+                await ShowUpdateMessageAsync(
+                    "Ошибка обновления",
+                    "Установщик скачан, но его не удалось запустить.");
+                SetStatus("Не удалось запустить установщик обновления");
+                return;
+            }
+
+            SetStatus("Установщик обновления запущен");
+            Close();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception) when (exception is IOException
+                                           or InvalidDataException
+                                           or HttpRequestException
+                                           or UnauthorizedAccessException
+                                           or System.ComponentModel.Win32Exception)
+        {
+            if (!silent || !autoUpdateCancellation.IsCancellationRequested)
+            {
+                await ShowUpdateMessageAsync("Ошибка обновления", exception.Message);
+                SetStatus("Ошибка обновления");
+            }
+        }
+        finally
+        {
+            updateCheckInProgress = false;
+            UpdateCheckButton.IsEnabled = true;
+        }
+    }
+
+    private async Task ShowUpdateMessageAsync(string title, string message)
+    {
+        ContentDialog dialog = new()
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = title,
+            Content = message,
+            CloseButtonText = "Закрыть",
+            DefaultButton = ContentDialogButton.Close
+        };
+        await dialog.ShowAsync();
     }
 
     private void ShowConnectionSettingsWindow()
@@ -927,6 +1062,11 @@ public sealed partial class MainWindow : Window
 
         initialMaximizeApplied = true;
         MaximizeLikeLegacyApplication();
+        if (!startupUpdateCheckScheduled)
+        {
+            startupUpdateCheckScheduled = true;
+            _ = CheckForUpdatesAfterStartupAsync();
+        }
     }
 
     private void MainWindow_Closed(object sender, WindowEventArgs args)
@@ -934,6 +1074,7 @@ public sealed partial class MainWindow : Window
         serialDeviceService.FrameReceived -= SerialDeviceService_FrameReceived;
         serialDeviceService.StatusChanged -= SerialDeviceService_StatusChanged;
         Activated -= MainWindow_Activated;
+        autoUpdateCancellation.Cancel();
         connectionSettingsWindow?.ClosePermanently();
         connectionSettingsWindow = null;
         metrologyWindow?.ClosePermanently();
@@ -941,5 +1082,7 @@ public sealed partial class MainWindow : Window
         schematicWindow?.ClosePermanently();
         schematicWindow = null;
         serialDeviceService.Dispose();
+        autoUpdateService.Dispose();
+        autoUpdateCancellation.Dispose();
     }
 }

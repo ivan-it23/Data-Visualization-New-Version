@@ -4,7 +4,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:controls="using:AMK.DataVisualization.App.Controls"
-    Title="Amk-Horizon-New-Chart">
+    Title="Визуализация данных">
 
     <Window.SystemBackdrop>
         <MicaBackdrop />
@@ -56,7 +56,21 @@
                         IsEnabled="False" />
                 </MenuBarItem>
                 <MenuBarItem Title="Логи" />
-                <MenuBarItem Title="Проверить обновления" />
+            </MenuBar>
+
+            <Button
+                x:Name="UpdateCheckButton"
+                MinWidth="0"
+                MinHeight="0"
+                Padding="12,0"
+                VerticalAlignment="Stretch"
+                AutomationProperties.Name="Проверить обновления"
+                Background="Transparent"
+                BorderThickness="0"
+                Content="Проверить обновления"
+                Click="CheckForUpdatesButton_Click" />
+
+            <MenuBar Padding="0">
                 <MenuBarItem Title="Документация" />
             </MenuBar>
         </StackPanel>

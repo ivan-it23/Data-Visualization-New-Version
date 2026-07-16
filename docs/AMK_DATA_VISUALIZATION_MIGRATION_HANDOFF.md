@@ -37,14 +37,15 @@
 - решение: `AMK-Data-Visualization.slnx`;
 - автоматизированных тестовых проектов нет по просьбе владельца.
 
-Версия приложения в `.csproj` пока `0.1.0`; installer ещё не создан.
+Версия приложения в `.csproj` — `0.1.1`. Она является единственным источником
+версии для `DataVisualization.exe` и Inno Setup installer.
 
 ## 4. Архитектура нового проекта
 
 | Слой | Ключевые файлы | Фактическое состояние |
 | --- | --- | --- |
 | App | `MainWindow.*`, `Views/*.xaml`, `Controls/LineChartControl.*` | shell, два графика, схема, подключение и метрология |
-| App services | `Services/ChartWorkspace.cs` | источники и конфигурации Graph 1/Graph 2 |
+| App services | `Services/ChartWorkspace.cs`, `Services/AutoUpdateService.cs` | источники Graph 1/Graph 2 и проверка/загрузка обновлений |
 | Core | `Binary/BinaryStructs.cs`, `Adapters/ToolDataAdapterRegistry.cs`, `Access/ToolDataAccessView.cs` | binary contracts и semantic access |
 | IO | `DataFiles/ToolDataFileReader.cs`, `ToolDataRepository.cs`, `ToolDataRangeExporter.cs` | файлы, repository, range export |
 | Charting | `Series/ChartDataCalculator.cs`, `Configuration/*.cs` | series, конфигурации, presets |
@@ -384,7 +385,32 @@ transport собран и статически проверен на факти�
   sidecar-перенос ещё не реализованы;
 - cursor-поля read-only, но crosshair не реализован;
 - notes controls не имеют storage/rendering логики;
-- меню конструктора, логов, обновления и документации не перенесены.
+- меню конструктора, логов и документации не перенесены; проверка обновлений
+  подключена.
+
+### Поставка, брендинг и обновление
+
+- продукт, окно и профиль запуска называются «Визуализация данных»;
+- основной executable — `DataVisualization.exe`;
+- `Assets/DataVisualization.svg` и точная копия выбранного `small.ico`
+  `Assets/CompanyEmblem.ico` являются исходниками иконки; предоставленные
+  `small.ico` и `Amk-Horizon-New-Chart.ico` были идентичны по SHA-256;
+  `scripts/Generate-AppIcon.ps1` размещает эмблему в правом верхнем углу и
+  создаёт многоразмерный ICO и WinUI PNG-assets;
+- `scripts/Build-Installer.ps1` публикует self-contained `Release x64` в
+  изолированный каталог, переносит созданные WinUI `DataVisualization.pri` и
+  `*.xbf` в payload, проверяет полный комплект и компилирует `installer/setup.iss`;
+- installer устанавливается для всех пользователей, создаёт стандартную запись
+  удаления и позволяет независимо выбрать общие ярлыки Start Menu/Desktop;
+- update feed:
+  `FilesForProgramVisualisation/DataVisualization/data-visualization-version.txt`;
+  обязательны версия и имя setup, третьей строкой допускается SHA-256;
+- после трёхсекундной фоновой либо ручной проверки новый setup скачивается во
+  временный каталог, валидируется и запускается с UAC; приложение закрывается,
+  Inno Setup заменяет весь комплект файлов и запускает его снова;
+- ручной запуск установленной версии `0.1.0` выявил отсутствие PRI/XBF в payload
+  и падение в `MainWindow.InitializeComponent`; формирование payload исправлено
+  в `0.1.1`, но новая сборка runtime не запускалась по прямому требованию владельца.
 
 ### Пустые проекты
 
@@ -395,6 +421,7 @@ transport собран и статически проверен на факти�
 Подтверждено:
 
 - решение собирается в `Debug x64` с `0 warnings / 0 errors`;
+- self-contained `Release x64` publish и Inno Setup compile выполняются;
 - основное окно, схема, подключение и метрология запускались;
 - владелец вручную подтвердил актуальную компоновку окна схемы и окна
   подключения, а также финальную компоновку и ComboBox окна метрологии;
@@ -421,7 +448,7 @@ transport собран и статически проверен на факти�
 `from_sonde`/`from_computer` на одинаковых реальных данных и проверить
 чтение/запись метрологии на физическом приборе. Следующие блоки:
 немодальное окно лога → интерактивная geometry графика → notes/sidecar → file
-constructor → reporting и installer.
+constructor → reporting; поставка уже реализована и требует ручной release-проверки.
 
 ## 13. Основные C++-якоря
 
