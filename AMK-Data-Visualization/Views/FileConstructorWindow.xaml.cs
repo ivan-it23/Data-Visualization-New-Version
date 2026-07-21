@@ -67,12 +67,19 @@ public sealed partial class FileConstructorWindow : Window
         Close();
     }
 
-    public void ResetForOpenedDataFile()
+    public async Task LoadOpenedDataFileAsync(string filePath)
     {
-        segments.Clear();
-        savedPath = string.Empty;
-        SegmentsListView.SelectedIndex = -1;
-        RefreshView();
+        await RunBusyAsync(async () =>
+        {
+            IReadOnlyList<FileConstructorSegment> loaded = await Task.Run(
+                () => LoadOpenedDataFileSegments(filePath));
+
+            segments.Clear();
+            segments.AddRange(loaded);
+            savedPath = filePath;
+            SegmentsListView.SelectedIndex = -1;
+            RefreshView(0);
+        });
     }
 
     private async void AddFilesButton_Click(object sender, RoutedEventArgs e)
@@ -204,8 +211,9 @@ public sealed partial class FileConstructorWindow : Window
         {
             try
             {
+                FileConstructorSegment[] segmentsToSave = segments.ToArray();
                 FileConstructorSaveResult result = await Task.Run(
-                    () => ToolDataFileConstructor.SaveConstructedFile(outputPath, segments));
+                    () => ToolDataFileConstructor.SaveConstructedFile(outputPath, segmentsToSave));
                 savedPath = outputPath;
                 RefreshView();
                 if (result.LayoutSaved)
@@ -353,6 +361,27 @@ public sealed partial class FileConstructorWindow : Window
             or UnauthorizedAccessException
             or InvalidDataException
             or NotSupportedException;
+    }
+
+    private static IReadOnlyList<FileConstructorSegment> LoadOpenedDataFileSegments(string filePath)
+    {
+        if (ToolDataFileConstructor.TryLoadSegmentLayout(
+                filePath,
+                out IReadOnlyList<FileSegmentLayout> layout)
+            && layout.Count > 0)
+        {
+            try
+            {
+                return ToolDataFileConstructor.LoadAssembly(filePath);
+            }
+            catch (Exception exception) when (IsExpectedFileException(exception))
+            {
+                // The data file is still editable even if an old assembly description
+                // references a source file that is no longer available.
+            }
+        }
+
+        return [ToolDataFileConstructor.LoadSegment(filePath)];
     }
 
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]

@@ -73,7 +73,11 @@ public sealed partial class MainWindow : Window
         try
         {
             chartWorkspace.Graph1Repository.LoadDataFromFile(file.Path);
-            fileConstructorWindow?.ResetForOpenedDataFile();
+            if (fileConstructorWindow is not null)
+            {
+                await fileConstructorWindow.LoadOpenedDataFileAsync(file.Path);
+            }
+
             chartWorkspace.Graph1Viewport.ResetAll();
             if (!chartWorkspace.IsGraph2Independent)
             {
@@ -100,10 +104,17 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void FileConstructorMenuItem_Click(object sender, RoutedEventArgs e)
+    private async void FileConstructorMenuItem_Click(object sender, RoutedEventArgs e)
     {
+        bool windowCreated = fileConstructorWindow is null;
         fileConstructorWindow ??= new FileConstructorWindow(OnFileConstructorSaved);
         fileConstructorWindow.ShowForOwner(WindowNative.GetWindowHandle(this));
+
+        string currentFilePath = chartWorkspace.Graph1Repository.LoadedFilePath;
+        if (windowCreated && !string.IsNullOrWhiteSpace(currentFilePath))
+        {
+            await fileConstructorWindow.LoadOpenedDataFileAsync(currentFilePath);
+        }
     }
 
     private void OnFileConstructorSaved(string filePath)
