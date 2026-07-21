@@ -34,11 +34,13 @@ public sealed record ChartYScrollRequestedEventArgs(
 
 public sealed partial class LineChartControl : UserControl
 {
+    private const double HorizontalScrollBarBottomMargin = 4.0;
     private readonly List<ChartRenderSeries> series = [];
     private string title = string.Empty;
     private string leftAxisUnits = string.Empty;
     private string rightAxisUnits = string.Empty;
     private IReadOnlyList<float> xValues = [];
+    private IReadOnlyList<float> segmentBoundaryXValues = [];
     private string xAxisTitle = "Номер кадра";
     private string presetDisplayName = string.Empty;
     private (double Min, double Max)? requestedLeftRange;
@@ -94,7 +96,8 @@ public sealed partial class LineChartControl : UserControl
         string horizontalAxisTitle,
         string activePresetDisplayName,
         (double Min, double Max)? leftDisplayRange = null,
-        (double Min, double Max)? rightDisplayRange = null)
+        (double Min, double Max)? rightDisplayRange = null,
+        IReadOnlyList<float>? sourceSegmentBoundaryXValues = null)
     {
         series.Clear();
         series.AddRange(sourceSeries);
@@ -106,6 +109,7 @@ public sealed partial class LineChartControl : UserControl
         presetDisplayName = activePresetDisplayName;
         requestedLeftRange = leftDisplayRange;
         requestedRightRange = rightDisplayRange;
+        segmentBoundaryXValues = sourceSegmentBoundaryXValues ?? [];
         emptyStateMessage = "Нет данных графика";
         Render();
     }
@@ -150,6 +154,7 @@ public sealed partial class LineChartControl : UserControl
         leftAxisUnits = string.Empty;
         rightAxisUnits = string.Empty;
         xValues = [];
+        segmentBoundaryXValues = [];
         xAxisTitle = "Номер кадра";
         presetDisplayName = string.Empty;
         requestedLeftRange = null;
@@ -166,6 +171,7 @@ public sealed partial class LineChartControl : UserControl
         leftAxisUnits = string.Empty;
         rightAxisUnits = string.Empty;
         xValues = [];
+        segmentBoundaryXValues = [];
         xAxisTitle = "Номер кадра";
         presetDisplayName = string.Empty;
         requestedLeftRange = null;
@@ -261,6 +267,40 @@ public sealed partial class LineChartControl : UserControl
             {
                 DrawSeries(plot, item, valueScale.Min, valueScale.Max, xScale.Min, xScale.Max);
             }
+        }
+
+        DrawSegmentBoundaries(plot, xScale);
+    }
+
+    private void DrawSegmentBoundaries(Rect plot, AxisScale xScale)
+    {
+        double range = xScale.Max - xScale.Min;
+        if (segmentBoundaryXValues.Count == 0 || range <= 0)
+        {
+            return;
+        }
+
+        SolidColorBrush boundaryBrush = new(Colors.Black) { Opacity = 0.72 };
+        foreach (float boundaryValue in segmentBoundaryXValues.Where(float.IsFinite))
+        {
+            if (boundaryValue < xScale.Min || boundaryValue > xScale.Max)
+            {
+                continue;
+            }
+
+            double x = plot.Left + ((boundaryValue - xScale.Min) / range * plot.Width);
+            Line line = new()
+            {
+                X1 = x,
+                X2 = x,
+                Y1 = plot.Top,
+                Y2 = plot.Bottom,
+                Stroke = boundaryBrush,
+                StrokeThickness = 1.4,
+                StrokeDashArray = new DoubleCollection { 5, 4 },
+                IsHitTestVisible = false
+            };
+            ChartCanvas.Children.Add(line);
         }
     }
 
@@ -599,11 +639,6 @@ public sealed partial class LineChartControl : UserControl
             ChartCanvas.Children.Add(label);
         }
 
-        TextBlock titleLabel = CreateAxisLabel(xAxisTitle);
-        double titleWidth = EstimateLegendTextWidth(xAxisTitle);
-        Canvas.SetLeft(titleLabel, plot.Left + Math.Max(0, (plot.Width - titleWidth) / 2));
-        Canvas.SetTop(titleLabel, plot.Bottom + 25);
-        ChartCanvas.Children.Add(titleLabel);
     }
 
     private void DrawSeries(Rect plot, ChartRenderSeries item, double minY, double maxY, double minX, double maxX)
@@ -873,8 +908,11 @@ public sealed partial class LineChartControl : UserControl
         }
 
         double horizontalRight = Math.Max(4, width - plot.Right);
-        double horizontalBottom = Math.Max(2, height - plot.Bottom + 2);
-        HorizontalAxisScrollBar.Margin = new Thickness(plot.Left, 0, horizontalRight, horizontalBottom);
+        HorizontalAxisScrollBar.Margin = new Thickness(
+            plot.Left,
+            0,
+            horizontalRight,
+            HorizontalScrollBarBottomMargin);
         VerticalAxisScrollBar.Margin = new Thickness(0, plot.Top, 4, Math.Max(0, height - plot.Bottom));
     }
 

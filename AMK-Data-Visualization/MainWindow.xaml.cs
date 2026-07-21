@@ -29,6 +29,7 @@ public sealed partial class MainWindow : Window
     private SchematicWindow? schematicWindow;
     private ConnectionSettingsWindow? connectionSettingsWindow;
     private MetrologyWindow? metrologyWindow;
+    private FileConstructorWindow? fileConstructorWindow;
     private bool initialMaximizeApplied;
     private bool updatingRangeControls;
     private bool startupUpdateCheckScheduled;
@@ -72,6 +73,7 @@ public sealed partial class MainWindow : Window
         try
         {
             chartWorkspace.Graph1Repository.LoadDataFromFile(file.Path);
+            fileConstructorWindow?.ResetForOpenedDataFile();
             chartWorkspace.Graph1Viewport.ResetAll();
             if (!chartWorkspace.IsGraph2Independent)
             {
@@ -95,6 +97,40 @@ public sealed partial class MainWindow : Window
 
             SetStatus("Ошибка загрузки");
             UpdateStatusBarFileInfo();
+        }
+    }
+
+    private void FileConstructorMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        fileConstructorWindow ??= new FileConstructorWindow(OnFileConstructorSaved);
+        fileConstructorWindow.ShowForOwner(WindowNative.GetWindowHandle(this));
+    }
+
+    private void OnFileConstructorSaved(string filePath)
+    {
+        try
+        {
+            ToolDataRepository repository = chartWorkspace.Graph1Repository;
+            repository.LoadDataFromFile(filePath);
+            chartWorkspace.Graph1Viewport.ResetAll();
+            if (!chartWorkspace.IsGraph2Independent)
+            {
+                chartWorkspace.Graph2Viewport.ResetAll();
+            }
+
+            schematicWindow?.RefreshDataContext(1, 2);
+            RenderGraph(1);
+            if (!chartWorkspace.IsGraph2Independent)
+            {
+                RenderGraph(2);
+            }
+
+            UpdateStatusBarFileInfo();
+            SetStatus("Сконструированный файл сохранён и загружен");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException)
+        {
+            SetStatus($"Файл сохранён, но не удалось обновить график: {exception.Message}");
         }
     }
 
@@ -547,6 +583,11 @@ public sealed partial class MainWindow : Window
             .Skip(visibleRange.StartIndex)
             .Take(visibleRange.EndIndex - visibleRange.StartIndex + 1)
             .ToList();
+        List<float> segmentBoundaryXValues = BuildVisibleSegmentBoundaryXValues(
+            repository,
+            graphConfiguration.XAxisType,
+            allXAxisData,
+            visibleRange);
         GroupedCurves groupedCurves = ChartDataCalculator.GroupCurvesByAxis(graphConfiguration.Curves);
         List<ChartRenderSeries> renderSeries = [];
 
@@ -585,7 +626,8 @@ public sealed partial class MainWindow : Window
             graphConfiguration.XAxisType == XAxisType.Temperature ? "Температура, °C" : "Номер кадра",
             graphConfiguration.IsPresetActive ? graphConfiguration.PresetDisplayName : string.Empty,
             viewport.LeftYRange,
-            viewport.RightYRange);
+            viewport.RightYRange,
+            segmentBoundaryXValues);
         graphControl.IsFlowMode = viewport.IsFlowEnabled;
         graphControl.ConfigureScrollBars(
             repository.DataSize,
@@ -593,6 +635,50 @@ public sealed partial class MainWindow : Window
             visibleRange.EndIndex,
             !viewport.IsFlowEnabled && viewport.HasCustomXRange);
         UpdateRangeControls(graphNumber);
+    }
+
+    private static List<float> BuildVisibleSegmentBoundaryXValues(
+        ToolDataRepository repository,
+        XAxisType xAxisType,
+        IReadOnlyList<float> allXAxisData,
+        ChartIndexRange visibleRange)
+    {
+        List<float> values = [];
+        if (string.IsNullOrWhiteSpace(repository.LoadedFilePath)
+            || !ToolDataFileConstructor.TryLoadSegmentLayout(
+                repository.LoadedFilePath,
+                out IReadOnlyList<FileSegmentLayout> layout))
+        {
+            return values;
+        }
+
+        foreach (FileSegmentLayout segment in layout.Skip(1))
+        {
+            int index = segment.StartIndex;
+            if (index <= 0
+                || index >= allXAxisData.Count
+                || index < visibleRange.StartIndex
+                || index > visibleRange.EndIndex)
+            {
+                continue;
+            }
+
+            if (xAxisType == XAxisType.Temperature)
+            {
+                float before = allXAxisData[index - 1];
+                float after = allXAxisData[index];
+                if (float.IsFinite(before) && float.IsFinite(after))
+                {
+                    values.Add((before + after) / 2f);
+                }
+            }
+            else
+            {
+                values.Add(index - 0.5f);
+            }
+        }
+
+        return values;
     }
 
     private static string GetPresetLegendLabel(CurveDefinition curve)
@@ -861,6 +947,60 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        ContentDialog actionDialog = new()
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Сохранение отрезка",
+            Content = "Выберите, что сделать с выбранным отрезком. Добавление возможно только в канонический .bin файл с такой же сигнатурой прибора.",
+            PrimaryButtonText = "Сохранить отдельным файлом",
+            SecondaryButtonText = "Добавить к существующему файлу",
+            CloseButtonText = "Отмена",
+            DefaultButton = ContentDialogButton.Primary
+        };
+        ContentDialogResult action = await actionDialog.ShowAsync();
+        if (action == ContentDialogResult.None)
+        {
+            return;
+        }
+
+        if (action == ContentDialogResult.Secondary)
+        {
+            Windows.Storage.StorageFile? target = await PickExistingCanonicalBinAsync(
+                "Выберите существующий файл для добавления отрезка");
+            if (target is null)
+            {
+                return;
+            }
+
+            try
+            {
+                FileConstructorSegment segment = ToolDataFileConstructor.CreateSegment(
+                    repository.LoadedFilePath,
+                    range.StartIndex,
+                    repository.Records.Skip(range.StartIndex).Take(range.EndIndex - range.StartIndex + 1),
+                    $"Сохранённый отрезок: {repository.LoadedFileName} [{range.StartIndex}..{range.EndIndex}]");
+                FileConstructorSaveResult result = await Task.Run(
+                    () => ToolDataFileConstructor.AppendSegmentsToExistingFile(target.Path, [segment]));
+
+                if (PathsEqual(target.Path, repository.LoadedFilePath))
+                {
+                    ReloadGraph1AfterFileChange(repository);
+                }
+
+                string message = result.Warning
+                    ?? $"Отрезок [{range.StartIndex}..{range.EndIndex}] добавлен к файлу:{Environment.NewLine}{target.Path}";
+                SetStatus(result.LayoutSaved ? "Выбранный отрезок добавлен к существующему файлу" : "Отрезок добавлен с предупреждением");
+                await ShowOperationMessageAsync(result.LayoutSaved ? "Готово" : "Предупреждение", message);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException or NotSupportedException)
+            {
+                SetStatus("Не удалось добавить выбранный отрезок");
+                await ShowOperationMessageAsync("Ошибка добавления отрезка", exception.Message);
+            }
+
+            return;
+        }
+
         FileSavePicker picker = new()
         {
             SuggestedStartLocation = PickerLocationId.Desktop,
@@ -875,6 +1015,11 @@ public sealed partial class MainWindow : Window
         }
 
         bool saved = await Task.Run(() => repository.SaveDataRange(file.Path, range.StartIndex, range.EndIndex));
+        if (saved)
+        {
+            ToolDataFileConstructor.DeleteSegmentLayout(file.Path);
+        }
+
         SetStatus(saved ? $"Сохранён участок {range.StartIndex}–{range.EndIndex}" : "Не удалось сохранить выбранный участок");
     }
 
@@ -893,23 +1038,54 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        RadioButton currentFileOption = new()
+        {
+            Content = "Сохранить текущий файл с вырезанным отрезком",
+            IsChecked = true,
+            GroupName = "CutRangeAction"
+        };
+        RadioButton copyOption = new()
+        {
+            Content = "Сохранить копию текущего файла",
+            GroupName = "CutRangeAction"
+        };
+        RadioButton appendOption = new()
+        {
+            Content = "Добавить файл с вырезанным отрезком к другому файлу",
+            GroupName = "CutRangeAction"
+        };
+        StackPanel cutOptions = new() { Spacing = 8 };
+        cutOptions.Children.Add(new TextBlock
+        {
+            Text = $"Выберите действие для записей {range.StartIndex}–{range.EndIndex}. Добавление к другому файлу не изменяет текущий файл.",
+            TextWrapping = TextWrapping.Wrap
+        });
+        cutOptions.Children.Add(currentFileOption);
+        cutOptions.Children.Add(copyOption);
+        cutOptions.Children.Add(appendOption);
+
         ContentDialog dialog = new()
         {
             XamlRoot = Content.XamlRoot,
             Title = "Вырезание выбранного участка",
-            Content = $"Удалить записи {range.StartIndex}–{range.EndIndex} из текущего файла или сохранить копию без них?",
-            PrimaryButtonText = "Из текущего файла",
-            SecondaryButtonText = "Сохранить копию",
+            Content = cutOptions,
+            PrimaryButtonText = "Продолжить",
             CloseButtonText = "Отмена",
-            DefaultButton = ContentDialogButton.Close
+            DefaultButton = ContentDialogButton.Primary
         };
         ContentDialogResult choice = await dialog.ShowAsync();
-        if (choice == ContentDialogResult.None)
+        if (choice != ContentDialogResult.Primary)
         {
             return;
         }
 
-        if (choice == ContentDialogResult.Primary)
+        if (appendOption.IsChecked == true)
+        {
+            await AppendFileWithoutRange(repository, range);
+            return;
+        }
+
+        if (currentFileOption.IsChecked == true)
         {
             await CutRangeFromCurrentFile(repository, range);
             return;
@@ -931,7 +1107,74 @@ public sealed partial class MainWindow : Window
 
         bool saved = await Task.Run(() => ToolDataRangeExporter.SaveFileExcludingRange(
             repository.LoadedFilePath, target.Path, range.StartIndex, range.EndIndex));
+        if (saved)
+        {
+            bool layoutSaved = ToolDataFileConstructor.SaveLayoutExcludingRange(
+                repository.LoadedFilePath,
+                target.Path,
+                range.StartIndex,
+                range.EndIndex,
+                repository.DataSize,
+                out string? layoutError);
+            if (!layoutSaved && !string.IsNullOrWhiteSpace(layoutError))
+            {
+                await ShowOperationMessageAsync("Границы сегментов", layoutError);
+            }
+        }
+
         SetStatus(saved ? "Копия без выбранного участка сохранена" : "Не удалось сохранить копию");
+    }
+
+    private async Task AppendFileWithoutRange(ToolDataRepository repository, ChartIndexRange range)
+    {
+        Windows.Storage.StorageFile? target = await PickExistingCanonicalBinAsync(
+            "Выберите существующий файл для добавления данных");
+        if (target is null)
+        {
+            return;
+        }
+
+        if (PathsEqual(target.Path, repository.LoadedFilePath))
+        {
+            await ShowOperationMessageAsync(
+                "Вырезание отрезка",
+                "Для этого действия выберите другой файл. Текущий файл не изменяется.");
+            return;
+        }
+
+        try
+        {
+            List<FileConstructorSegment> keptSegments = [];
+            if (range.StartIndex > 0)
+            {
+                keptSegments.Add(ToolDataFileConstructor.CreateSegment(
+                    repository.LoadedFilePath,
+                    0,
+                    repository.Records.Take(range.StartIndex),
+                    $"Файл с вырезанным отрезком: {repository.LoadedFileName} [0..{range.StartIndex - 1}]"));
+            }
+
+            if (range.EndIndex < repository.DataSize - 1)
+            {
+                keptSegments.Add(ToolDataFileConstructor.CreateSegment(
+                    repository.LoadedFilePath,
+                    range.EndIndex + 1,
+                    repository.Records.Skip(range.EndIndex + 1),
+                    $"Файл с вырезанным отрезком: {repository.LoadedFileName} [{range.EndIndex + 1}..{repository.DataSize - 1}]"));
+            }
+
+            FileConstructorSaveResult result = await Task.Run(
+                () => ToolDataFileConstructor.AppendSegmentsToExistingFile(target.Path, keptSegments));
+            string message = result.Warning
+                ?? $"Файл без отрезка [{range.StartIndex}..{range.EndIndex}] добавлен к файлу:{Environment.NewLine}{target.Path}{Environment.NewLine}{Environment.NewLine}Текущий файл не изменён.";
+            SetStatus(result.LayoutSaved ? "Файл с вырезанным отрезком добавлен" : "Файл добавлен с предупреждением");
+            await ShowOperationMessageAsync(result.LayoutSaved ? "Готово" : "Предупреждение", message);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException or NotSupportedException)
+        {
+            SetStatus("Не удалось добавить файл с вырезанным отрезком");
+            await ShowOperationMessageAsync("Ошибка добавления файла", exception.Message);
+        }
     }
 
     private async Task CutRangeFromCurrentFile(ToolDataRepository repository, ChartIndexRange range)
@@ -951,18 +1194,19 @@ public sealed partial class MainWindow : Window
             _ = ToolDataFileReader.LoadDataFromFile(temporary);
             File.Move(temporary, source, true);
             repository.LoadDataFromFile(source);
-            chartWorkspace.Graph1Viewport.ResetAll();
-            if (!chartWorkspace.IsGraph2Independent)
-            {
-                chartWorkspace.Graph2Viewport.ResetAll();
-            }
-            RenderGraph(1);
-            if (!chartWorkspace.IsGraph2Independent)
-            {
-                RenderGraph(2);
-            }
-            UpdateStatusBarFileInfo();
+            bool layoutSaved = ToolDataFileConstructor.SaveLayoutExcludingRange(
+                source,
+                source,
+                range.StartIndex,
+                range.EndIndex,
+                repository.DataSize + (range.EndIndex - range.StartIndex + 1),
+                out string? layoutError);
+            ReloadGraph1AfterFileChange(repository);
             SetStatus("Выбранный участок вырезан из текущего файла");
+            if (!layoutSaved && !string.IsNullOrWhiteSpace(layoutError))
+            {
+                await ShowOperationMessageAsync("Границы сегментов", layoutError);
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
@@ -975,6 +1219,56 @@ public sealed partial class MainWindow : Window
                 File.Delete(temporary);
             }
         }
+    }
+
+    private async Task<Windows.Storage.StorageFile?> PickExistingCanonicalBinAsync(string title)
+    {
+        FileOpenPicker picker = new()
+        {
+            SuggestedStartLocation = PickerLocationId.Desktop,
+            CommitButtonText = title
+        };
+        picker.FileTypeFilter.Add(".bin");
+        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
+        return await picker.PickSingleFileAsync();
+    }
+
+    private void ReloadGraph1AfterFileChange(ToolDataRepository repository)
+    {
+        repository.LoadDataFromFile(repository.LoadedFilePath);
+        chartWorkspace.Graph1Viewport.ResetAll();
+        if (!chartWorkspace.IsGraph2Independent)
+        {
+            chartWorkspace.Graph2Viewport.ResetAll();
+        }
+
+        schematicWindow?.RefreshDataContext(1, 2);
+        RenderGraph(1);
+        if (!chartWorkspace.IsGraph2Independent)
+        {
+            RenderGraph(2);
+        }
+
+        UpdateStatusBarFileInfo();
+    }
+
+    private async Task ShowOperationMessageAsync(string title, string message)
+    {
+        ContentDialog dialog = new()
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = title,
+            Content = message,
+            CloseButtonText = "ОК"
+        };
+        await dialog.ShowAsync();
+    }
+
+    private static bool PathsEqual(string left, string right)
+    {
+        return !string.IsNullOrWhiteSpace(left)
+            && !string.IsNullOrWhiteSpace(right)
+            && string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase);
     }
 
     private bool TryResolveGraph1OperationRange(out ChartIndexRange range)
@@ -1081,6 +1375,8 @@ public sealed partial class MainWindow : Window
         metrologyWindow = null;
         schematicWindow?.ClosePermanently();
         schematicWindow = null;
+        fileConstructorWindow?.ClosePermanently();
+        fileConstructorWindow = null;
         serialDeviceService.Dispose();
         autoUpdateService.Dispose();
         autoUpdateCancellation.Dispose();

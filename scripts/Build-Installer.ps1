@@ -91,6 +91,7 @@ $requiredPublishedFiles = @(
     'MainWindow.xbf'
     'Controls\LineChartControl.xbf'
     'Views\ConnectionSettingsWindow.xbf'
+    'Views\FileConstructorWindow.xbf'
     'Views\MetrologyWindow.xbf'
     'Views\SchematicWindow.xbf'
     'Microsoft.ui.xaml.dll'
