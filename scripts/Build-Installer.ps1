@@ -93,6 +93,8 @@ $requiredPublishedFiles = @(
     'Views\ConnectionSettingsWindow.xbf'
     'Views\FileConstructorWindow.xbf'
     'Views\MetrologyWindow.xbf'
+    'Views\NotesJournalWindow.xbf'
+    'Views\DeviceLogWindow.xbf'
     'Views\SchematicWindow.xbf'
     'Microsoft.ui.xaml.dll'
     'Microsoft.WindowsAppRuntime.Bootstrap.dll'

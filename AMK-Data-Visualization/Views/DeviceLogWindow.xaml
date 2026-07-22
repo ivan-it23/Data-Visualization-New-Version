@@ -1,0 +1,214 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="AMK.DataVisualization.App.Views.DeviceLogWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Лог обмена с прибором">
+
+    <Window.SystemBackdrop>
+        <MicaBackdrop />
+    </Window.SystemBackdrop>
+
+    <Grid
+        x:Name="RootGrid"
+        Padding="16"
+        RowDefinitions="Auto,Auto,*,Auto"
+        RowSpacing="10">
+        <Border
+            Padding="16,12"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="8">
+            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                <Border
+                    Width="40"
+                    Height="40"
+                    Background="{ThemeResource AccentFillColorSecondaryBrush}"
+                    CornerRadius="8">
+                    <FontIcon
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        FontSize="19"
+                        Glyph="&#xE9D9;" />
+                </Border>
+
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                    <TextBlock
+                        FontSize="18"
+                        FontWeight="SemiBold"
+                        Text="Журнал обмена с прибором" />
+                    <TextBlock
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="Операции COM-порта, ответы прибора и расшифровка кадров"
+                        TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+
+                <Border
+                    Grid.Column="2"
+                    Padding="10,5"
+                    VerticalAlignment="Center"
+                    Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                    CornerRadius="12">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon
+                            x:Name="RecordingStateIcon"
+                            FontSize="10"
+                            Glyph="&#xE915;" />
+                        <TextBlock
+                            x:Name="RecordingStateTextBlock"
+                            VerticalAlignment="Center"
+                            FontWeight="SemiBold"
+                            Text="Запись включена" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Border>
+
+        <CommandBar
+            Grid.Row="1"
+            DefaultLabelPosition="Right"
+            IsDynamicOverflowEnabled="True">
+            <AppBarToggleButton
+                x:Name="LoggingToggleButton"
+                Label="Запись"
+                Click="LoggingToggleButton_Click">
+                <AppBarToggleButton.Icon>
+                    <FontIcon Glyph="&#xE74E;" />
+                </AppBarToggleButton.Icon>
+            </AppBarToggleButton>
+            <AppBarToggleButton
+                x:Name="RawDataToggleButton"
+                Label="Сырые данные"
+                Click="RawDataToggleButton_Click">
+                <AppBarToggleButton.Icon>
+                    <FontIcon Glyph="&#xE943;" />
+                </AppBarToggleButton.Icon>
+            </AppBarToggleButton>
+            <AppBarSeparator />
+            <AppBarButton
+                Label="Очистить"
+                Click="ClearButton_Click">
+                <AppBarButton.Icon>
+                    <FontIcon Glyph="&#xE74D;" />
+                </AppBarButton.Icon>
+            </AppBarButton>
+            <AppBarButton
+                Label="Копировать"
+                Click="CopyButton_Click">
+                <AppBarButton.Icon>
+                    <FontIcon Glyph="&#xE8C8;" />
+                </AppBarButton.Icon>
+            </AppBarButton>
+            <AppBarButton
+                Label="Открыть файл"
+                Click="OpenLogFileButton_Click">
+                <AppBarButton.Icon>
+                    <FontIcon Glyph="&#xED25;" />
+                </AppBarButton.Icon>
+            </AppBarButton>
+        </CommandBar>
+
+        <Border
+            Grid.Row="2"
+            Background="{ThemeResource LayerFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="8">
+            <Grid>
+                <ListView
+                    x:Name="LogListView"
+                    Padding="4"
+                    IsItemClickEnabled="False"
+                    SelectionMode="None"
+                    ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                    ScrollViewer.HorizontalScrollMode="Auto"
+                    ScrollViewer.VerticalScrollBarVisibility="Auto">
+                    <ListView.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <ItemsStackPanel Orientation="Vertical" />
+                        </ItemsPanelTemplate>
+                    </ListView.ItemsPanel>
+                    <ListView.ItemContainerStyle>
+                        <Style TargetType="ListViewItem">
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            <Setter Property="IsTabStop" Value="False" />
+                            <Setter Property="Padding" Value="8,4" />
+                            <Setter Property="MinHeight" Value="0" />
+                        </Style>
+                    </ListView.ItemContainerStyle>
+                    <ListView.ItemTemplate>
+                        <DataTemplate>
+                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                                <Border
+                                    MinWidth="38"
+                                    Height="20"
+                                    Padding="5,1"
+                                    VerticalAlignment="Top"
+                                    Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                                    CornerRadius="4"
+                                    Visibility="{Binding RawBadgeVisibility}">
+                                    <TextBlock
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center"
+                                        FontSize="10"
+                                        FontWeight="SemiBold"
+                                        Text="RAW" />
+                                </Border>
+                                <TextBlock
+                                    Grid.Column="1"
+                                    FontFamily="Cascadia Mono, Consolas"
+                                    FontSize="12.5"
+                                    FontWeight="{Binding FontWeight}"
+                                    IsTextSelectionEnabled="True"
+                                    Text="{Binding Text}"
+                                    TextWrapping="NoWrap" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+
+                <StackPanel
+                    x:Name="EmptyStatePanel"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    IsHitTestVisible="False"
+                    Spacing="8">
+                    <FontIcon
+                        HorizontalAlignment="Center"
+                        FontSize="30"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Glyph="&#xE9D9;" />
+                    <TextBlock
+                        FontWeight="SemiBold"
+                        Text="Журнал пока пуст" />
+                    <TextBlock
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="Записи появятся после загрузки файла или подключения прибора." />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid
+            Grid.Row="3"
+            ColumnDefinitions="*,Auto"
+            ColumnSpacing="12">
+            <StackPanel VerticalAlignment="Center" Spacing="2">
+                <TextBlock
+                    x:Name="LogSummaryTextBlock"
+                    FontWeight="SemiBold"
+                    Text="Строк: 0 из 300" />
+                <TextBlock
+                    x:Name="LogPathTextBlock"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+            <Button
+                Grid.Column="1"
+                MinWidth="120"
+                VerticalAlignment="Center"
+                Content="Закрыть"
+                Click="CloseButton_Click" />
+        </Grid>
+    </Grid>
+</Window>

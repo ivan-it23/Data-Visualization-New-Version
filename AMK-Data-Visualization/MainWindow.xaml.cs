@@ -38,6 +38,7 @@ public sealed partial class MainWindow : Window
     private MetrologyWindow? metrologyWindow;
     private FileConstructorWindow? fileConstructorWindow;
     private NotesJournalWindow? notesJournalWindow;
+    private DeviceLogWindow? deviceLogWindow;
     private string currentDataFilePath = string.Empty;
     private string configuredAppendRecordPath = string.Empty;
     private bool serialRecordingEnabled;
@@ -98,6 +99,8 @@ public sealed partial class MainWindow : Window
                 await fileConstructorWindow.LoadOpenedDataFileAsync(file.Path);
             }
 
+            LogLoadedDataFile(file.Path, chartWorkspace.Graph1Repository);
+
             currentDataFilePath = file.Path;
             EnsureNotesLoadedForCurrentSource();
 
@@ -146,6 +149,7 @@ public sealed partial class MainWindow : Window
         {
             ToolDataRepository repository = chartWorkspace.Graph1Repository;
             repository.LoadDataFromFile(filePath);
+            LogLoadedDataFile(filePath, repository);
             currentDataFilePath = filePath;
             EnsureNotesLoadedForCurrentSource();
             chartWorkspace.Graph1Viewport.ResetAll();
@@ -438,12 +442,14 @@ public sealed partial class MainWindow : Window
         if (serialDeviceService.IsPolling)
         {
             await serialDeviceService.StopPollingAsync();
+            DeviceExchangeLog.Append("⏸ Опрос приостановлен");
             SetStatus("Опрос прибора приостановлен");
         }
         else
         {
             SerialConnectionSettings settings = serialSettingsStore.Load();
             await serialDeviceService.StartPollingAsync(settings.PollIntervalMilliseconds);
+            DeviceExchangeLog.Append("▶ Опрос возобновлён");
             SetStatus("Опрос прибора продолжен");
         }
 
@@ -1298,6 +1304,33 @@ public sealed partial class MainWindow : Window
             ApplyNoteConfiguration,
             UpdateNoteTextById);
         notesJournalWindow.ShowForOwner(WindowNative.GetWindowHandle(this));
+    }
+
+    private void LogsButton_Click(object sender, RoutedEventArgs e)
+    {
+        deviceLogWindow ??= new DeviceLogWindow();
+        deviceLogWindow.ShowForOwner(WindowNative.GetWindowHandle(this));
+    }
+
+    private static void LogLoadedDataFile(string filePath, ToolDataRepository repository)
+    {
+        if (!repository.TryGetRecord(0, out var firstRecord))
+        {
+            return;
+        }
+
+        DeviceExchangeLog.SetRawDataAvailable(false);
+        DeviceExchangeLog.Append($"Файл загружен: {filePath}");
+        uint low20 = (firstRecord.Signature << 12) >> 12;
+        int modification = (int)((low20 % 10000u) / 1000u);
+        int number = (int)(low20 % 1000u);
+        DeviceExchangeLog.AppendDeviceIdentity(
+            firstRecord.Signature,
+            0,
+            modification: modification,
+            number: number,
+            rxPosition: 0,
+            sondeDiameterMillimeters: 0);
     }
 
     private NotesJournalSource GetNotesJournalSource()
@@ -2246,6 +2279,8 @@ public sealed partial class MainWindow : Window
         fileConstructorWindow = null;
         notesJournalWindow?.ClosePermanently();
         notesJournalWindow = null;
+        deviceLogWindow?.ClosePermanently();
+        deviceLogWindow = null;
         serialDeviceService.Dispose();
         autoUpdateService.Dispose();
         autoUpdateCancellation.Dispose();

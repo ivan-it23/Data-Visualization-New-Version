@@ -59,8 +59,10 @@ public sealed class SerialDeviceService : IDisposable
     private string appendFilePath = string.Empty;
     private bool recordingEnabled = true;
     private bool useLegacyCartographProtocol;
+    private bool loggedDeviceIdentityToExchangeLog;
     private bool disposed;
     private int controlOperationCount;
+    private long connectionSessionId;
     private SerialConnectionState state = SerialConnectionState.Disconnected;
 
     public event EventHandler<SerialFrameReceivedEventArgs>? FrameReceived;
@@ -162,12 +164,24 @@ public sealed class SerialDeviceService : IDisposable
 
         if (result != SerialOperationResult.Success)
         {
+            AppendConnectionFailure(result);
             SetState(SerialConnectionState.ConnectionError, ResultToDisplayText(result));
             return result;
         }
 
+        DeviceExchangeLog.Append($"COM: подключено {desiredPortName}, {desiredBaudRate} бод");
         SetState(SerialConnectionState.Connected);
         await Task.Run(ProbeDeviceInformationCore, cancellationToken).ConfigureAwait(false);
+        if (CurrentMetrology is MetrologyData metrology)
+        {
+            DeviceExchangeLog.Append(
+                $"Метрология: автоматически считана при подключении, sig=0x{metrology.Signature:X8}, S/N={metrology.Serial}");
+        }
+        else
+        {
+            DeviceExchangeLog.Append("Метрология: не удалось считать при подключении (Неверный ответ)");
+        }
+
         PublishStatus();
         return SerialOperationResult.Success;
     }
@@ -243,8 +257,11 @@ public sealed class SerialDeviceService : IDisposable
         Metrology = null;
         CurrentMetrology = null;
         useLegacyCartographProtocol = false;
+        loggedDeviceIdentityToExchangeLog = false;
         consecutiveFailures = 0;
+        DeviceExchangeLog.Append("❌ COM: отключено");
         DeviceProtocolLog.Write("DISCONNECT COMPLETED");
+        DeviceExchangeLog.CloseFile();
         SetState(SerialConnectionState.Disconnected);
     }
 
@@ -400,12 +417,21 @@ public sealed class SerialDeviceService : IDisposable
                     Interlocked.Exchange(ref recordedFrames, 0);
                     lastFrameNumber = 0;
                     recordFilePath = string.Empty;
+                    loggedDeviceIdentityToExchangeLog = false;
+                    Interlocked.Increment(ref connectionSessionId);
                 }
 
                 lastError = string.Empty;
                 DeviceProtocolLog.Write(
                     $"PORT OPEN OK | port={port.PortName} | dtr={port.DtrEnable} | rts={port.RtsEnable} | " +
                     $"data_bits={port.DataBits} | parity={port.Parity} | stop_bits={port.StopBits}");
+                if (!resetSession)
+                {
+                    loggedDeviceIdentityToExchangeLog = false;
+                    Interlocked.Increment(ref connectionSessionId);
+                    DeviceExchangeLog.Append($"COM: переподключено {port.PortName}, {desiredBaudRate} бод");
+                }
+
                 return SerialOperationResult.Success;
             }
             catch (UnauthorizedAccessException exception)
@@ -466,6 +492,14 @@ public sealed class SerialDeviceService : IDisposable
                     $"POLL FRAME ACCEPTED | protocol={(useLegacyCartographProtocol ? "LEGACY_LOOP_NEXT" : "FRAMED_LEN")} | " +
                     $"accepted_total={acceptedPackets} | frame={frame.CanonicalData.Frame} | " +
                     $"signature=0x{frame.CanonicalData.Signature:X8}");
+                DeviceExchangeLog.Append(
+                    $"→ 0x{CommandData:X2} [5B]  ← 0x{CommandData:X2} [{rawPayload.Length}B]  |  " +
+                    $"Кадр #{frame.CanonicalData.Frame}: Sig=0x{frame.CanonicalData.Signature:X8}, " +
+                    $"{frame.CanonicalData.Temperature:F1}°C");
+                if (DeviceExchangeLog.ShowRawData)
+                {
+                    DeviceLogPayloadFormatter.Append(frame);
+                }
             }
             else
             {
@@ -475,6 +509,7 @@ public sealed class SerialDeviceService : IDisposable
                 DeviceProtocolLog.Write(
                     $"POLL FRAME REJECTED | protocol={(useLegacyCartographProtocol ? "LEGACY_LOOP_NEXT" : "FRAMED_LEN")} | " +
                     $"result={result} | rejected_total={rejectedPackets} | consecutive_failures={consecutiveFailures}");
+                AppendRequestFailure(result);
                 if (consecutiveFailures >= FailuresBeforeReopen)
                 {
                     lock (ioSync)
@@ -482,6 +517,7 @@ public sealed class SerialDeviceService : IDisposable
                         CloseSerialPortCore();
                     }
                     SetState(SerialConnectionState.Disconnected, "Связь потеряна, выполняется переподключение...");
+                    DeviceExchangeLog.Append("COM: устройство отключено, ожидание переподключения...");
                     DeviceProtocolLog.Write("POLL REOPEN SCHEDULED | reason=consecutive_failures");
                     consecutiveFailures = 0;
                 }
@@ -744,11 +780,30 @@ public sealed class SerialDeviceService : IDisposable
 
     private SerialOperationResult WriteMetrologyCore(MetrologyData data)
     {
+        long startedAt = Environment.TickCount64;
+        DeviceExchangeLog.Append("[WriteMetrology] START");
         if (!IsConnected)
         {
+            DeviceExchangeLog.Append("[WriteMetrology]   IsConnected=false");
+            DeviceExchangeLog.Append("[WriteMetrology] END result=NOT_CONNECTED");
             return SerialOperationResult.NotConnected;
         }
 
+        DeviceExchangeLog.Append(
+            $"[WriteMetrology]   port={desiredPortName} baud={desiredBaudRate} sessionId={Interlocked.Read(ref connectionSessionId)}");
+        DeviceExchangeLog.Append(
+            $"[WriteMetrology]   pausePolling={Volatile.Read(ref controlOperationCount) > 0} " +
+            $"hasMetrology={CurrentMetrology.HasValue} lastFrame={lastFrameNumber} " +
+            $"recording={(recordingEnabled ? "on" : "off")}");
+        DeviceExchangeLog.Append(
+            $"[WriteMetrology]   port timeouts: read={ReadTimeoutMilliseconds}ms write={WriteTimeoutMilliseconds}ms");
+        DeviceExchangeLog.Append(
+            $"[WriteMetrology]   inData: signature=0x{data.Signature:X8} serial={data.Serial} " +
+            $"D_sonde_mm={data.SondeDiameterMm} Rx_Position={data.RxPosition}");
+        DeviceExchangeLog.Append(
+            $"[WriteMetrology]   inData: L1=[{JoinMetrologyValues(data.GetL1)}] " +
+            $"L2=[{JoinMetrologyValues(data.GetL2)}] F=[{data.GetFrequency(0)} {data.GetFrequency(1)}]");
+        DeviceExchangeLog.Append("[WriteMetrology]   pausePolling=true; Sleep(2000)");
         Thread.Sleep(2000);
         byte[] bytes = new byte[BinaryLayoutConstants.MetrologyDataSize];
         MemoryMarshal.Write(bytes.AsSpan(), in data);
@@ -761,6 +816,8 @@ public sealed class SerialDeviceService : IDisposable
                 SerialOperationResult legacyWriteResult = WriteLegacyMetrologyCore(data);
                 if (legacyWriteResult != SerialOperationResult.Success)
                 {
+                    DeviceExchangeLog.Append(
+                        $"[WriteMetrology] END result={legacyWriteResult} elapsed={Environment.TickCount64 - startedAt} ms");
                     return legacyWriteResult;
                 }
 
@@ -775,32 +832,55 @@ public sealed class SerialDeviceService : IDisposable
                     out byte[] responsePayload);
                 if (result != SerialOperationResult.Success)
                 {
+                    DeviceExchangeLog.Append(
+                        $"[WriteMetrology] END result={result} elapsed={Environment.TickCount64 - startedAt} ms");
                     return result;
                 }
 
                 if (responseCommand != CommandMetrology
                     || responsePayload.Length is not (0 or 1 or BinaryLayoutConstants.MetrologyDataSize))
                 {
+                    DeviceExchangeLog.Append(
+                        $"[WriteMetrology]   RX payload size={responsePayload.Length} (expected 0/1/240)");
+                    DeviceExchangeLog.Append("[WriteMetrology] END result=INVALID_RESPONSE");
                     return SerialOperationResult.InvalidResponse;
                 }
 
                 if (responsePayload.Length == BinaryLayoutConstants.MetrologyDataSize)
                 {
                     applied = MemoryMarshal.Read<MetrologyData>(responsePayload);
+                    DeviceExchangeLog.Append("[WriteMetrology]   RX payload size=240 B, applied to cache");
                 }
 
                 UpdateMetrologyCache(applied);
             }
         }
 
+        DeviceExchangeLog.Append("[WriteMetrology]   verify: Sleep(300) + re-read metrology");
         Thread.Sleep(300);
         MetrologyReadResult verification = RequestMetrologyCore();
         if (verification.IsSuccess
             && (verification.Data.Signature != data.Signature || verification.Data.Serial != data.Serial))
         {
+            DeviceExchangeLog.Append(
+                $"[WriteMetrology]   verify mismatch: got=(0x{verification.Data.Signature:X8}, {verification.Data.Serial}) " +
+                $"expected=(0x{data.Signature:X8}, {data.Serial})");
+            DeviceExchangeLog.Append("[WriteMetrology] END result=INVALID_RESPONSE (verify failed)");
             return SerialOperationResult.InvalidResponse;
         }
 
+        if (verification.IsSuccess)
+        {
+            DeviceExchangeLog.Append("[WriteMetrology]   verify OK: signature/serial match");
+        }
+        else
+        {
+            DeviceExchangeLog.Append(
+                $"[WriteMetrology]   verify re-read failed: {ResultToDisplayText(verification.Result)} (non-fatal)");
+        }
+
+        DeviceExchangeLog.Append(
+            $"[WriteMetrology] END result={SerialOperationResult.Success} elapsed={Environment.TickCount64 - startedAt} ms");
         return SerialOperationResult.Success;
     }
 
@@ -835,16 +915,31 @@ public sealed class SerialDeviceService : IDisposable
 
     private SerialOperationResult RequestAirCalibrationCore()
     {
+        long startedAt = Environment.TickCount64;
+        DeviceExchangeLog.Append("[RequestAirCalibration] START");
         if (!IsConnected)
         {
+            DeviceExchangeLog.Append("[RequestAirCalibration]   IsConnected=false");
+            DeviceExchangeLog.Append("[RequestAirCalibration] END result=NOT_CONNECTED");
             return SerialOperationResult.NotConnected;
         }
 
+        DeviceExchangeLog.Append(
+            $"[RequestAirCalibration]   port={desiredPortName} baud={desiredBaudRate} " +
+            $"sessionId={Interlocked.Read(ref connectionSessionId)}");
+        DeviceExchangeLog.Append(
+            $"[RequestAirCalibration]   pausePolling={Volatile.Read(ref controlOperationCount) > 0} " +
+            $"hasMetrology={CurrentMetrology.HasValue} lastFrame={lastFrameNumber} " +
+            $"recording={(recordingEnabled ? "on" : "off")}");
+        DeviceExchangeLog.Append(
+            $"[RequestAirCalibration]   port timeouts: read={ReadTimeoutMilliseconds}ms write={WriteTimeoutMilliseconds}ms");
+        DeviceExchangeLog.Append("[RequestAirCalibration]   pausePolling=true; Sleep(2000)");
         Thread.Sleep(2000);
         if (useLegacyCartographProtocol)
         {
             DeviceProtocolLog.Write(
                 $"LEGACY CONTROL REJECTED | command=0x{CommandAirCalibration:X2} | reason=no_source_backed_LOOP_NEXT_contract");
+            DeviceExchangeLog.Append("[RequestAirCalibration] END result=INVALID_RESPONSE");
             return SerialOperationResult.InvalidResponse;
         }
 
@@ -855,9 +950,12 @@ public sealed class SerialDeviceService : IDisposable
                 [],
                 out byte responseCommand,
                 out _);
-            return result == SerialOperationResult.Success && responseCommand != CommandAirCalibration
+            SerialOperationResult finalResult = result == SerialOperationResult.Success && responseCommand != CommandAirCalibration
                 ? SerialOperationResult.InvalidResponse
                 : result;
+            DeviceExchangeLog.Append(
+                $"[RequestAirCalibration] END result={finalResult} elapsed={Environment.TickCount64 - startedAt} ms");
+            return finalResult;
         }
     }
 
@@ -1094,6 +1192,21 @@ public sealed class SerialDeviceService : IDisposable
     {
         CurrentMetrology = data;
         Metrology = new DeviceMetrologySummary(data.Signature, data.Serial, data.SondeDiameterMm);
+        DeviceExchangeLog.Append($"Метрология: получено sig=0x{data.Signature:X8}, serial={data.Serial}");
+        if (!loggedDeviceIdentityToExchangeLog)
+        {
+            uint low20 = (data.Signature << 12) >> 12;
+            int modification = (int)((low20 % 10000u) / 1000u);
+            int number = (int)(low20 % 1000u);
+            DeviceExchangeLog.AppendDeviceIdentity(
+                data.Signature,
+                data.Serial,
+                modification,
+                number,
+                data.RxPosition,
+                data.SondeDiameterMm);
+            loggedDeviceIdentityToExchangeLog = true;
+        }
     }
 
     private SerialOperationResult ExchangePacketCore(
@@ -1279,6 +1392,37 @@ public sealed class SerialDeviceService : IDisposable
                 : int.MaxValue;
     }
 
+    private static string JoinMetrologyValues(Func<int, ushort> valueProvider)
+    {
+        return string.Join(
+            " ",
+            Enumerable.Range(0, BinaryLayoutConstants.MaxTransmitterCount).Select(index => valueProvider(index)));
+    }
+
+    private static void AppendConnectionFailure(SerialOperationResult result)
+    {
+        DeviceExchangeLog.Append(result switch
+        {
+            SerialOperationResult.PortNotFound => "COM: порт не найден",
+            SerialOperationResult.PortBusy => "COM: порт занят",
+            SerialOperationResult.ConnectionFailed => "COM: ошибка открытия порта",
+            _ => $"COM: ошибка подключения ({ResultToDisplayText(result)})"
+        });
+    }
+
+    private static void AppendRequestFailure(SerialOperationResult result)
+    {
+        DeviceExchangeLog.Append(result switch
+        {
+            SerialOperationResult.Timeout => "Запрос кадра: нет ответа",
+            SerialOperationResult.CrcError => "RX: ошибка CRC16",
+            SerialOperationResult.InvalidSignature => "Запрос кадра: разбор кадра не удался (сигнатура?)",
+            SerialOperationResult.InvalidResponse => "Запрос кадра: неверный ответ прибора",
+            SerialOperationResult.NotConnected => "RX: порт не открыт",
+            _ => "Запрос кадра: ошибка отправки CMD_DATA"
+        });
+    }
+
     private void SetState(SerialConnectionState newState, string error = "")
     {
         state = newState;
@@ -1370,5 +1514,6 @@ public sealed class SerialDeviceService : IDisposable
             CloseRecordStreamCore();
             CloseSerialPortCore();
         }
+        DeviceExchangeLog.CloseFile();
     }
 }
