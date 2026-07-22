@@ -243,7 +243,8 @@ public sealed partial class MainWindow : Window
                     string current = AutoUpdateService.FormatVersion(update.CurrentVersion);
                     await ShowUpdateMessageAsync(
                         "Проверка обновлений",
-                        $"Установлена последняя версия ({current}).");
+                        $"Установлена последняя версия ({current}).",
+                        compactCentered: true);
                     SetStatus("Установлена последняя версия");
                 }
 
@@ -303,16 +304,64 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task ShowUpdateMessageAsync(string title, string message)
+    private async Task ShowUpdateMessageAsync(
+        string title,
+        string message,
+        bool compactCentered = false)
     {
+        TextBlock messageText = new()
+        {
+            Text = message,
+            TextWrapping = TextWrapping.Wrap,
+            TextAlignment = compactCentered ? TextAlignment.Center : TextAlignment.Left,
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        Button closeButton = new()
+        {
+            Content = "Закрыть",
+            Width = compactCentered ? 180 : 220,
+            HorizontalAlignment = HorizontalAlignment.Center
+        };
+        closeButton.Style = (Style)Application.Current.Resources["AccentButtonStyle"];
+
+        StackPanel content = new()
+        {
+            Width = compactCentered ? 360 : 500,
+            Spacing = compactCentered ? 14 : 24
+        };
+        if (compactCentered)
+        {
+            content.Children.Add(new TextBlock
+            {
+                Text = title,
+                FontSize = 22,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                TextAlignment = TextAlignment.Center,
+                TextWrapping = TextWrapping.Wrap,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            });
+        }
+
+        content.Children.Add(messageText);
+        content.Children.Add(closeButton);
+
         ContentDialog dialog = new()
         {
             XamlRoot = Content.XamlRoot,
-            Title = title,
-            Content = message,
-            CloseButtonText = "Закрыть",
-            DefaultButton = ContentDialogButton.Close
+            Content = content
         };
+        if (compactCentered)
+        {
+            dialog.Resources["ContentDialogMinHeight"] = 0d;
+            dialog.Resources["ContentDialogPadding"] = new Thickness(24, 18, 24, 12);
+        }
+        else
+        {
+            dialog.Title = title;
+        }
+
+        closeButton.Click += (_, _) => dialog.Hide();
+        dialog.Opened += (_, _) => closeButton.Focus(FocusState.Programmatic);
         await dialog.ShowAsync();
     }
 

@@ -20,7 +20,7 @@ internal sealed record UpdateCheckResult(
 internal sealed class AutoUpdateService : IDisposable
 {
     private static readonly Uri UpdateRoot = new(
-        "https://ivanbohg.beget.tech/FilesForProgramVisualisation/DataVisualization/",
+        "http://ivanbohg.beget.tech/FilesForProgramVisualisation/",
         UriKind.Absolute);
     private static readonly Uri UpdateDescriptorUri = new(
         UpdateRoot,
@@ -37,6 +37,12 @@ internal sealed class AutoUpdateService : IDisposable
         };
         httpClient.DefaultRequestHeaders.UserAgent.Add(
             new ProductInfoHeaderValue("DataVisualizationUpdater", "1.0"));
+        httpClient.DefaultRequestHeaders.CacheControl = new CacheControlHeaderValue
+        {
+            NoCache = true,
+            NoStore = true
+        };
+        httpClient.DefaultRequestHeaders.Pragma.ParseAdd("no-cache");
     }
 
     public Version CurrentVersion => GetCurrentVersion();

@@ -66,7 +66,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Build-Installe
 Каталог обновлений:
 
 ```text
-https://ivanbohg.beget.tech/FilesForProgramVisualisation/DataVisualization/
+http://ivanbohg.beget.tech/FilesForProgramVisualisation/
 ```
 
 В него публикуются setup и одноимённый descriptor:

@@ -23,7 +23,7 @@ AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppCopyright={#MyAppCopyright}
-AppUpdatesURL=https://ivanbohg.beget.tech/FilesForProgramVisualisation/DataVisualization/
+AppUpdatesURL=http://ivanbohg.beget.tech/FilesForProgramVisualisation/
 
 ; Per-machine install: приложение и ярлыки доступны всем пользователям.
 PrivilegesRequired=admin

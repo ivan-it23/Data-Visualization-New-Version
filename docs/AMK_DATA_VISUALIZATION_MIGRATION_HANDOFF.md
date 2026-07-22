@@ -314,8 +314,9 @@ parity `FromComputer` на одинаковых реальных данных е
 - общие ярлыки меню «Пуск» и рабочего стола выбираются независимо;
 - стабильный Inno `AppId` поддерживает обновление поверх установки;
 - build-скрипт переносит WinUI PRI/XBF и проверяет полный payload;
-- feed расположен в
-  `FilesForProgramVisualisation/DataVisualization/data-visualization-version.txt`;
+- отдельный descriptor нового приложения расположен в рабочем legacy
+  HTTP-каталоге:
+  `FilesForProgramVisualisation/data-visualization-version.txt`;
 - descriptor содержит version, имя setup и рекомендуемый SHA-256;
 - фоновая проверка выполняется через три секунды; ручная — по кнопке;
 - скачанный setup проверяется по имени, размеру, MZ-сигнатуре и SHA-256;

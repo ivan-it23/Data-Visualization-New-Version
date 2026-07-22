@@ -43,7 +43,8 @@ Win32/C++ приложения в модульное приложение WinUI 
 - [x] Единое имя «Визуализация данных» и `DataVisualization.exe`.
 - [x] All-users Inno Setup installer и общие опциональные ярлыки.
 - [x] Проверка обязательных WinUI PRI/XBF перед упаковкой.
-- [x] Отдельный HTTPS-feed `data-visualization-version.txt`.
+- [x] Отдельный descriptor `data-visualization-version.txt` в рабочем legacy
+  HTTP-каталоге обновлений.
 - [x] Запуск установленной версии `0.1.1` подтверждён владельцем.
 - [ ] Code signing.
 - [ ] Полный цикл install/update/uninstall между двумя опубликованными версиями.
