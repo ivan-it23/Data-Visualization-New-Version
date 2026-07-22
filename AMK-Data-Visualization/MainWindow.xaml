@@ -436,10 +436,11 @@
                         Click="OpenGraph2FileButton_Click"
                         ToolTipService.ToolTip="Открыть файл для графика 2"
                         Visibility="Collapsed">
-                        <FontIcon
-                            FontFamily="Segoe MDL2 Assets"
-                            FontSize="13"
-                            Glyph="&#xE8B7;" />
+                        <Image
+                            Width="16"
+                            Height="16"
+                            Source="ms-appx:///Assets/SystemFolder.png"
+                            Stretch="Uniform" />
                     </Button>
                 </StackPanel>
 
@@ -537,13 +538,28 @@
                 Grid.Column="2"
                 Padding="8,3,4,0"
                 TextTrimming="CharacterEllipsis" />
-            <FontIcon
-                x:Name="FolderStatusIcon"
+            <Button
+                x:Name="FolderStatusButton"
                 Grid.Column="3"
-                FontFamily="Segoe MDL2 Assets"
-                FontSize="12"
-                Glyph="&#xE8B7;"
-                Visibility="Collapsed" />
+                Width="24"
+                Height="23"
+                MinWidth="0"
+                MinHeight="0"
+                Padding="0"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                AutomationProperties.Name="Открыть папку файла данных"
+                Background="Transparent"
+                BorderThickness="0"
+                Click="FolderStatusButton_Click"
+                ToolTipService.ToolTip="Открыть папку файла данных"
+                Visibility="Collapsed">
+                <Image
+                    Width="16"
+                    Height="16"
+                    Source="ms-appx:///Assets/SystemFolder.png"
+                    Stretch="Uniform" />
+            </Button>
             <TextBlock
                 x:Name="LoadedFileStatusTextBlock"
                 Grid.Column="4"

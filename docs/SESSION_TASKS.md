@@ -1,6 +1,6 @@
 # AMK Data Visualization — оперативный снимок
 
-Последнее обновление: **19 июля 2026 года**.
+Последнее обновление: **22 июля 2026 года**.
 
 ## Назначение
 
@@ -14,7 +14,7 @@
 - unpackaged, Windows App SDK self-contained;
 - пользовательское имя «Визуализация данных»;
 - executable `DataVisualization.exe`;
-- версия `0.1.1` берётся из `AMK-Data-Visualization.csproj`;
+- версия `0.1.2` берётся из `AMK-Data-Visualization.csproj`;
 - all-users installer Inno Setup 6;
 - автоматизированных тестовых проектов нет;
 - перед работой обязательно выполнить `git status --short` и сохранить все

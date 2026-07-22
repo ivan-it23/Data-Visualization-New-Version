@@ -17,11 +17,14 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using WinRT.Interop;
 using System.Globalization;
+using System.Diagnostics;
 
 namespace AMK.DataVisualization.App;
 
 public sealed partial class MainWindow : Window
 {
+    private sealed record FolderTarget(string Label, string FolderPath);
+
     private readonly CurveSelectionService curveSelectionService = new();
     private readonly ChartWorkspace chartWorkspace = new(new ChartConfiguration(), new ChartConfiguration());
     private readonly SerialDeviceService serialDeviceService = new();
@@ -572,6 +575,148 @@ public sealed partial class MainWindow : Window
             Graph2Control.ClearSeries("Ошибка загрузки");
             SetStatus("Ошибка загрузки");
             UpdateStatusBarFileInfo();
+        }
+    }
+
+    private async void FolderStatusButton_Click(object sender, RoutedEventArgs e)
+    {
+        IReadOnlyList<FolderTarget> targets = GetStatusFolderTargets();
+        if (targets.Count == 0)
+        {
+            await ShowOperationMessageAsync("Папка", "Папка файла данных недоступна.");
+            return;
+        }
+
+        FolderTarget? selectedTarget = targets.Count == 1
+            ? targets[0]
+            : await SelectStatusFolderTargetAsync(targets);
+        if (selectedTarget is null)
+        {
+            return;
+        }
+
+        await OpenStatusFolderAsync(selectedTarget);
+    }
+
+    private IReadOnlyList<FolderTarget> GetStatusFolderTargets()
+    {
+        List<FolderTarget> targets = new(2);
+        FolderTarget? graph1Target = serialDeviceService.IsConnected
+            ? CreateSerialRecordingFolderTarget()
+            : CreateRepositoryFolderTarget(1, chartWorkspace.Graph1Repository);
+        if (graph1Target is not null)
+        {
+            targets.Add(graph1Target);
+        }
+
+        bool hasIndependentGraph2 = DualModeCheckBox.IsChecked == true
+            && chartWorkspace.IsGraph2Independent;
+        if (hasIndependentGraph2)
+        {
+            FolderTarget? graph2Target = CreateRepositoryFolderTarget(
+                2,
+                chartWorkspace.Graph2IndependentRepository);
+            if (graph2Target is not null)
+            {
+                targets.Add(graph2Target);
+            }
+        }
+
+        return targets;
+    }
+
+    private FolderTarget? CreateSerialRecordingFolderTarget()
+    {
+        SerialStatusSnapshot status = serialDeviceService.GetStatus();
+        SerialConnectionSettings settings = serialSettingsStore.Load();
+        string recordFilePath = status.RecordFilePath;
+        if (string.IsNullOrWhiteSpace(recordFilePath) && settings.AppendToExistingFile)
+        {
+            recordFilePath = settings.ExistingRecordFile;
+        }
+
+        string folderPath = !string.IsNullOrWhiteSpace(recordFilePath)
+            ? Path.GetDirectoryName(recordFilePath) ?? string.Empty
+            : settings.RecordFolder;
+        if (string.IsNullOrWhiteSpace(folderPath))
+        {
+            return null;
+        }
+
+        string sourceLabel = !string.IsNullOrWhiteSpace(recordFilePath)
+            ? Path.GetFileName(recordFilePath)
+            : $"запись {status.PortName}";
+        return new FolderTarget($"График 1 — {sourceLabel}", folderPath);
+    }
+
+    private static FolderTarget? CreateRepositoryFolderTarget(
+        int graphNumber,
+        ToolDataRepository repository)
+    {
+        if (string.IsNullOrWhiteSpace(repository.LoadedFilePath))
+        {
+            return null;
+        }
+
+        string folderPath = Path.GetDirectoryName(repository.LoadedFilePath) ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(folderPath))
+        {
+            return null;
+        }
+
+        string fileName = Path.GetFileName(repository.LoadedFilePath);
+        return new FolderTarget($"График {graphNumber} — {fileName}", folderPath);
+    }
+
+    private async Task<FolderTarget?> SelectStatusFolderTargetAsync(
+        IReadOnlyList<FolderTarget> targets)
+    {
+        RadioButtons choices = new()
+        {
+            Header = "Выберите файл данных:",
+            SelectedIndex = 0
+        };
+        foreach (FolderTarget target in targets)
+        {
+            choices.Items.Add(target.Label);
+        }
+
+        ContentDialog dialog = new()
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Открыть папку",
+            Content = choices,
+            PrimaryButtonText = "Открыть",
+            CloseButtonText = "Отмена",
+            DefaultButton = ContentDialogButton.Primary
+        };
+        ContentDialogResult result = await dialog.ShowAsync();
+        return result == ContentDialogResult.Primary
+            && choices.SelectedIndex >= 0
+            && choices.SelectedIndex < targets.Count
+                ? targets[choices.SelectedIndex]
+                : null;
+    }
+
+    private async Task OpenStatusFolderAsync(FolderTarget target)
+    {
+        if (!Directory.Exists(target.FolderPath))
+        {
+            await ShowOperationMessageAsync("Папка", "Папка файла данных недоступна.");
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(target.FolderPath)
+            {
+                UseShellExecute = true
+            });
+        }
+        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception
+            or InvalidOperationException)
+        {
+            await ShowOperationMessageAsync("Папка", "Не удалось открыть папку в проводнике.");
         }
     }
 
@@ -2043,7 +2188,7 @@ public sealed partial class MainWindow : Window
     {
         bool hasAnyData = chartWorkspace.Graph1Repository.HasData || chartWorkspace.Graph2IndependentRepository.HasData;
         bool connected = serialDeviceService.IsConnected;
-        FolderStatusIcon.Visibility = hasAnyData || connected ? Visibility.Visible : Visibility.Collapsed;
+        FolderStatusButton.Visibility = hasAnyData || connected ? Visibility.Visible : Visibility.Collapsed;
         LoadedFileStatusTextBlock.Text = connected
             ? $"{serialDeviceService.ConnectedPort}  |  Кадров: {chartWorkspace.Graph1Repository.DataSize}"
             : chartWorkspace.GetStatusFileInformation();
