@@ -1,4 +1,5 @@
 using AMK.DataVisualization.App.Controls;
+using AMK.DataVisualization.Charting.Notes;
 using AMK.DataVisualization.Charting.Series;
 using AMK.DataVisualization.Charting.Configuration;
 using AMK.DataVisualization.Core;
@@ -13,7 +14,9 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Windows.Storage.Pickers;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using WinRT.Interop;
+using System.Globalization;
 
 namespace AMK.DataVisualization.App;
 
@@ -25,11 +28,19 @@ public sealed partial class MainWindow : Window
     private readonly SerialConnectionSettingsStore serialSettingsStore = new();
     private readonly MetrologySession metrologySession = new();
     private readonly AutoUpdateService autoUpdateService = new();
+    private readonly NotesModule notesModule = new();
     private readonly CancellationTokenSource autoUpdateCancellation = new();
     private SchematicWindow? schematicWindow;
     private ConnectionSettingsWindow? connectionSettingsWindow;
     private MetrologyWindow? metrologyWindow;
     private FileConstructorWindow? fileConstructorWindow;
+    private NotesJournalWindow? notesJournalWindow;
+    private string currentDataFilePath = string.Empty;
+    private string configuredAppendRecordPath = string.Empty;
+    private bool serialRecordingEnabled;
+    private int activeChartNumber = 1;
+    private ChartPointSelectedEventArgs? chart1Crosshair;
+    private ChartPointSelectedEventArgs? chart2Crosshair;
     private bool initialMaximizeApplied;
     private bool updatingRangeControls;
     private bool startupUpdateCheckScheduled;
@@ -50,6 +61,12 @@ public sealed partial class MainWindow : Window
         Graph2Control.HorizontalScrollRequested += (_, args) => ScrollGraphX(2, args);
         GraphControl.VerticalScrollRequested += (_, args) => ScrollGraphY(1, args);
         Graph2Control.VerticalScrollRequested += (_, args) => ScrollGraphY(2, args);
+        GraphControl.PointSelected += (_, args) => ChartPointSelected(1, args);
+        Graph2Control.PointSelected += (_, args) => ChartPointSelected(2, args);
+        GraphControl.NoteMarkerActivated += async (_, args) => await OpenNoteAsync(1, args.NoteId);
+        Graph2Control.NoteMarkerActivated += async (_, args) => await OpenNoteAsync(2, args.NoteId);
+        GraphControl.ChartContextRequested += (_, args) => ShowChartContextMenu(1, GraphControl, args);
+        Graph2Control.ChartContextRequested += (_, args) => ShowChartContextMenu(2, Graph2Control, args);
         ShowLegacyEmptyState(1, hasData: false);
         ShowLegacyEmptyState(2, hasData: false);
         UpdateDualModeLayout();
@@ -77,6 +94,9 @@ public sealed partial class MainWindow : Window
             {
                 await fileConstructorWindow.LoadOpenedDataFileAsync(file.Path);
             }
+
+            currentDataFilePath = file.Path;
+            EnsureNotesLoadedForCurrentSource();
 
             chartWorkspace.Graph1Viewport.ResetAll();
             if (!chartWorkspace.IsGraph2Independent)
@@ -123,6 +143,8 @@ public sealed partial class MainWindow : Window
         {
             ToolDataRepository repository = chartWorkspace.Graph1Repository;
             repository.LoadDataFromFile(filePath);
+            currentDataFilePath = filePath;
+            EnsureNotesLoadedForCurrentSource();
             chartWorkspace.Graph1Viewport.ResetAll();
             if (!chartWorkspace.IsGraph2Independent)
             {
@@ -378,6 +400,16 @@ public sealed partial class MainWindow : Window
 
     private void PrepareSerialSession(SerialConnectionSettings settings)
     {
+        currentDataFilePath = string.Empty;
+        serialRecordingEnabled = settings.RecordingEnabled;
+        configuredAppendRecordPath = settings.RecordingEnabled
+            && settings.AppendToExistingFile
+            && File.Exists(settings.ExistingRecordFile)
+                ? settings.ExistingRecordFile
+                : string.Empty;
+        EnsureNotesLoadedForCurrentSource();
+        GraphControl.ClearCrosshair();
+        Graph2Control.ClearCrosshair();
         bool loadExisting = settings.AppendToExistingFile
             && settings.ShowFullExistingFile
             && File.Exists(settings.ExistingRecordFile);
@@ -430,7 +462,19 @@ public sealed partial class MainWindow : Window
 
     private void SerialDeviceService_StatusChanged(object? sender, SerialStatusChangedEventArgs e)
     {
-        DispatcherQueue.TryEnqueue(() => UpdateConnectionControls(e.Status));
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            bool notesSourceChanged = EnsureNotesLoadedForCurrentSource();
+            UpdateConnectionControls(e.Status);
+            if (notesSourceChanged)
+            {
+                RenderGraph(1);
+                if (!chartWorkspace.IsGraph2Independent && DualModeCheckBox.IsChecked == true)
+                {
+                    RenderGraph(2);
+                }
+            }
+        });
     }
 
     private void UpdateConnectionControls(SerialStatusSnapshot status)
@@ -439,7 +483,7 @@ public sealed partial class MainWindow : Window
         bool busy = status.State == SerialConnectionState.Connecting;
         ConnectionToggleButton.Content = connected ? "Отключить" : "Включить";
         ConnectionToggleButton.IsEnabled = !busy;
-        PollingToggleButton.Content = status.IsPolling ? "⏸" : "▶";
+        PollingToggleIcon.Symbol = status.IsPolling ? Symbol.Pause : Symbol.Play;
         PollingToggleButton.IsEnabled = connected;
         if (status.State == SerialConnectionState.ConnectionError && !string.IsNullOrWhiteSpace(status.LastError))
         {
@@ -599,6 +643,11 @@ public sealed partial class MainWindow : Window
             graphConfiguration.XAxisType,
             allXAxisData,
             visibleRange);
+        List<ChartNoteMarker> noteMarkers = BuildVisibleNoteMarkers(
+            graphNumber,
+            graphConfiguration,
+            allXAxisData,
+            visibleRange);
         GroupedCurves groupedCurves = ChartDataCalculator.GroupCurvesByAxis(graphConfiguration.Curves);
         List<ChartRenderSeries> renderSeries = [];
 
@@ -638,7 +687,9 @@ public sealed partial class MainWindow : Window
             graphConfiguration.IsPresetActive ? graphConfiguration.PresetDisplayName : string.Empty,
             viewport.LeftYRange,
             viewport.RightYRange,
-            segmentBoundaryXValues);
+            segmentBoundaryXValues,
+            noteMarkers,
+            visibleRange.StartIndex);
         graphControl.IsFlowMode = viewport.IsFlowEnabled;
         graphControl.ConfigureScrollBars(
             repository.DataSize,
@@ -646,6 +697,561 @@ public sealed partial class MainWindow : Window
             visibleRange.EndIndex,
             !viewport.IsFlowEnabled && viewport.HasCustomXRange);
         UpdateRangeControls(graphNumber);
+    }
+
+    private List<ChartNoteMarker> BuildVisibleNoteMarkers(
+        int graphNumber,
+        ChartConfiguration configuration,
+        IReadOnlyList<float> allXAxisData,
+        ChartIndexRange visibleRange)
+    {
+        bool showNotes = graphNumber == 1
+            ? Chart1ShowNotesCheckBox.IsChecked == true
+            : Chart2ShowNotesCheckBox.IsChecked == true;
+        if (!showNotes
+            || (graphNumber == 2 && chartWorkspace.IsGraph2Independent)
+            || configuration.Curves.Count == 0)
+        {
+            return [];
+        }
+
+        EnsureNotesLoadedForCurrentSource();
+        if (!notesModule.IsLoaded || notesModule.NotesPath.Length == 0)
+        {
+            return [];
+        }
+
+        ulong configKey = NotesModule.ComputeConfigKey(configuration);
+        List<ChartNoteMarker> markers = [];
+        foreach (ChartNote note in notesModule.GetNotesForConfig(configKey))
+        {
+            if (note.XIndex < 0
+                || note.XIndex < visibleRange.StartIndex - 1
+                || note.XIndex > visibleRange.EndIndex + 1
+                || note.XIndex >= allXAxisData.Count)
+            {
+                continue;
+            }
+
+            markers.Add(new ChartNoteMarker(
+                note.NoteId,
+                allXAxisData[note.XIndex],
+                note.YLeft,
+                note.YRight,
+                note.HasYRight,
+                note.AnchorAxisGroup,
+                note.Text));
+        }
+
+        return markers;
+    }
+
+    private bool EnsureNotesLoadedForCurrentSource()
+    {
+        string notesPath = ResolveCurrentNotesPath();
+        bool changed = !string.Equals(notesModule.NotesPath, notesPath, StringComparison.Ordinal);
+        if (changed)
+        {
+            notesModule.SetNotesPath(notesPath);
+        }
+
+        if (!notesModule.IsLoaded)
+        {
+            notesModule.LoadFromDisk();
+        }
+
+        return changed;
+    }
+
+    private string ResolveCurrentNotesPath()
+    {
+        if (currentDataFilePath.Length > 0)
+        {
+            return currentDataFilePath + ".notes.jsonl";
+        }
+
+        SerialStatusSnapshot status = serialDeviceService.GetStatus();
+        if (!serialRecordingEnabled || !serialDeviceService.IsConnected)
+        {
+            return string.Empty;
+        }
+
+        string recordPath = status.RecordFilePath.Length > 0
+            ? status.RecordFilePath
+            : configuredAppendRecordPath;
+        return recordPath.Length > 0 ? recordPath + ".notes.jsonl" : string.Empty;
+    }
+
+    private void ChartPointSelected(int graphNumber, ChartPointSelectedEventArgs args)
+    {
+        activeChartNumber = graphNumber;
+        ChartConfiguration configuration = chartWorkspace.GetConfigurationForGraph(graphNumber);
+        if (graphNumber == 1)
+        {
+            chart1Crosshair = args;
+            CursorXTextBox.Text = args.SourceIndex.ToString(CultureInfo.CurrentCulture);
+            CursorY1TextBox.Text = FormatCursorValue(args.YLeft, configuration.LeftAxisUnits);
+        }
+        else
+        {
+            chart2Crosshair = args;
+            Cursor2XTextBox.Text = args.SourceIndex.ToString(CultureInfo.CurrentCulture);
+            Cursor2Y1TextBox.Text = FormatCursorValue(args.YLeft, configuration.LeftAxisUnits);
+        }
+    }
+
+    private void Cursor1ClearButton_Click(object sender, RoutedEventArgs e) => ClearChartCrosshair(1);
+
+    private void Cursor2ClearButton_Click(object sender, RoutedEventArgs e) => ClearChartCrosshair(2);
+
+    private void ClearChartCrosshair(int graphNumber)
+    {
+        activeChartNumber = graphNumber;
+        if (graphNumber == 1)
+        {
+            chart1Crosshair = null;
+            CursorXTextBox.Text = "—";
+            CursorY1TextBox.Text = "—";
+            GraphControl.ClearCrosshair();
+        }
+        else
+        {
+            chart2Crosshair = null;
+            Cursor2XTextBox.Text = "—";
+            Cursor2Y1TextBox.Text = "—";
+            Graph2Control.ClearCrosshair();
+        }
+    }
+
+    private static string FormatCursorValue(double value, string units)
+    {
+        string formatted = units switch
+        {
+            "mdeg" => value.ToString("F0", CultureInfo.CurrentCulture),
+            "mV" => value.ToString("F2", CultureInfo.CurrentCulture),
+            "V/V" => value.ToString("F4", CultureInfo.CurrentCulture),
+            "degC" or "°C" => value.ToString("F2", CultureInfo.CurrentCulture),
+            _ => value.ToString("F2", CultureInfo.CurrentCulture)
+        };
+        string displayUnits = units is "degC" or "°C" ? "°C" : units;
+        return displayUnits.Length == 0 ? formatted : $"{formatted} {displayUnits}";
+    }
+
+    private void ShowChartContextMenu(
+        int graphNumber,
+        LineChartControl graphControl,
+        ChartContextRequestedEventArgs args)
+    {
+        activeChartNumber = graphNumber;
+        MenuFlyout menu = new();
+        MenuFlyoutItem setXFromItem = new()
+        {
+            Text = "Установить как X начальное",
+            IsEnabled = args.HasCrosshair
+        };
+        setXFromItem.Click += (_, _) => SetXRangeBoundaryFromCrosshair(graphNumber, setStart: true);
+        menu.Items.Add(setXFromItem);
+
+        MenuFlyoutItem setXToItem = new()
+        {
+            Text = "Установить как X конечное",
+            IsEnabled = args.HasCrosshair
+        };
+        setXToItem.Click += (_, _) => SetXRangeBoundaryFromCrosshair(graphNumber, setStart: false);
+        menu.Items.Add(setXToItem);
+        menu.Items.Add(new MenuFlyoutSeparator());
+
+        MenuFlyoutItem addNoteItem = new()
+        {
+            Text = "Создать заметку",
+            IsEnabled = args.HasCrosshair
+                && chartWorkspace.GetRepositoryForGraph(graphNumber).HasData
+                && !(graphNumber == 2 && chartWorkspace.IsGraph2Independent)
+        };
+        addNoteItem.Click += async (_, _) => await CreateNoteAtCrosshairAsync(graphNumber);
+        menu.Items.Add(addNoteItem);
+        menu.ShowAt(graphControl, new FlyoutShowOptions { Position = args.Position });
+    }
+
+    private void SetXRangeBoundaryFromCrosshair(int graphNumber, bool setStart)
+    {
+        ToolDataRepository repository = chartWorkspace.GetRepositoryForGraph(graphNumber);
+        ChartPointSelectedEventArgs? selected = graphNumber == 1 ? chart1Crosshair : chart2Crosshair;
+        LineChartControl graphControl = graphNumber == 1 ? GraphControl : Graph2Control;
+        if (!repository.HasData || selected is null || !graphControl.HasCrosshair)
+        {
+            return;
+        }
+
+        int selectedX = Math.Clamp(selected.SourceIndex, 0, Math.Max(0, repository.DataSize - 1));
+        string value = selectedX.ToString(CultureInfo.CurrentCulture);
+        if (graphNumber == 1)
+        {
+            if (setStart)
+            {
+                XRangeFromTextBox.Text = value;
+            }
+            else
+            {
+                XRangeToTextBox.Text = value;
+            }
+
+            Graph1ResetRangeButton.IsEnabled = true;
+        }
+        else
+        {
+            if (setStart)
+            {
+                XRange2FromTextBox.Text = value;
+            }
+            else
+            {
+                XRange2ToTextBox.Text = value;
+            }
+
+            Graph2ResetRangeButton.IsEnabled = true;
+        }
+    }
+
+    private async Task CreateNoteAtCrosshairAsync(int graphNumber)
+    {
+        ToolDataRepository repository = chartWorkspace.GetRepositoryForGraph(graphNumber);
+        ChartPointSelectedEventArgs? selected = graphNumber == 1 ? chart1Crosshair : chart2Crosshair;
+        LineChartControl graphControl = graphNumber == 1 ? GraphControl : Graph2Control;
+        if (!repository.HasData)
+        {
+            await ShowNotesMessageAsync("Заметки", "Нет данных для создания заметки.");
+            return;
+        }
+
+        if (selected is null || !graphControl.HasCrosshair)
+        {
+            await ShowNotesMessageAsync(
+                "Заметки",
+                "Сначала выберите точку на графике (клик по области графика).");
+            return;
+        }
+
+        if (graphNumber == 2 && chartWorkspace.IsGraph2Independent)
+        {
+            return;
+        }
+
+        string notesPath = ResolveCurrentNotesPath();
+        if (notesPath.Length == 0)
+        {
+            await ShowNotesMessageAsync(
+                "Заметки",
+                "Не найден файл данных для привязки заметок.\nОткройте файл данных или включите запись при работе через COM.");
+            return;
+        }
+
+        TextBox editor = new()
+        {
+            MaxLength = 4095,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            Height = 190,
+            MinWidth = 520
+        };
+        ContentDialog dialog = new()
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Создание заметки",
+            Content = editor,
+            PrimaryButtonText = "Сохранить",
+            CloseButtonText = "Отмена",
+            DefaultButton = ContentDialogButton.Primary
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        EnsureNotesLoadedForCurrentSource();
+        ChartConfiguration configuration = chartWorkspace.GetConfigurationForGraph(graphNumber);
+        int xIndex = Math.Clamp(selected.SourceIndex, 0, Math.Max(0, repository.DataSize - 1));
+        ChartNote note = new()
+        {
+            NoteId = NotesModule.GenerateNoteId(),
+            CreatedUtcMs = NotesModule.NowUtcMs(),
+            ConfigKey = NotesModule.ComputeConfigKey(configuration),
+            ConfigSnapshot = NotesModule.BuildConfigSnapshot(configuration),
+            PresetName = configuration.PresetDisplayName,
+            XAxisType = configuration.XAxisType,
+            XIndex = xIndex,
+            YLeft = selected.YLeft,
+            YRight = selected.YRight,
+            HasYRight = selected.HasRightAxis,
+            AnchorAxisGroup = 0,
+            Text = editor.Text
+        };
+        if (!notesModule.AppendNote(note))
+        {
+            await ShowNotesMessageAsync("Заметки", "Не удалось сохранить заметку на диск.");
+            return;
+        }
+
+        RenderNotesOnLinkedGraphs();
+    }
+
+    private async Task OpenNoteAsync(int graphNumber, string noteId)
+    {
+        activeChartNumber = graphNumber;
+        EnsureNotesLoadedForCurrentSource();
+        ChartNote? note = notesModule.GetAllNotes().FirstOrDefault(item => item.NoteId == noteId);
+        if (note is null)
+        {
+            return;
+        }
+
+        TextBox editor = new()
+        {
+            Text = note.Text,
+            MaxLength = 4095,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            Height = 190,
+            MinWidth = 520,
+            SelectionLength = note.Text.Length
+        };
+        ContentDialog dialog = new()
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Заметка",
+            Content = editor,
+            PrimaryButtonText = "Сохранить",
+            SecondaryButtonText = "Удалить",
+            CloseButtonText = "Закрыть",
+            DefaultButton = ContentDialogButton.Primary
+        };
+        ContentDialogResult result = await dialog.ShowAsync();
+        if (result == ContentDialogResult.Primary)
+        {
+            if (!UpdateNoteTextById(note.NoteId, editor.Text))
+            {
+                await ShowNotesMessageAsync("Заметки", "Не удалось сохранить изменения заметки.");
+            }
+        }
+        else if (result == ContentDialogResult.Secondary)
+        {
+            ContentDialog confirmation = new()
+            {
+                XamlRoot = Content.XamlRoot,
+                Title = "Удаление заметки",
+                Content = "Удалить эту заметку?\nДействие нельзя отменить.",
+                PrimaryButtonText = "Удалить",
+                CloseButtonText = "Отмена",
+                DefaultButton = ContentDialogButton.Close
+            };
+            if (await confirmation.ShowAsync() == ContentDialogResult.Primary)
+            {
+                if (!notesModule.DeleteNoteById(note.NoteId))
+                {
+                    await ShowNotesMessageAsync("Заметки", "Не удалось удалить заметку.");
+                }
+                else
+                {
+                    RenderNotesOnLinkedGraphs();
+                }
+            }
+        }
+    }
+
+    private bool UpdateNoteTextById(string noteId, string newText)
+    {
+        if (ResolveCurrentNotesPath().Length == 0)
+        {
+            return false;
+        }
+
+        EnsureNotesLoadedForCurrentSource();
+        if (!notesModule.UpdateNoteTextById(noteId, newText))
+        {
+            return false;
+        }
+
+        RenderNotesOnLinkedGraphs();
+        return true;
+    }
+
+    private void RenderNotesOnLinkedGraphs()
+    {
+        RenderGraph(1);
+        if (!chartWorkspace.IsGraph2Independent && DualModeCheckBox.IsChecked == true)
+        {
+            RenderGraph(2);
+        }
+    }
+
+    private void ChartShowNotesCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (ReferenceEquals(sender, Chart1ShowNotesCheckBox))
+        {
+            RenderGraph(1);
+        }
+        else if (ReferenceEquals(sender, Chart2ShowNotesCheckBox))
+        {
+            RenderGraph(2);
+        }
+    }
+
+    private void NotesJournalMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        notesJournalWindow ??= new NotesJournalWindow(
+            GetNotesJournalSource,
+            GetActiveChartNumber,
+            ApplyNoteConfiguration,
+            UpdateNoteTextById);
+        notesJournalWindow.ShowForOwner(WindowNative.GetWindowHandle(this));
+    }
+
+    private NotesJournalSource GetNotesJournalSource()
+    {
+        string notesPath = ResolveCurrentNotesPath();
+        if (notesPath.Length == 0)
+        {
+            return new NotesJournalSource(false, string.Empty, []);
+        }
+
+        EnsureNotesLoadedForCurrentSource();
+        return new NotesJournalSource(true, notesPath, notesModule.GetAllNotes());
+    }
+
+    private int GetActiveChartNumber()
+    {
+        return DualModeCheckBox.IsChecked == true && activeChartNumber == 2 ? 2 : 1;
+    }
+
+    private NoteOperationResult ApplyNoteConfiguration(ChartNote note, int graphNumber)
+    {
+        if (graphNumber is not 1 and not 2)
+        {
+            return NoteOperationResult.Failed("Некорректный номер графика.");
+        }
+
+        if (!NotesModule.ParseConfigSnapshot(
+                note.ConfigSnapshot,
+                out XAxisType xAxisType,
+                out PresetType preset,
+                out List<SnapshotCurveItem> parsedCurves))
+        {
+            return NoteOperationResult.Failed("Не удалось прочитать конфигурацию кривых из заметки.");
+        }
+
+        FrequencyBand frequency = FrequencyBand.Freq400KHz;
+        foreach (SnapshotCurveItem parsedCurve in parsedCurves)
+        {
+            if (parsedCurve.CurveId.Contains("2000", StringComparison.Ordinal))
+            {
+                frequency = FrequencyBand.Freq2000KHz;
+                break;
+            }
+
+            if (parsedCurve.CurveId.Contains("400", StringComparison.Ordinal))
+            {
+                frequency = FrequencyBand.Freq400KHz;
+                break;
+            }
+        }
+
+        ChartConfiguration configuration;
+        if (preset is not PresetType.None and not PresetType.Custom)
+        {
+            SchematicConfigurationEditor editor = new(
+                curveSelectionService,
+                SchematicSelection.UiTransmitterCount,
+                new ChartConfiguration());
+            editor.SetFrequency(frequency);
+            editor.ApplyPreset(preset);
+            configuration = editor.BuildConfiguration();
+        }
+        else
+        {
+            configuration = chartWorkspace.GetConfigurationForGraph(graphNumber).Copy();
+        }
+
+        if (configuration.Curves.Count == 0)
+        {
+            configuration = curveSelectionService.BuildFullCurveSet(frequency);
+        }
+
+        if (configuration.Curves.Count == 0)
+        {
+            return NoteOperationResult.Failed(
+                "В текущем состоянии графика нельзя восстановить конфигурацию заметки.");
+        }
+
+        int enabledCount = EnableSnapshotCurves(configuration, parsedCurves);
+        if (enabledCount <= 0)
+        {
+            configuration = curveSelectionService.BuildFullCurveSet(frequency);
+            enabledCount = EnableSnapshotCurves(configuration, parsedCurves);
+        }
+
+        if (enabledCount <= 0)
+        {
+            return NoteOperationResult.Failed(
+                "Не найдено ни одной совместимой кривой для применения заметки.");
+        }
+
+        configuration.XAxisType = xAxisType;
+        configuration.ActivePreset = preset;
+        if (note.PresetName.Length > 0)
+        {
+            configuration.PresetDisplayName = note.PresetName;
+        }
+
+        configuration.UpdateAxisConfiguration();
+        if (!curveSelectionService.ValidateConfiguration(configuration))
+        {
+            return NoteOperationResult.Failed(
+                "Конфигурация из заметки не прошла проверку валидности.");
+        }
+
+        chartWorkspace.ApplyConfigurationForGraph(graphNumber, configuration);
+        schematicWindow?.RefreshDataContext(graphNumber);
+        RenderGraph(graphNumber);
+        return NoteOperationResult.Ok;
+    }
+
+    private static int EnableSnapshotCurves(
+        ChartConfiguration configuration,
+        IReadOnlyList<SnapshotCurveItem> parsedCurves)
+    {
+        foreach (CurveDefinition curve in configuration.Curves)
+        {
+            curve.Enabled = false;
+        }
+
+        int enabledCount = 0;
+        foreach (SnapshotCurveItem parsedCurve in parsedCurves)
+        {
+            CurveDefinition? curve = configuration.Curves.FirstOrDefault(
+                item => item.Id == parsedCurve.CurveId);
+            if (curve is null)
+            {
+                continue;
+            }
+
+            curve.Enabled = true;
+            curve.YAxisGroup = parsedCurve.YAxisGroup;
+            enabledCount++;
+        }
+
+        return enabledCount;
+    }
+
+    private async Task ShowNotesMessageAsync(string title, string message)
+    {
+        ContentDialog dialog = new()
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = title,
+            Content = message,
+            CloseButtonText = "ОК"
+        };
+        await dialog.ShowAsync();
     }
 
     private static List<float> BuildVisibleSegmentBoundaryXValues(
@@ -769,7 +1375,6 @@ public sealed partial class MainWindow : Window
     private void ResetRange(int graphNumber)
     {
         chartWorkspace.GetViewportForGraph(graphNumber).ResetRange();
-        SetRangeText(graphNumber, string.Empty, string.Empty);
         RenderGraph(graphNumber);
         SetStatus($"График {graphNumber}: диапазон сброшен");
     }
@@ -797,7 +1402,6 @@ public sealed partial class MainWindow : Window
     private void ResetZoom(int graphNumber)
     {
         chartWorkspace.GetViewportForGraph(graphNumber).ResetZoom();
-        SetRangeText(graphNumber, string.Empty, string.Empty);
         RenderGraph(graphNumber);
         SetStatus($"График {graphNumber}: zoom сброшен");
     }
@@ -849,13 +1453,22 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        SetRangeText(graphNumber, string.Empty, string.Empty);
         RenderGraph(graphNumber);
         SetStatus(enabled ? $"График {graphNumber}: Поток ON ({viewport.FlowWindowSize})" : $"График {graphNumber}: Поток OFF");
     }
 
     private void ApplyPointerZoom(int graphNumber, ChartZoomRequestedEventArgs args)
     {
+        activeChartNumber = graphNumber;
+        if (graphNumber == 1)
+        {
+            chart1Crosshair = null;
+        }
+        else
+        {
+            chart2Crosshair = null;
+        }
+
         ToolDataRepository repository = chartWorkspace.GetRepositoryForGraph(graphNumber);
         ChartViewportState viewport = chartWorkspace.GetViewportForGraph(graphNumber);
         if (!viewport.ApplyDragZoom(repository.DataSize, args.StartFraction, args.EndFraction, args.LeftYRange, args.RightYRange))
@@ -879,10 +1492,6 @@ public sealed partial class MainWindow : Window
         }
 
         ChartIndexRange visibleRange = viewport.GetVisibleRange(repository.DataSize);
-        SetRangeText(
-            graphNumber,
-            visibleRange.StartIndex.ToString(),
-            visibleRange.EndIndex.ToString());
         RenderGraph(graphNumber);
         SetStatus($"График {graphNumber}: участок {visibleRange.StartIndex}–{visibleRange.EndIndex}");
     }
@@ -904,20 +1513,6 @@ public sealed partial class MainWindow : Window
         return graphNumber == 1
             ? (XRangeFromTextBox.Text, XRangeToTextBox.Text)
             : (XRange2FromTextBox.Text, XRange2ToTextBox.Text);
-    }
-
-    private void SetRangeText(int graphNumber, string from, string to)
-    {
-        if (graphNumber == 1)
-        {
-            XRangeFromTextBox.Text = from;
-            XRangeToTextBox.Text = to;
-        }
-        else
-        {
-            XRange2FromTextBox.Text = from;
-            XRange2ToTextBox.Text = to;
-        }
     }
 
     private void UpdateRangeControls(int graphNumber)
@@ -958,17 +1553,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        ContentDialog actionDialog = new()
-        {
-            XamlRoot = Content.XamlRoot,
-            Title = "Сохранение отрезка",
-            Content = "Выберите, что сделать с выбранным отрезком. Добавление возможно только в канонический .bin файл с такой же сигнатурой прибора.",
-            PrimaryButtonText = "Сохранить отдельным файлом",
-            SecondaryButtonText = "Добавить к существующему файлу",
-            CloseButtonText = "Отмена",
-            DefaultButton = ContentDialogButton.Primary
-        };
-        ContentDialogResult action = await actionDialog.ShowAsync();
+        ContentDialogResult action = await ShowSaveRangeActionDialogAsync();
         if (action == ContentDialogResult.None)
         {
             return;
@@ -1032,6 +1617,83 @@ public sealed partial class MainWindow : Window
         }
 
         SetStatus(saved ? $"Сохранён участок {range.StartIndex}–{range.EndIndex}" : "Не удалось сохранить выбранный участок");
+    }
+
+    private async Task<ContentDialogResult> ShowSaveRangeActionDialogAsync()
+    {
+        ContentDialogResult result = ContentDialogResult.None;
+        ContentDialog dialog = new()
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Сохранение отрезка",
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        TextBlock description = new()
+        {
+            Text = "Выберите, что сделать с выбранным отрезком. Добавление возможно только в канонический .bin файл с такой же сигнатурой прибора.",
+            TextWrapping = TextWrapping.Wrap
+        };
+
+        Button saveSeparateButton = new()
+        {
+            Content = "Сохранить отдельным",
+            MinWidth = 220,
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        saveSeparateButton.Style = (Style)Application.Current.Resources["AccentButtonStyle"];
+
+        Button appendButton = new()
+        {
+            Content = "Добавить к существующему",
+            MinWidth = 270,
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+
+        Button cancelButton = new()
+        {
+            Content = "Отмена",
+            MinWidth = 120,
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+
+        Grid buttons = new()
+        {
+            ColumnSpacing = 12
+        };
+        buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(220) });
+        buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(270) });
+        buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(120) });
+        Grid.SetColumn(appendButton, 1);
+        Grid.SetColumn(cancelButton, 2);
+        buttons.Children.Add(saveSeparateButton);
+        buttons.Children.Add(appendButton);
+        buttons.Children.Add(cancelButton);
+
+        StackPanel content = new()
+        {
+            Width = 634,
+            Spacing = 20
+        };
+        content.Children.Add(description);
+        content.Children.Add(buttons);
+        dialog.Content = content;
+
+        saveSeparateButton.Click += (_, _) =>
+        {
+            result = ContentDialogResult.Primary;
+            dialog.Hide();
+        };
+        appendButton.Click += (_, _) =>
+        {
+            result = ContentDialogResult.Secondary;
+            dialog.Hide();
+        };
+        cancelButton.Click += (_, _) => dialog.Hide();
+
+        await dialog.ShowAsync();
+        return result;
     }
 
     private async void Graph1CutRangeButton_Click(object sender, RoutedEventArgs e)
@@ -1388,6 +2050,8 @@ public sealed partial class MainWindow : Window
         schematicWindow = null;
         fileConstructorWindow?.ClosePermanently();
         fileConstructorWindow = null;
+        notesJournalWindow?.ClosePermanently();
+        notesJournalWindow = null;
         serialDeviceService.Dispose();
         autoUpdateService.Dispose();
         autoUpdateCancellation.Dispose();

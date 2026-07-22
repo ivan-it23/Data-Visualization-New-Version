@@ -159,6 +159,80 @@ public sealed class CurveSelectionService
         return normalized;
     }
 
+    public ChartConfiguration BuildFullCurveSet(FrequencyBand frequency)
+    {
+        ChartConfiguration configuration = new();
+        const int transmitterCount = SchematicSelection.UiTransmitterCount;
+
+        for (int transmitter = 0; transmitter < transmitterCount; transmitter++)
+        {
+            CurveDefinition curve = CreateDifferenceCurve(transmitter, frequency);
+            curve.YAxisGroup = 0;
+            curve.Enabled = false;
+            curve.Color = AssignSmartColor(configuration.Curves, transmitter, 0);
+            configuration.Curves.Add(curve);
+        }
+
+        for (int transmitter = 0; transmitter < transmitterCount; transmitter++)
+        {
+            for (int receiver = 0; receiver < SchematicSelection.UiReceiverCount; receiver++)
+            {
+                CurveDefinition curve = CreateAmplitudeCurve(transmitter, receiver, frequency);
+                curve.YAxisGroup = 1;
+                curve.Enabled = false;
+                curve.Color = AssignSmartColor(configuration.Curves, transmitter, 1);
+                configuration.Curves.Add(curve);
+            }
+        }
+
+        for (int transmitter = 0; transmitter < transmitterCount; transmitter++)
+        {
+            CurveDefinition curve = CreateRatioCurve(transmitter, frequency);
+            curve.YAxisGroup = 0;
+            curve.Enabled = false;
+            curve.Color = AssignSmartColor(configuration.Curves, transmitter, 0);
+            configuration.Curves.Add(curve);
+        }
+
+        for (int transmitter = 0; transmitter < transmitterCount; transmitter++)
+        {
+            CurveDefinition curve = CreatePhaseSmtCurve(transmitter, frequency);
+            curve.YAxisGroup = 0;
+            curve.Enabled = false;
+            curve.Color = AssignSmartColor(configuration.Curves, transmitter, 0);
+            configuration.Curves.Add(curve);
+        }
+
+        for (int transmitter = 0; transmitter < transmitterCount; transmitter++)
+        {
+            CurveDefinition curve = CreateRhoSmtCurve(transmitter, frequency);
+            curve.YAxisGroup = 0;
+            curve.Enabled = false;
+            curve.Color = AssignSmartColor(configuration.Curves, transmitter, 0);
+            configuration.Curves.Add(curve);
+        }
+
+        for (int receiver = 0; receiver < SchematicSelection.UiSilentCount; receiver++)
+        {
+            CurveDefinition curve = CreateSilentAmplitudeCurve(receiver, frequency);
+            curve.YAxisGroup = 1;
+            curve.Enabled = false;
+            curve.Color = AssignSmartColor(configuration.Curves, receiver, 1);
+            configuration.Curves.Add(curve);
+        }
+
+        CurveDefinition silentDifference = CreateSilentPhaseDifferenceCurve(frequency);
+        silentDifference.YAxisGroup = 0;
+        silentDifference.Enabled = false;
+        silentDifference.Color = AssignSmartColor(configuration.Curves, 0, 0);
+        configuration.Curves.Add(silentDifference);
+
+        CurveDefinition temperature = CreateTemperatureCurve(frequency);
+        temperature.Enabled = false;
+        configuration.Curves.Add(temperature);
+        return configuration;
+    }
+
     public DataTypeFilter DetermineDataFilterFromCurves(IReadOnlyList<CurveDefinition> curves)
     {
         if (curves.Count == 0)

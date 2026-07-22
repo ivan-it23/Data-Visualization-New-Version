@@ -32,6 +32,25 @@ public sealed record ChartYScrollRequestedEventArgs(
     (double Min, double Max)? LeftYRange,
     (double Min, double Max)? RightYRange);
 
+public sealed record ChartNoteMarker(
+    string NoteId,
+    float XValue,
+    double YLeft,
+    double YRight,
+    bool HasYRight,
+    int AnchorAxisGroup,
+    string Text);
+
+public sealed record ChartPointSelectedEventArgs(
+    int SourceIndex,
+    double YLeft,
+    double YRight,
+    bool HasRightAxis);
+
+public sealed record ChartNoteMarkerEventArgs(string NoteId);
+
+public sealed record ChartContextRequestedEventArgs(Point Position, bool HasCrosshair);
+
 public sealed partial class LineChartControl : UserControl
 {
     private const double HorizontalScrollBarBottomMargin = 4.0;
@@ -41,6 +60,8 @@ public sealed partial class LineChartControl : UserControl
     private string rightAxisUnits = string.Empty;
     private IReadOnlyList<float> xValues = [];
     private IReadOnlyList<float> segmentBoundaryXValues = [];
+    private IReadOnlyList<ChartNoteMarker> noteMarkers = [];
+    private readonly List<RenderedNoteMarker> renderedNoteMarkers = [];
     private string xAxisTitle = "Номер кадра";
     private string presetDisplayName = string.Empty;
     private (double Min, double Max)? requestedLeftRange;
@@ -49,6 +70,8 @@ public sealed partial class LineChartControl : UserControl
     private AxisScale? currentXScale;
     private AxisScale? currentLeftScale;
     private AxisScale? currentRightScale;
+    private int visibleStartIndex;
+    private CrosshairState? crosshair;
     private Point? dragStart;
     private Rectangle? selectionRectangle;
     private AxisScrollContext? leftYScrollContext;
@@ -61,7 +84,15 @@ public sealed partial class LineChartControl : UserControl
 
     public event EventHandler<ChartYScrollRequestedEventArgs>? VerticalScrollRequested;
 
+    public event EventHandler<ChartPointSelectedEventArgs>? PointSelected;
+
+    public event EventHandler<ChartNoteMarkerEventArgs>? NoteMarkerActivated;
+
+    public event EventHandler<ChartContextRequestedEventArgs>? ChartContextRequested;
+
     public bool IsFlowMode { get; set; }
+
+    public bool HasCrosshair => crosshair is not null;
     private string emptyStateMessage = "Нет данных графика";
 
     public LineChartControl()
@@ -97,7 +128,9 @@ public sealed partial class LineChartControl : UserControl
         string activePresetDisplayName,
         (double Min, double Max)? leftDisplayRange = null,
         (double Min, double Max)? rightDisplayRange = null,
-        IReadOnlyList<float>? sourceSegmentBoundaryXValues = null)
+        IReadOnlyList<float>? sourceSegmentBoundaryXValues = null,
+        IReadOnlyList<ChartNoteMarker>? sourceNoteMarkers = null,
+        int sourceStartIndex = 0)
     {
         series.Clear();
         series.AddRange(sourceSeries);
@@ -110,7 +143,15 @@ public sealed partial class LineChartControl : UserControl
         requestedLeftRange = leftDisplayRange;
         requestedRightRange = rightDisplayRange;
         segmentBoundaryXValues = sourceSegmentBoundaryXValues ?? [];
+        noteMarkers = sourceNoteMarkers ?? [];
+        visibleStartIndex = sourceStartIndex;
         emptyStateMessage = "Нет данных графика";
+        Render();
+    }
+
+    public void ClearCrosshair()
+    {
+        crosshair = null;
         Render();
     }
 
@@ -155,6 +196,8 @@ public sealed partial class LineChartControl : UserControl
         rightAxisUnits = string.Empty;
         xValues = [];
         segmentBoundaryXValues = [];
+        noteMarkers = [];
+        renderedNoteMarkers.Clear();
         xAxisTitle = "Номер кадра";
         presetDisplayName = string.Empty;
         requestedLeftRange = null;
@@ -172,6 +215,8 @@ public sealed partial class LineChartControl : UserControl
         rightAxisUnits = string.Empty;
         xValues = [];
         segmentBoundaryXValues = [];
+        noteMarkers = [];
+        renderedNoteMarkers.Clear();
         xAxisTitle = "Номер кадра";
         presetDisplayName = string.Empty;
         requestedLeftRange = null;
@@ -189,6 +234,7 @@ public sealed partial class LineChartControl : UserControl
     private void Render()
     {
         ChartCanvas.Children.Clear();
+        renderedNoteMarkers.Clear();
 
         double width = ChartCanvas.ActualWidth;
         double height = ChartCanvas.ActualHeight;
@@ -270,6 +316,8 @@ public sealed partial class LineChartControl : UserControl
         }
 
         DrawSegmentBoundaries(plot, xScale);
+        DrawNoteMarkers(plot, xScale, leftScale, rightScale);
+        DrawCrosshair(plot);
     }
 
     private void DrawSegmentBoundaries(Rect plot, AxisScale xScale)
@@ -302,6 +350,218 @@ public sealed partial class LineChartControl : UserControl
             };
             ChartCanvas.Children.Add(line);
         }
+    }
+
+    private void DrawNoteMarkers(
+        Rect plot,
+        AxisScale xScale,
+        AxisScale? leftScale,
+        AxisScale? rightScale)
+    {
+        if (noteMarkers.Count == 0 || xScale.Max <= xScale.Min)
+        {
+            return;
+        }
+
+        List<NoteLabelCandidate> labelCandidates = [];
+        foreach (ChartNoteMarker marker in noteMarkers)
+        {
+            if (!float.IsFinite(marker.XValue)
+                || marker.XValue < xScale.Min
+                || marker.XValue > xScale.Max)
+            {
+                continue;
+            }
+
+            bool preferredRightAxis = marker.HasYRight
+                && marker.AnchorAxisGroup == 1
+                && rightScale is not null;
+            if (!TryResolveNoteMarkerY(marker, preferredRightAxis, plot, leftScale, rightScale, out double y)
+                && (!marker.HasYRight
+                    || !TryResolveNoteMarkerY(marker, !preferredRightAxis, plot, leftScale, rightScale, out y)))
+            {
+                continue;
+            }
+
+            double x = MapX(plot, marker.XValue, xScale.Min, xScale.Max);
+            if (x < plot.Left || x > plot.Right || y < plot.Top || y > plot.Bottom)
+            {
+                continue;
+            }
+
+            Ellipse point = new()
+            {
+                Width = 7,
+                Height = 7,
+                Fill = new SolidColorBrush(Colors.Black),
+                Stroke = new SolidColorBrush(Colors.Black),
+                StrokeThickness = 1,
+                IsHitTestVisible = false
+            };
+            Canvas.SetLeft(point, x - 3);
+            Canvas.SetTop(point, y - 3);
+            ChartCanvas.Children.Add(point);
+            renderedNoteMarkers.Add(new RenderedNoteMarker(marker.NoteId, x, y));
+
+            if (labelCandidates.Count < 8)
+            {
+                labelCandidates.Add(new NoteLabelCandidate(x, y, BuildNotePreviewText(marker.Text)));
+            }
+        }
+
+        DrawNoteLabels(plot, labelCandidates);
+    }
+
+    private static bool TryResolveNoteMarkerY(
+        ChartNoteMarker marker,
+        bool useRightAxis,
+        Rect plot,
+        AxisScale? leftScale,
+        AxisScale? rightScale,
+        out double y)
+    {
+        y = 0;
+        AxisScale? selectedScale = useRightAxis && marker.HasYRight ? rightScale : leftScale;
+        if (selectedScale is not { } scale || !(scale.Max > scale.Min))
+        {
+            return false;
+        }
+
+        double value = useRightAxis && marker.HasYRight ? marker.YRight : marker.YLeft;
+        y = MapY(plot, value, scale.Min, scale.Max);
+        return y >= plot.Top && y <= plot.Bottom;
+    }
+
+    private void DrawNoteLabels(Rect plot, IReadOnlyList<NoteLabelCandidate> candidates)
+    {
+        const double labelWidth = 130;
+        const double labelHeight = 18;
+        const double offsetX = 7;
+        const double offsetY = 8;
+        List<Rect> drawnLabelRects = [];
+
+        foreach (NoteLabelCandidate candidate in candidates)
+        {
+            Rect labelRect = new(
+                candidate.AnchorX + offsetX,
+                candidate.AnchorY - offsetY - labelHeight,
+                labelWidth,
+                labelHeight);
+            if (labelRect.Top < plot.Top)
+            {
+                labelRect.Y = candidate.AnchorY + offsetY;
+            }
+
+            if (labelRect.Right > plot.Right)
+            {
+                labelRect.X -= labelRect.Right - plot.Right;
+            }
+
+            if (labelRect.Left < plot.Left)
+            {
+                labelRect.X += plot.Left - labelRect.Left;
+            }
+
+            if (labelRect.Bottom > plot.Bottom)
+            {
+                labelRect.Y -= labelRect.Bottom - plot.Bottom;
+            }
+
+            bool placed = false;
+            for (int attempt = 0; attempt < 4 && !placed; attempt++)
+            {
+                Rect testRect = labelRect;
+                if (attempt > 0)
+                {
+                    testRect.Y += attempt * (labelHeight + 2);
+                    if (testRect.Bottom > plot.Bottom)
+                    {
+                        continue;
+                    }
+                }
+
+                if (drawnLabelRects.Any(existing => RectanglesOverlap(existing, testRect)))
+                {
+                    continue;
+                }
+
+                labelRect = testRect;
+                placed = true;
+            }
+
+            if (!placed)
+            {
+                continue;
+            }
+
+            Border label = new()
+            {
+                Width = labelWidth,
+                Height = labelHeight,
+                Padding = new Thickness(5, 0, 5, 0),
+                Background = new SolidColorBrush(Color.FromArgb(255, 255, 255, 240)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(255, 145, 145, 145)),
+                BorderThickness = new Thickness(1),
+                IsHitTestVisible = false,
+                Child = new TextBlock
+                {
+                    Text = candidate.Text,
+                    FontSize = 11,
+                    Foreground = new SolidColorBrush(Color.FromArgb(255, 30, 30, 30)),
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            };
+            Canvas.SetLeft(label, labelRect.Left);
+            Canvas.SetTop(label, labelRect.Top);
+            ChartCanvas.Children.Add(label);
+            drawnLabelRects.Add(labelRect);
+        }
+    }
+
+    private void DrawCrosshair(Rect plot)
+    {
+        if (crosshair is not { } value || !plot.Contains(value.Position))
+        {
+            return;
+        }
+
+        SolidColorBrush brush = new(Colors.Red);
+        AddAxisLine(value.Position.X, plot.Top, value.Position.X, plot.Bottom, brush);
+        AddAxisLine(plot.Left, value.Position.Y, plot.Right, value.Position.Y, brush);
+    }
+
+    private static string BuildNotePreviewText(string source)
+    {
+        const int maxWords = 6;
+        const int maxCharacters = 32;
+        string normalized = source
+            .Replace('\r', ' ')
+            .Replace('\n', ' ')
+            .Replace('\t', ' ');
+        string[] words = normalized.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        string result = string.Join(" ", words.Take(maxWords));
+        if (words.Length > maxWords)
+        {
+            result += "...";
+        }
+
+        if (result.Length == 0)
+        {
+            return "(пусто)";
+        }
+
+        return result.Length > maxCharacters
+            ? result[..(maxCharacters - 3)] + "..."
+            : result;
+    }
+
+    private static bool RectanglesOverlap(Rect left, Rect right)
+    {
+        return left.Left < right.Right
+            && left.Right > right.Left
+            && left.Top < right.Bottom
+            && left.Bottom > right.Top;
     }
 
     private void DrawPlotFrame(Rect plot, bool hasRightAxis)
@@ -928,10 +1188,28 @@ public sealed partial class LineChartControl : UserControl
 
     private void ChartCanvas_PointerPressed(object sender, PointerRoutedEventArgs e)
     {
-        Point point = e.GetCurrentPoint(ChartCanvas).Position;
+        var currentPoint = e.GetCurrentPoint(ChartCanvas);
+        if (!currentPoint.Properties.IsLeftButtonPressed)
+        {
+            return;
+        }
+
+        Point point = currentPoint.Position;
         if (!currentPlot.Contains(point))
         {
             return;
+        }
+
+        foreach (RenderedNoteMarker marker in renderedNoteMarkers)
+        {
+            double dx = point.X - marker.ScreenX;
+            double dy = point.Y - marker.ScreenY;
+            if ((dx * dx) + (dy * dy) <= 36)
+            {
+                NoteMarkerActivated?.Invoke(this, new ChartNoteMarkerEventArgs(marker.NoteId));
+                e.Handled = true;
+                return;
+            }
         }
 
         dragStart = point;
@@ -971,11 +1249,15 @@ public sealed partial class LineChartControl : UserControl
 
         double width = Math.Abs(end.X - start.X);
         double height = Math.Abs(end.Y - start.Y);
-        if ((!IsFlowMode && (width <= 10 || height <= 10)) || (IsFlowMode && height <= 10))
+        bool isZoomGesture = IsFlowMode ? height > 10 : width > 10 && height > 10;
+        if (!isZoomGesture)
         {
+            SelectPoint(start);
+            e.Handled = true;
             return;
         }
 
+        crosshair = null;
         double startFraction = ResolveSelectionFraction(start.X);
         double endFraction = ResolveSelectionFraction(end.X);
         ZoomRequested?.Invoke(this, new ChartZoomRequestedEventArgs(
@@ -984,6 +1266,72 @@ public sealed partial class LineChartControl : UserControl
             ToSelectedYRange(start.Y, end.Y, currentLeftScale),
             ToSelectedYRange(start.Y, end.Y, currentRightScale)));
         e.Handled = true;
+    }
+
+    private void ChartCanvas_RightTapped(object sender, RightTappedRoutedEventArgs e)
+    {
+        Point position = e.GetPosition(ChartCanvas);
+        ChartContextRequested?.Invoke(this, new ChartContextRequestedEventArgs(position, HasCrosshair));
+        e.Handled = true;
+    }
+
+    private void SelectPoint(Point point)
+    {
+        if (xValues.Count == 0 || currentXScale is not { } xScale || currentLeftScale is not { } leftScale)
+        {
+            crosshair = null;
+            Render();
+            return;
+        }
+
+        double displayFraction = Math.Clamp((point.X - currentPlot.Left) / currentPlot.Width, 0, 1);
+        double selectedX = xScale.Min + displayFraction * (xScale.Max - xScale.Min);
+        int closestIndex = -1;
+        double closestDistance = double.PositiveInfinity;
+        for (int index = 0; index < xValues.Count; index++)
+        {
+            float xValue = xValues[index];
+            if (!float.IsFinite(xValue))
+            {
+                continue;
+            }
+
+            double distance = Math.Abs(xValue - selectedX);
+            if (distance < closestDistance)
+            {
+                closestDistance = distance;
+                closestIndex = index;
+            }
+        }
+
+        if (closestIndex < 0)
+        {
+            crosshair = null;
+            Render();
+            return;
+        }
+
+        Point clamped = ClampToPlot(point);
+        double yLeft = ResolveYValue(clamped.Y, leftScale);
+        bool hasRightAxis = currentRightScale is not null;
+        double yRight = currentRightScale is { } rightScale
+            ? ResolveYValue(clamped.Y, rightScale)
+            : 0;
+        crosshair = new CrosshairState(clamped);
+        Render();
+        PointSelected?.Invoke(
+            this,
+            new ChartPointSelectedEventArgs(
+                visibleStartIndex + closestIndex,
+                yLeft,
+                yRight,
+                hasRightAxis));
+    }
+
+    private double ResolveYValue(double screenY, AxisScale scale)
+    {
+        double ratio = (currentPlot.Bottom - screenY) / currentPlot.Height;
+        return scale.Min + ratio * (scale.Max - scale.Min);
     }
 
     private double ResolveSelectionFraction(double screenX)
@@ -1123,6 +1471,12 @@ public sealed partial class LineChartControl : UserControl
             return (min, min + ViewRange);
         }
     }
+
+    private readonly record struct RenderedNoteMarker(string NoteId, double ScreenX, double ScreenY);
+
+    private readonly record struct NoteLabelCandidate(double AnchorX, double AnchorY, string Text);
+
+    private readonly record struct CrosshairState(Point Position);
 
     private sealed record LegendToken(TextBlock Label, ChartRenderSeries? Series, double Width, double LabelWidth);
 }

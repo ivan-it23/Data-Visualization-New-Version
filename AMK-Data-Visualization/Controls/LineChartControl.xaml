@@ -12,6 +12,7 @@
             PointerMoved="ChartCanvas_PointerMoved"
             PointerReleased="ChartCanvas_PointerReleased"
             PointerCaptureLost="ChartCanvas_PointerCaptureLost"
+            RightTapped="ChartCanvas_RightTapped"
             SizeChanged="ChartCanvas_SizeChanged" />
 
         <ScrollBar

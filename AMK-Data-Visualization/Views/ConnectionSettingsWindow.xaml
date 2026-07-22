@@ -57,7 +57,7 @@
                     Grid.Column="1"
                     Text="Отключено"
                     TextTrimming="CharacterEllipsis" />
-                <TextBlock Grid.Row="2" Text="Кадр:" />
+                <TextBlock Grid.Row="2" Text="Кадров:" />
                 <TextBlock
                     x:Name="LastFrameTextBlock"
                     Grid.Row="2"

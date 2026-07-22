@@ -63,7 +63,7 @@
                 <MenuBarItem Title="Заметки">
                     <MenuFlyoutItem
                         Text="Журнал заметок текущего файла..."
-                        IsEnabled="False" />
+                        Click="NotesJournalMenuItem_Click" />
                 </MenuBarItem>
                 <MenuBarItem Title="Логи" />
             </MenuBar>
@@ -176,9 +176,10 @@
                     Height="24"
                     MinWidth="0"
                     Padding="0"
-                    Content="✂"
                     Click="Graph1CutRangeButton_Click"
-                    ToolTipService.ToolTip="Вырезать отрезок" />
+                    ToolTipService.ToolTip="Вырезать отрезок">
+                    <SymbolIcon Symbol="Cut" />
+                </Button>
                 <Button
                     x:Name="Graph1ResetZoomButton"
                     Width="65"
@@ -221,9 +222,12 @@
                     Height="24"
                     MinWidth="0"
                     Padding="0"
-                    Content="▶"
                     Click="PollingToggleButton_Click"
-                    ToolTipService.ToolTip="Старт/Стоп опроса прибора" />
+                    ToolTipService.ToolTip="Старт/Стоп опроса прибора">
+                    <SymbolIcon
+                        x:Name="PollingToggleIcon"
+                        Symbol="Play" />
+                </Button>
                 <Button
                     x:Name="ConnectionToggleButton"
                     Width="80"
@@ -241,11 +245,15 @@
                 VerticalAlignment="Center"
                 Orientation="Horizontal"
                 Spacing="4">
-                <TextBlock
-                    Width="18"
-                    VerticalAlignment="Center"
-                    Text="⌖"
-                    TextAlignment="Center" />
+                <Button
+                    x:Name="Cursor1ClearButton"
+                    Width="24"
+                    Height="24"
+                    MinWidth="0"
+                    Padding="0"
+                    Click="Cursor1ClearButton_Click"
+                    Content="⌖"
+                    ToolTipService.ToolTip="Сбросить перекрестие" />
                 <TextBox
                     x:Name="CursorXTextBox"
                     Width="45"
@@ -253,7 +261,8 @@
                     MinHeight="0"
                     Padding="4,1"
                     HorizontalContentAlignment="Center"
-                    IsReadOnly="True" />
+                    IsReadOnly="True"
+                    Text="—" />
                 <TextBlock
                     Width="10"
                     VerticalAlignment="Center"
@@ -266,7 +275,8 @@
                     MinHeight="0"
                     Padding="4,1"
                     HorizontalContentAlignment="Center"
-                    IsReadOnly="True" />
+                    IsReadOnly="True"
+                    Text="—" />
             </StackPanel>
         </Grid>
 
@@ -303,7 +313,9 @@
                     x:Name="Chart1ShowNotesCheckBox"
                     MinHeight="0"
                     Content="Показать заметки"
-                    IsChecked="True" />
+                    IsChecked="True"
+                    Checked="ChartShowNotesCheckBox_Changed"
+                    Unchecked="ChartShowNotesCheckBox_Changed" />
             </StackPanel>
 
             <Grid
@@ -437,11 +449,15 @@
                     VerticalAlignment="Top"
                     Orientation="Horizontal"
                     Spacing="4">
-                    <TextBlock
-                        Width="18"
-                        VerticalAlignment="Center"
-                        Text="⌖"
-                        TextAlignment="Center" />
+                    <Button
+                        x:Name="Cursor2ClearButton"
+                        Width="24"
+                        Height="24"
+                        MinWidth="0"
+                        Padding="0"
+                        Click="Cursor2ClearButton_Click"
+                        Content="⌖"
+                        ToolTipService.ToolTip="Сбросить перекрестие" />
                     <TextBox
                         x:Name="Cursor2XTextBox"
                         Width="45"
@@ -496,7 +512,9 @@
                     x:Name="Chart2ShowNotesCheckBox"
                     MinHeight="0"
                     Content="Показать заметки"
-                    IsChecked="True" />
+                    IsChecked="True"
+                    Checked="ChartShowNotesCheckBox_Changed"
+                    Unchecked="ChartShowNotesCheckBox_Changed" />
             </StackPanel>
         </Grid>
 

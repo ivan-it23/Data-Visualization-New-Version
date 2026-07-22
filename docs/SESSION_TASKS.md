@@ -42,8 +42,8 @@
 - полный parity всех кривых на контрольных файлах;
 - численный parity `FromSonde` / `FromComputer`;
 - полный COM reconnect и метрологические команды на физическом приборе;
-- crosshair/cursor, LOD/cache и единая geometry-модель;
-- notes, пользовательское окно логов и документация;
+- LOD/cache и единая формализованная geometry-модель;
+- пользовательское окно логов и встроенная документация;
 - reporting;
 - code signing и полный install/update/uninstall release-цикл.
 
@@ -62,9 +62,8 @@
 1. parity `FromSonde` / `FromComputer` на одном реальном файле и метрологии;
 2. полный повторный COM-тест `Картограф LWD 4tx`;
 3. перенос лога в `%LOCALAPPDATA%` и немодальное окно журнала;
-4. crosshair и общая geometry-модель;
-5. notes;
-6. reporting и release-проверка.
+4. общая geometry-модель и LOD/cache;
+5. reporting и release-проверка.
 
 ## Начало новой сессии
 

@@ -140,6 +140,10 @@ public sealed class SerialDeviceService : IDisposable
         }
 
         await StopPollingAsync().ConfigureAwait(false);
+        Interlocked.Exchange(ref packetsReceived, 0);
+        Interlocked.Exchange(ref packetErrors, 0);
+        Interlocked.Exchange(ref recordedFrames, 0);
+        lastFrameNumber = 0;
         desiredPortName = portName.Trim();
         desiredBaudRate = baudRate;
         DeviceProtocolLog.BeginSession(desiredPortName, desiredBaudRate);

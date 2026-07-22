@@ -146,7 +146,9 @@ Graph 1 использует primary repository. Graph 2 в стандартно
 - `AMK-Data-Visualization/Services/ChartWorkspace.cs`;
 - `AMK-Data-Visualization/Services/ChartViewportState.cs`;
 - `AMK-Data-Visualization/Controls/LineChartControl.xaml.cs`;
-- `src/AMK.DataVisualization.Charting/Series/ChartDataCalculator.cs`.
+- `AMK-Data-Visualization/Views/NotesJournalWindow.xaml.cs`;
+- `src/AMK.DataVisualization.Charting/Series/ChartDataCalculator.cs`;
+- `src/AMK.DataVisualization.Charting/Notes/NotesModule.cs`.
 
 Реализовано:
 
@@ -167,15 +169,21 @@ Graph 1 использует primary repository. Graph 2 в стандартно
 - `Поток` показывает последние N записей, следует за live-данными, блокирует
   ручное изменение X, но сохраняет Y-only zoom/scroll;
 - WinUI ScrollBar принудительно удерживается в desktop-состоянии
-  `MouseIndicator`.
+  `MouseIndicator`;
+- клик по графику устанавливает crosshair и заполняет cursor-поля, кнопка `⌖`
+  сбрасывает оба состояния;
+- контекстное меню crosshair переносит его X в начальную или конечную границу
+  диапазона и открывает создание заметки;
+- заметки совместимы с legacy append-only `.notes.jsonl`, фильтруются по
+  конфигурации кривых, поддерживают маркеры, hit-test, редактирование, удаление
+  и журнал с восстановлением конфигурации.
 
 Zoom, прокрутка и автомасштабирование подтверждены владельцем.
 
 Не реализовано:
 
-- crosshair и заполнение cursor-полей;
 - LOD/downsampling и cache;
-- общая geometry-модель для draw/hit-test/notes/crosshair.
+- отдельно выделенная общая geometry-модель для draw/hit-test.
 
 ## 8. Окно «Схема прибора»
 
@@ -319,8 +327,6 @@ signing и полный цикл update/uninstall между двумя верс
 ## 12. Реализовано частично или не начато
 
 - Graph 1 range save/cut, append и segment-layout реализованы; ручная parity-проверка остаётся;
-- cursor controls без crosshair;
-- notes controls без storage/rendering/hit-test;
 - меню логов и документации — заглушки;
 - пользовательское окно журнала отсутствует;
 - Reporting, печать и экспорт не начаты.
@@ -373,10 +379,9 @@ anchors не следует считать неизменными.
 1. parity `FromSonde` / `FromComputer` на одном реальном файле и метрологии;
 2. полный COM regression `Картограф LWD 4tx`;
 3. перенос runtime-лога в `%LOCALAPPDATA%` и окно журнала;
-4. crosshair и единая geometry-модель;
-5. notes;
-6. reporting;
-7. code signing и release regression.
+4. единая geometry-модель и LOD/downsampling;
+5. reporting;
+6. code signing и release regression.
 
 ## 16. Проверка и обновление документов
 

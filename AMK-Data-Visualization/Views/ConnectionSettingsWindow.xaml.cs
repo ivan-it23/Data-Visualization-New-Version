@@ -311,7 +311,7 @@ public sealed partial class ConnectionSettingsWindow : Window
             };
         }
 
-        LastFrameTextBlock.Text = status.PacketsReceived > 0 ? status.LastFrameNumber.ToString() : "0";
+        LastFrameTextBlock.Text = status.PacketsReceived.ToString();
         PacketsTextBlock.Text = $"{status.PacketsReceived} / {status.PacketErrors}";
         RecordedFramesTextBlock.Text = $"{status.RecordedFrames} кадров";
         UpdateRecordingControls(status);

@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="AMK.DataVisualization.App.Views.NotesJournalWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Журнал заметок">
+
+    <Grid
+        x:Name="RootGrid"
+        Padding="12"
+        RowSpacing="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock
+            x:Name="InfoTextBlock"
+            Text="Нет активного файла/записи для журнала заметок."
+            TextTrimming="CharacterEllipsis" />
+
+        <Border
+            Grid.Row="1"
+            Padding="8,5"
+            Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1">
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="145" />
+                    <ColumnDefinition Width="145" />
+                    <ColumnDefinition Width="150" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="34" />
+                    <ColumnDefinition Width="34" />
+                </Grid.ColumnDefinitions>
+                <TextBlock FontWeight="SemiBold" Text="Дата" />
+                <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="Пресет" />
+                <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="Конфигурация" />
+                <TextBlock Grid.Column="3" FontWeight="SemiBold" Text="Заметка" />
+            </Grid>
+        </Border>
+
+        <ListView
+            x:Name="NotesListView"
+            Grid.Row="2"
+            DoubleTapped="NotesListView_DoubleTapped"
+            SelectionMode="Single">
+            <ListView.ItemContainerStyle>
+                <Style TargetType="ListViewItem">
+                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                    <Setter Property="Padding" Value="8,5" />
+                </Style>
+            </ListView.ItemContainerStyle>
+            <ListView.ItemTemplate>
+                <DataTemplate>
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="145" />
+                            <ColumnDefinition Width="145" />
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="34" />
+                            <ColumnDefinition Width="34" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock
+                            VerticalAlignment="Center"
+                            Text="{Binding Timestamp}" />
+                        <TextBlock
+                            Grid.Column="1"
+                            VerticalAlignment="Center"
+                            Text="{Binding Preset}"
+                            TextTrimming="CharacterEllipsis" />
+                        <TextBlock
+                            Grid.Column="2"
+                            VerticalAlignment="Center"
+                            Text="{Binding Configuration}"
+                            TextTrimming="CharacterEllipsis" />
+                        <TextBlock
+                            Grid.Column="3"
+                            VerticalAlignment="Center"
+                            Text="{Binding Preview}"
+                            TextTrimming="CharacterEllipsis" />
+                        <Button
+                            Grid.Column="4"
+                            Width="28"
+                            Height="28"
+                            MinWidth="0"
+                            Padding="0"
+                            Click="EditNoteButton_Click"
+                            Tag="{Binding NoteId}"
+                            ToolTipService.ToolTip="Редактировать">
+                            <SymbolIcon Symbol="Edit" />
+                        </Button>
+                        <Button
+                            Grid.Column="5"
+                            Width="28"
+                            Height="28"
+                            MinWidth="0"
+                            Padding="0"
+                            Click="SaveNoteButton_Click"
+                            Tag="{Binding NoteId}"
+                            ToolTipService.ToolTip="Сохранить">
+                            <SymbolIcon Symbol="Save" />
+                        </Button>
+                    </Grid>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+
+        <Grid Grid.Row="3" ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Button
+                Content="Обновить"
+                Click="RefreshButton_Click" />
+            <Button
+                Grid.Column="2"
+                Content="Применить"
+                Click="ApplyButton_Click" />
+            <Button
+                Grid.Column="3"
+                Content="Закрыть"
+                Click="CloseButton_Click" />
+        </Grid>
+    </Grid>
+</Window>
