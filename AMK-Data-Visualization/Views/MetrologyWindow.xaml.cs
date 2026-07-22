@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using AMK.DataVisualization.App.Services;
 using AMK.DataVisualization.Core.Binary;
 using AMK.DataVisualization.Hardware.Serial;
 using AMK.DataVisualization.Metrology;
@@ -17,11 +18,6 @@ public sealed partial class MetrologyWindow : Window
     private const int WindowHeight = 642;
     private const double RequiredContentWidth = 964.0;
     private const double RequiredContentHeight = 604.0;
-    private const int WindowOwnerIndex = -8;
-    private const int WindowExtendedStyleIndex = -20;
-    private const long ExtendedStyleAppWindow = 0x00040000L;
-    private const long ExtendedStyleToolWindow = 0x00000080L;
-    private const int ShowRestore = 9;
     private const uint NoSize = 0x0001;
     private const uint NoMove = 0x0002;
     private const uint NoZOrder = 0x0004;
@@ -99,15 +95,7 @@ public sealed partial class MetrologyWindow : Window
     {
         currentOwnerHandle = ownerHandle;
         IntPtr windowHandle = WindowNative.GetWindowHandle(this);
-        if (ownerHandle != IntPtr.Zero)
-        {
-            SetWindowLongPtr(windowHandle, WindowOwnerIndex, ownerHandle);
-        }
-
-        long extendedStyle = GetWindowLongPtr(windowHandle, WindowExtendedStyleIndex).ToInt64();
-        extendedStyle |= ExtendedStyleAppWindow;
-        extendedStyle &= ~ExtendedStyleToolWindow;
-        SetWindowLongPtr(windowHandle, WindowExtendedStyleIndex, new IntPtr(extendedStyle));
+        SecondaryWindowIntegration.ConfigureForOwner(windowHandle, ownerHandle);
 
         if (!initializedForm)
         {
@@ -128,10 +116,7 @@ public sealed partial class MetrologyWindow : Window
 
         ResizeForCurrentScale(windowHandle);
 
-        if (IsIconic(windowHandle))
-        {
-            ShowWindow(windowHandle, ShowRestore);
-        }
+        SecondaryWindowIntegration.RestoreIfMinimized(windowHandle);
 
         CenterOverOwner(windowHandle, ownerHandle, AppWindow.Size.Width, AppWindow.Size.Height);
         DispatcherQueue.TryEnqueue(() =>
@@ -627,20 +612,6 @@ public sealed partial class MetrologyWindow : Window
         int y = ownerRect.Top + Math.Max(0, (ownerRect.Bottom - ownerRect.Top - windowHeight) / 2);
         SetWindowPos(windowHandle, IntPtr.Zero, x, y, 0, 0, NoSize | NoZOrder);
     }
-
-    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
-    private static extern IntPtr GetWindowLongPtr(IntPtr windowHandle, int index);
-
-    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
-    private static extern IntPtr SetWindowLongPtr(IntPtr windowHandle, int index, IntPtr newValue);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool IsIconic(IntPtr windowHandle);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool ShowWindow(IntPtr windowHandle, int command);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

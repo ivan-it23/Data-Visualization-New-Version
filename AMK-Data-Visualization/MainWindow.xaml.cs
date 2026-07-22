@@ -1290,7 +1290,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void NotesJournalMenuItem_Click(object sender, RoutedEventArgs e)
+    private void NotesButton_Click(object sender, RoutedEventArgs e)
     {
         notesJournalWindow ??= new NotesJournalWindow(
             GetNotesJournalSource,

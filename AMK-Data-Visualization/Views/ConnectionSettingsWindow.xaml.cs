@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
+using AMK.DataVisualization.App.Services;
 using AMK.DataVisualization.Hardware.Serial;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
@@ -12,7 +12,6 @@ namespace AMK.DataVisualization.App.Views;
 
 public sealed partial class ConnectionSettingsWindow : Window
 {
-    private const int WindowOwnerIndex = -8;
     private readonly SerialDeviceService deviceService;
     private readonly SerialConnectionSettingsStore settingsStore;
     private readonly Action<SerialConnectionSettings> prepareSession;
@@ -48,10 +47,7 @@ public sealed partial class ConnectionSettingsWindow : Window
     public void ShowForOwner(IntPtr ownerHandle)
     {
         IntPtr windowHandle = WindowNative.GetWindowHandle(this);
-        if (ownerHandle != IntPtr.Zero)
-        {
-            SetWindowLongPtr(windowHandle, WindowOwnerIndex, ownerHandle);
-        }
+        SecondaryWindowIntegration.ConfigureForOwner(windowHandle, ownerHandle);
 
         if (!activated)
         {
@@ -63,6 +59,8 @@ public sealed partial class ConnectionSettingsWindow : Window
             AppWindow.Show();
             Activate();
         }
+
+        SecondaryWindowIntegration.RestoreIfMinimized(windowHandle);
 
         _ = RefreshPortsAsync();
         UpdateStatus(deviceService.GetStatus());
@@ -368,7 +366,4 @@ public sealed partial class ConnectionSettingsWindow : Window
         args.Cancel = true;
         sender.Hide();
     }
-
-    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
-    private static extern IntPtr SetWindowLongPtr(IntPtr windowHandle, int index, IntPtr newValue);
 }

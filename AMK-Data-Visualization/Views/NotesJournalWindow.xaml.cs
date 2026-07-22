@@ -1,7 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
+using AMK.DataVisualization.App.Services;
 using AMK.DataVisualization.Charting.Notes;
 using AMK.DataVisualization.Charting.Series;
 using Microsoft.UI.Windowing;
@@ -17,8 +17,6 @@ public sealed partial class NotesJournalWindow : Window
 {
     private const int WindowWidth = 1040;
     private const int WindowHeight = 590;
-    private const int WindowOwnerIndex = -8;
-    private const int ShowRestore = 9;
     private readonly Func<NotesJournalSource> sourceProvider;
     private readonly Func<int> activeChartProvider;
     private readonly Func<ChartNote, int, NoteOperationResult> configurationApplier;
@@ -47,10 +45,7 @@ public sealed partial class NotesJournalWindow : Window
     {
         RefreshRows();
         IntPtr windowHandle = WindowNative.GetWindowHandle(this);
-        if (ownerHandle != IntPtr.Zero)
-        {
-            SetWindowLongPtr(windowHandle, WindowOwnerIndex, ownerHandle);
-        }
+        SecondaryWindowIntegration.ConfigureForOwner(windowHandle, ownerHandle);
 
         if (!activated)
         {
@@ -62,10 +57,7 @@ public sealed partial class NotesJournalWindow : Window
             AppWindow.Show();
         }
 
-        if (IsIconic(windowHandle))
-        {
-            ShowWindow(windowHandle, ShowRestore);
-        }
+        SecondaryWindowIntegration.RestoreIfMinimized(windowHandle);
     }
 
     public void ClosePermanently()
@@ -217,17 +209,6 @@ public sealed partial class NotesJournalWindow : Window
         args.Cancel = true;
         sender.Hide();
     }
-
-    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
-    private static extern IntPtr SetWindowLongPtr(IntPtr windowHandle, int index, IntPtr newValue);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool IsIconic(IntPtr windowHandle);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool ShowWindow(IntPtr windowHandle, int command);
 }
 
 internal sealed record NotesJournalSource(bool IsAvailable, string NotesPath, IReadOnlyList<ChartNote> Notes);

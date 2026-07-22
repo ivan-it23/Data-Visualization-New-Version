@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+using AMK.DataVisualization.App.Services;
 using AMK.DataVisualization.IO.DataFiles;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
@@ -11,7 +11,6 @@ namespace AMK.DataVisualization.App.Views;
 
 public sealed partial class FileConstructorWindow : Window
 {
-    private const int WindowOwnerIndex = -8;
     private readonly Action<string> fileSaved;
     private readonly List<FileConstructorSegment> segments = [];
     private string savedPath = string.Empty;
@@ -31,12 +30,6 @@ public sealed partial class FileConstructorWindow : Window
             presenter.IsResizable = false;
         }
 
-        string iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "DataVisualization.ico");
-        if (File.Exists(iconPath))
-        {
-            AppWindow.SetIcon(iconPath);
-        }
-
         AppWindow.Closing += AppWindow_Closing;
         RefreshView();
     }
@@ -44,10 +37,7 @@ public sealed partial class FileConstructorWindow : Window
     public void ShowForOwner(IntPtr ownerHandle)
     {
         IntPtr windowHandle = WindowNative.GetWindowHandle(this);
-        if (ownerHandle != IntPtr.Zero)
-        {
-            SetWindowLongPtr(windowHandle, WindowOwnerIndex, ownerHandle);
-        }
+        SecondaryWindowIntegration.ConfigureForOwner(windowHandle, ownerHandle);
 
         if (!activated)
         {
@@ -59,6 +49,8 @@ public sealed partial class FileConstructorWindow : Window
             AppWindow.Show();
             Activate();
         }
+
+        SecondaryWindowIntegration.RestoreIfMinimized(windowHandle);
     }
 
     public void ClosePermanently()
@@ -383,7 +375,4 @@ public sealed partial class FileConstructorWindow : Window
 
         return [ToolDataFileConstructor.LoadSegment(filePath)];
     }
-
-    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
-    private static extern IntPtr SetWindowLongPtr(IntPtr windowHandle, int index, IntPtr newValue);
 }
