@@ -18,7 +18,6 @@ public sealed partial class MetrologyWindow : Window
     private const int WindowHeight = 642;
     private const double RequiredContentWidth = 964.0;
     private const double RequiredContentHeight = 604.0;
-    private const uint NoSize = 0x0001;
     private const uint NoMove = 0x0002;
     private const uint NoZOrder = 0x0004;
     private readonly SerialDeviceService serialDeviceService;
@@ -118,11 +117,11 @@ public sealed partial class MetrologyWindow : Window
 
         SecondaryWindowIntegration.RestoreIfMinimized(windowHandle);
 
-        CenterOverOwner(windowHandle, ownerHandle, AppWindow.Size.Width, AppWindow.Size.Height);
+        SecondaryWindowIntegration.CenterOverOwner(windowHandle, ownerHandle);
         DispatcherQueue.TryEnqueue(() =>
         {
             ResizeForCurrentScale(windowHandle);
-            CenterOverOwner(windowHandle, ownerHandle, AppWindow.Size.Width, AppWindow.Size.Height);
+            SecondaryWindowIntegration.CenterOverOwner(windowHandle, ownerHandle);
         });
     }
 
@@ -553,7 +552,7 @@ public sealed partial class MetrologyWindow : Window
         {
             IntPtr windowHandle = WindowNative.GetWindowHandle(this);
             ResizeForCurrentScale(windowHandle);
-            CenterOverOwner(windowHandle, currentOwnerHandle, AppWindow.Size.Width, AppWindow.Size.Height);
+            SecondaryWindowIntegration.CenterOverOwner(windowHandle, currentOwnerHandle);
         });
     }
 
@@ -599,18 +598,6 @@ public sealed partial class MetrologyWindow : Window
             correctedWidth,
             correctedHeight,
             NoMove | NoZOrder);
-    }
-
-    private static void CenterOverOwner(IntPtr windowHandle, IntPtr ownerHandle, int windowWidth, int windowHeight)
-    {
-        if (windowHandle == IntPtr.Zero || ownerHandle == IntPtr.Zero || !GetWindowRect(ownerHandle, out Rect ownerRect))
-        {
-            return;
-        }
-
-        int x = ownerRect.Left + Math.Max(0, (ownerRect.Right - ownerRect.Left - windowWidth) / 2);
-        int y = ownerRect.Top + Math.Max(0, (ownerRect.Bottom - ownerRect.Top - windowHeight) / 2);
-        SetWindowPos(windowHandle, IntPtr.Zero, x, y, 0, 0, NoSize | NoZOrder);
     }
 
     [DllImport("user32.dll")]

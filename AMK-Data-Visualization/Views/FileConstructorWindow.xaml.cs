@@ -51,6 +51,9 @@ public sealed partial class FileConstructorWindow : Window
         }
 
         SecondaryWindowIntegration.RestoreIfMinimized(windowHandle);
+        SecondaryWindowIntegration.CenterOverOwner(windowHandle, ownerHandle);
+        DispatcherQueue.TryEnqueue(() =>
+            SecondaryWindowIntegration.CenterOverOwner(windowHandle, ownerHandle));
     }
 
     public void ClosePermanently()

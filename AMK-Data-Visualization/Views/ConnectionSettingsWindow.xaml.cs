@@ -61,6 +61,9 @@ public sealed partial class ConnectionSettingsWindow : Window
         }
 
         SecondaryWindowIntegration.RestoreIfMinimized(windowHandle);
+        SecondaryWindowIntegration.CenterOverOwner(windowHandle, ownerHandle);
+        DispatcherQueue.TryEnqueue(() =>
+            SecondaryWindowIntegration.CenterOverOwner(windowHandle, ownerHandle));
 
         _ = RefreshPortsAsync();
         UpdateStatus(deviceService.GetStatus());

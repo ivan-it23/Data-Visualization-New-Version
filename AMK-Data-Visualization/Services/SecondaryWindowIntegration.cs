@@ -15,6 +15,8 @@ internal static class SecondaryWindowIntegration
     private const long ExtendedStyleAppWindow = 0x00040000L;
     private const long ExtendedStyleToolWindow = 0x00000080L;
     private const int ShowRestore = 9;
+    private const uint NoSize = 0x0001;
+    private const uint NoZOrder = 0x0004;
 
     public static void ConfigureForOwner(IntPtr windowHandle, IntPtr ownerHandle)
     {
@@ -42,6 +44,25 @@ internal static class SecondaryWindowIntegration
         {
             ShowWindow(windowHandle, ShowRestore);
         }
+    }
+
+    public static void CenterOverOwner(IntPtr windowHandle, IntPtr ownerHandle)
+    {
+        if (windowHandle == IntPtr.Zero
+            || ownerHandle == IntPtr.Zero
+            || !GetWindowRect(windowHandle, out WindowRect windowRect)
+            || !GetWindowRect(ownerHandle, out WindowRect ownerRect))
+        {
+            return;
+        }
+
+        int windowWidth = windowRect.Right - windowRect.Left;
+        int windowHeight = windowRect.Bottom - windowRect.Top;
+        int ownerWidth = ownerRect.Right - ownerRect.Left;
+        int ownerHeight = ownerRect.Bottom - ownerRect.Top;
+        int x = ownerRect.Left + (ownerWidth - windowWidth) / 2;
+        int y = ownerRect.Top + (ownerHeight - windowHeight) / 2;
+        SetWindowPos(windowHandle, IntPtr.Zero, x, y, 0, 0, NoSize | NoZOrder);
     }
 
     private static void InheritOwnerIcon(IntPtr windowHandle, IntPtr ownerHandle)
@@ -93,4 +114,28 @@ internal static class SecondaryWindowIntegration
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool ShowWindow(IntPtr windowHandle, int command);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(IntPtr windowHandle, out WindowRect rect);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowPos(
+        IntPtr windowHandle,
+        IntPtr insertAfter,
+        int x,
+        int y,
+        int width,
+        int height,
+        uint flags);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WindowRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
 }
