@@ -383,7 +383,7 @@ public sealed partial class MainWindow : Window
 
     private async void ConnectionToggleButton_Click(object sender, RoutedEventArgs e)
     {
-        if (serialDeviceService.IsConnected)
+        if (serialDeviceService.IsConnectionRequested)
         {
             await serialDeviceService.DisconnectAsync();
             SetStatus("Прибор отключён");
@@ -539,7 +539,7 @@ public sealed partial class MainWindow : Window
     {
         bool connected = status.State == SerialConnectionState.Connected;
         bool busy = status.State == SerialConnectionState.Connecting;
-        ConnectionToggleButton.Content = connected ? "Отключить" : "Включить";
+        ConnectionToggleButton.Content = status.ConnectionRequested ? "Отключить" : "Включить";
         ConnectionToggleButton.IsEnabled = !busy;
         PollingToggleIcon.Symbol = status.IsPolling ? Symbol.Pause : Symbol.Play;
         PollingToggleButton.IsEnabled = connected;

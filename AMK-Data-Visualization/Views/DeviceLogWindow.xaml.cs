@@ -21,7 +21,7 @@ namespace AMK.DataVisualization.App.Views;
 public sealed partial class DeviceLogWindow : Window
 {
     private const int WindowWidth = 1040;
-    private const int WindowHeight = 680;
+    private const int WindowHeight = 580;
     private readonly DeviceLogRowCollection rows = [];
     private readonly DispatcherTimer refreshTimer;
     private bool allowPermanentClose;
@@ -398,8 +398,6 @@ public sealed partial class DeviceLogWindow : Window
         LoggingToggleButton.IsChecked = enabled;
         RawDataToggleButton.IsChecked = DeviceExchangeLog.ShowRawData;
         RawDataToggleButton.Visibility = rawAvailable ? Visibility.Visible : Visibility.Collapsed;
-        RecordingStateIcon.Opacity = enabled ? 1.0 : 0.45;
-        RecordingStateTextBlock.Text = enabled ? "Запись включена" : "Запись приостановлена";
         LogSummaryTextBlock.Text =
             $"Строк: {rows.Count} из {DeviceExchangeLog.MaximumLines} · файлов сессий: до {DeviceExchangeLog.MaximumFiles}";
         string activeFilePath = DeviceExchangeLog.FilePath;

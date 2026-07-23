@@ -262,6 +262,7 @@ public sealed partial class LineChartControl : UserControl
             currentLeftScale = null;
             currentRightScale = null;
             DrawPlotFrame(plot, hasRightAxis);
+            DrawEmptyGrid(plot);
             DrawEmptyState(plot);
             return;
         }
@@ -593,6 +594,26 @@ public sealed partial class LineChartControl : UserControl
             double x = MapX(plot, tick, xScale.Min, xScale.Max);
             AddAxisLine(x, plot.Top, x, plot.Bottom, gridBrush);
         }
+    }
+
+    private void DrawEmptyGrid(Rect plot)
+    {
+        AxisScale yScale = CreateAxisScale(
+            0,
+            100,
+            Math.Max(2, (int)(plot.Height / 55)),
+            includeZero: false,
+            integerStep: false,
+            expandBounds: false);
+        AxisScale xScale = CreateAxisScale(
+            0,
+            100,
+            Math.Max(2, (int)(plot.Width / 100)),
+            includeZero: false,
+            integerStep: false,
+            expandBounds: false);
+
+        DrawGrid(plot, yScale, xScale);
     }
 
     private void AddAxisLine(double x1, double y1, double x2, double y2, Brush brush)

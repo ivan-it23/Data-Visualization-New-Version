@@ -12,61 +12,10 @@
     <Grid
         x:Name="RootGrid"
         Padding="16"
-        RowDefinitions="Auto,Auto,*,Auto"
+        RowDefinitions="Auto,*,Auto"
         RowSpacing="10">
-        <Border
-            Padding="16,12"
-            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-            BorderThickness="1"
-            CornerRadius="8">
-            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
-                <Border
-                    Width="40"
-                    Height="40"
-                    Background="{ThemeResource AccentFillColorSecondaryBrush}"
-                    CornerRadius="8">
-                    <FontIcon
-                        HorizontalAlignment="Center"
-                        VerticalAlignment="Center"
-                        FontSize="19"
-                        Glyph="&#xE9D9;" />
-                </Border>
-
-                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
-                    <TextBlock
-                        FontSize="18"
-                        FontWeight="SemiBold"
-                        Text="Журнал обмена с прибором" />
-                    <TextBlock
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Text="Операции COM-порта, ответы прибора и расшифровка кадров"
-                        TextTrimming="CharacterEllipsis" />
-                </StackPanel>
-
-                <Border
-                    Grid.Column="2"
-                    Padding="10,5"
-                    VerticalAlignment="Center"
-                    Background="{ThemeResource SubtleFillColorSecondaryBrush}"
-                    CornerRadius="12">
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon
-                            x:Name="RecordingStateIcon"
-                            FontSize="10"
-                            Glyph="&#xE915;" />
-                        <TextBlock
-                            x:Name="RecordingStateTextBlock"
-                            VerticalAlignment="Center"
-                            FontWeight="SemiBold"
-                            Text="Запись включена" />
-                    </StackPanel>
-                </Border>
-            </Grid>
-        </Border>
-
         <CommandBar
-            Grid.Row="1"
+            HorizontalAlignment="Left"
             DefaultLabelPosition="Right"
             IsDynamicOverflowEnabled="True">
             <AppBarToggleButton
@@ -110,7 +59,7 @@
         </CommandBar>
 
         <Border
-            Grid.Row="2"
+            Grid.Row="1"
             Background="{ThemeResource LayerFillColorDefaultBrush}"
             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
             BorderThickness="1"
@@ -159,7 +108,7 @@
                                 </Border>
                                 <TextBlock
                                     Grid.Column="1"
-                                    FontFamily="Cascadia Mono, Consolas"
+                                    FontFamily="Consolas"
                                     FontSize="12.5"
                                     FontWeight="{Binding FontWeight}"
                                     Text="{Binding Text}"
@@ -191,7 +140,7 @@
         </Border>
 
         <Grid
-            Grid.Row="3"
+            Grid.Row="2"
             ColumnDefinitions="*,Auto"
             ColumnSpacing="12">
             <StackPanel VerticalAlignment="Center" Spacing="2">

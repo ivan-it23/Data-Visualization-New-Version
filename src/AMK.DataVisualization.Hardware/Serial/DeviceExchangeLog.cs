@@ -266,7 +266,7 @@ public static class DeviceExchangeLog
             $"N Tx: {transmitterCount}",
             $"Мод: {finalModification}",
             $"Номер: {finalNumber}",
-            $"Серийный №: {serial}",
+            $"Серийный \u2116: {serial}",
             $"Позиция R1: {receiverPosition}"
         ];
         if (sondeDiameterMillimeters > 0)

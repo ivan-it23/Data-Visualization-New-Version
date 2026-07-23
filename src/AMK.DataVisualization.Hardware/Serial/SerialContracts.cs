@@ -40,6 +40,7 @@ public readonly record struct MetrologyReadResult(
 public sealed record SerialStatusSnapshot(
     SerialConnectionState State,
     string PortName,
+    bool ConnectionRequested,
     bool IsPolling,
     int PollIntervalMilliseconds,
     long PacketsReceived,

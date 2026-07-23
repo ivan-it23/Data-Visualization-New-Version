@@ -287,10 +287,10 @@ public sealed partial class ConnectionSettingsWindow : Window
 
     private void SetBusy(bool busy)
     {
-        PortComboBox.IsEnabled = !busy && !deviceService.IsConnected;
-        RefreshPortsButton.IsEnabled = !busy && !deviceService.IsConnected;
-        ConnectButton.IsEnabled = !busy && !deviceService.IsConnected;
-        DisconnectButton.IsEnabled = !busy && deviceService.IsConnected;
+        PortComboBox.IsEnabled = !busy && !deviceService.IsConnectionRequested;
+        RefreshPortsButton.IsEnabled = !busy && !deviceService.IsConnectionRequested;
+        ConnectButton.IsEnabled = !busy && !deviceService.IsConnectionRequested;
+        DisconnectButton.IsEnabled = !busy && deviceService.IsConnectionRequested;
     }
 
     private void DeviceService_StatusChanged(object? sender, SerialStatusChangedEventArgs e)
@@ -307,6 +307,7 @@ public sealed partial class ConnectionSettingsWindow : Window
                 SerialConnectionState.Connecting => "Подключение...",
                 SerialConnectionState.Connected when status.IsPolling => "Опрос...",
                 SerialConnectionState.Connected => "Подключено",
+                SerialConnectionState.Disconnected when status.ConnectionRequested => "Переподключение...",
                 SerialConnectionState.ConnectionError => "Ошибка подключения",
                 _ => "Отключено"
             };
@@ -317,11 +318,15 @@ public sealed partial class ConnectionSettingsWindow : Window
         RecordedFramesTextBlock.Text = $"{status.RecordedFrames} кадров";
         UpdateRecordingControls(status);
 
-        PortComboBox.IsEnabled = status.State is SerialConnectionState.Disconnected or SerialConnectionState.ConnectionError;
-        RefreshPortsButton.IsEnabled = !refreshingPorts
+        PortComboBox.IsEnabled = !status.ConnectionRequested
             && status.State is SerialConnectionState.Disconnected or SerialConnectionState.ConnectionError;
-        ConnectButton.IsEnabled = status.State is SerialConnectionState.Disconnected or SerialConnectionState.ConnectionError;
-        DisconnectButton.IsEnabled = status.State == SerialConnectionState.Connected;
+        RefreshPortsButton.IsEnabled = !refreshingPorts
+            && !status.ConnectionRequested
+            && status.State is SerialConnectionState.Disconnected or SerialConnectionState.ConnectionError;
+        ConnectButton.IsEnabled = !status.ConnectionRequested
+            && status.State is SerialConnectionState.Disconnected or SerialConnectionState.ConnectionError;
+        DisconnectButton.IsEnabled = status.ConnectionRequested
+            && status.State != SerialConnectionState.Connecting;
     }
 
     private void UpdateRecordingControls(SerialStatusSnapshot status)

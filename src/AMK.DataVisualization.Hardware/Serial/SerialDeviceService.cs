@@ -60,6 +60,7 @@ public sealed class SerialDeviceService : IDisposable
     private bool recordingEnabled = true;
     private bool useLegacyCartographProtocol;
     private bool loggedDeviceIdentityToExchangeLog;
+    private volatile bool connectionRequested;
     private bool disposed;
     private int controlOperationCount;
     private long connectionSessionId;
@@ -77,6 +78,8 @@ public sealed class SerialDeviceService : IDisposable
     public SerialConnectionState State => state;
 
     public bool IsConnected => state == SerialConnectionState.Connected && serialPort?.IsOpen == true;
+
+    public bool IsConnectionRequested => connectionRequested;
 
     public bool IsPolling
     {
@@ -142,6 +145,7 @@ public sealed class SerialDeviceService : IDisposable
         }
 
         await StopPollingAsync().ConfigureAwait(false);
+        connectionRequested = true;
         Interlocked.Exchange(ref packetsReceived, 0);
         Interlocked.Exchange(ref packetErrors, 0);
         Interlocked.Exchange(ref recordedFrames, 0);
@@ -164,6 +168,7 @@ public sealed class SerialDeviceService : IDisposable
 
         if (result != SerialOperationResult.Success)
         {
+            connectionRequested = false;
             AppendConnectionFailure(result);
             SetState(SerialConnectionState.ConnectionError, ResultToDisplayText(result));
             return result;
@@ -244,6 +249,7 @@ public sealed class SerialDeviceService : IDisposable
 
     public async Task DisconnectAsync()
     {
+        connectionRequested = false;
         await StopPollingAsync().ConfigureAwait(false);
         await Task.Run(() =>
         {
@@ -270,6 +276,7 @@ public sealed class SerialDeviceService : IDisposable
         return new SerialStatusSnapshot(
             state,
             desiredPortName,
+            connectionRequested,
             IsPolling,
             PollIntervalMilliseconds,
             Interlocked.Read(ref packetsReceived),
@@ -1501,6 +1508,7 @@ public sealed class SerialDeviceService : IDisposable
         }
 
         disposed = true;
+        connectionRequested = false;
         CancellationTokenSource? source;
         lock (lifecycleSync)
         {
