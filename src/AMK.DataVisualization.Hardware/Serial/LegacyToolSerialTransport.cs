@@ -13,6 +13,7 @@ internal static class LegacyToolSerialTransport
     public static SerialOperationResult Send(SerialPort port, byte command, ReadOnlySpan<byte> payload)
     {
         byte[] packet = BuildPacket(command, payload);
+        DeviceExchangeLog.AppendRaw(DeviceProtocolLog.FormatRawPacket("TX сырые", packet));
         DeviceProtocolLog.Write(
             $"LEGACY TX | port={port.PortName} | cmd=0x{command:X2} | payload_length={payload.Length} | " +
             $"packet_length={packet.Length} | packet={DeviceProtocolLog.FormatBytes(packet)}");

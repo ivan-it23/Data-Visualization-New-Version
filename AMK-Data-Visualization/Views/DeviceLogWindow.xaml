@@ -101,7 +101,7 @@
                 </AppBarButton.Icon>
             </AppBarButton>
             <AppBarButton
-                Label="Открыть файл"
+                Label="Папка журналов"
                 Click="OpenLogFileButton_Click">
                 <AppBarButton.Icon>
                     <FontIcon Glyph="&#xED25;" />
@@ -126,7 +126,9 @@
                     ScrollViewer.VerticalScrollBarVisibility="Auto">
                     <ListView.ItemsPanel>
                         <ItemsPanelTemplate>
-                            <ItemsStackPanel Orientation="Vertical" />
+                            <ItemsStackPanel
+                                Orientation="Vertical"
+                                ItemsUpdatingScrollMode="KeepItemsInView" />
                         </ItemsPanelTemplate>
                     </ListView.ItemsPanel>
                     <ListView.ItemContainerStyle>
@@ -160,7 +162,6 @@
                                     FontFamily="Cascadia Mono, Consolas"
                                     FontSize="12.5"
                                     FontWeight="{Binding FontWeight}"
-                                    IsTextSelectionEnabled="True"
                                     Text="{Binding Text}"
                                     TextWrapping="NoWrap" />
                             </Grid>

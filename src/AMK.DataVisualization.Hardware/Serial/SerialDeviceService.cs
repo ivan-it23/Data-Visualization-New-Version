@@ -52,7 +52,7 @@ public sealed class SerialDeviceService : IDisposable
     private long packetsReceived;
     private long packetErrors;
     private long recordedFrames;
-    private uint lastFrameNumber;
+    private long lastFrameNumber;
     private string lastError = string.Empty;
     private string recordFilePath = string.Empty;
     private string recordFolder = SerialRecordingFolder.DefaultPath;
@@ -145,7 +145,7 @@ public sealed class SerialDeviceService : IDisposable
         Interlocked.Exchange(ref packetsReceived, 0);
         Interlocked.Exchange(ref packetErrors, 0);
         Interlocked.Exchange(ref recordedFrames, 0);
-        lastFrameNumber = 0;
+        Interlocked.Exchange(ref lastFrameNumber, 0);
         desiredPortName = portName.Trim();
         desiredBaudRate = baudRate;
         DeviceProtocolLog.BeginSession(desiredPortName, desiredBaudRate);
@@ -274,7 +274,7 @@ public sealed class SerialDeviceService : IDisposable
             PollIntervalMilliseconds,
             Interlocked.Read(ref packetsReceived),
             Interlocked.Read(ref packetErrors),
-            lastFrameNumber,
+            Interlocked.Read(ref lastFrameNumber),
             lastError,
             DeviceSignature,
             Metrology,
@@ -415,7 +415,7 @@ public sealed class SerialDeviceService : IDisposable
                     Interlocked.Exchange(ref packetsReceived, 0);
                     Interlocked.Exchange(ref packetErrors, 0);
                     Interlocked.Exchange(ref recordedFrames, 0);
-                    lastFrameNumber = 0;
+                    Interlocked.Exchange(ref lastFrameNumber, 0);
                     recordFilePath = string.Empty;
                     loggedDeviceIdentityToExchangeLog = false;
                     Interlocked.Increment(ref connectionSessionId);
@@ -484,9 +484,9 @@ public sealed class SerialDeviceService : IDisposable
             {
                 consecutiveFailures = 0;
                 long acceptedPackets = Interlocked.Increment(ref packetsReceived);
-                lastFrameNumber = frame.CanonicalData.Frame;
+                Interlocked.Exchange(ref lastFrameNumber, acceptedPackets);
                 WriteRecordCore(frame.CanonicalData);
-                RaiseFrameReceived(frame, rawPayload);
+                RaiseFrameReceived(frame, rawPayload, acceptedPackets);
                 lastError = string.Empty;
                 DeviceProtocolLog.Write(
                     $"POLL FRAME ACCEPTED | protocol={(useLegacyCartographProtocol ? "LEGACY_LOOP_NEXT" : "FRAMED_LEN")} | " +
@@ -494,11 +494,11 @@ public sealed class SerialDeviceService : IDisposable
                     $"signature=0x{frame.CanonicalData.Signature:X8}");
                 DeviceExchangeLog.Append(
                     $"→ 0x{CommandData:X2} [5B]  ← 0x{CommandData:X2} [{rawPayload.Length}B]  |  " +
-                    $"Кадр #{frame.CanonicalData.Frame}: Sig=0x{frame.CanonicalData.Signature:X8}, " +
+                    $"Кадр #{acceptedPackets}: Sig=0x{frame.CanonicalData.Signature:X8}, " +
                     $"{frame.CanonicalData.Temperature:F1}°C");
                 if (DeviceExchangeLog.ShowRawData)
                 {
-                    DeviceLogPayloadFormatter.Append(frame);
+                    DeviceLogPayloadFormatter.Append(frame, acceptedPackets);
                 }
             }
             else
@@ -793,7 +793,7 @@ public sealed class SerialDeviceService : IDisposable
             $"[WriteMetrology]   port={desiredPortName} baud={desiredBaudRate} sessionId={Interlocked.Read(ref connectionSessionId)}");
         DeviceExchangeLog.Append(
             $"[WriteMetrology]   pausePolling={Volatile.Read(ref controlOperationCount) > 0} " +
-            $"hasMetrology={CurrentMetrology.HasValue} lastFrame={lastFrameNumber} " +
+            $"hasMetrology={CurrentMetrology.HasValue} lastFrame={Interlocked.Read(ref lastFrameNumber)} " +
             $"recording={(recordingEnabled ? "on" : "off")}");
         DeviceExchangeLog.Append(
             $"[WriteMetrology]   port timeouts: read={ReadTimeoutMilliseconds}ms write={WriteTimeoutMilliseconds}ms");
@@ -929,7 +929,7 @@ public sealed class SerialDeviceService : IDisposable
             $"sessionId={Interlocked.Read(ref connectionSessionId)}");
         DeviceExchangeLog.Append(
             $"[RequestAirCalibration]   pausePolling={Volatile.Read(ref controlOperationCount) > 0} " +
-            $"hasMetrology={CurrentMetrology.HasValue} lastFrame={lastFrameNumber} " +
+            $"hasMetrology={CurrentMetrology.HasValue} lastFrame={Interlocked.Read(ref lastFrameNumber)} " +
             $"recording={(recordingEnabled ? "on" : "off")}");
         DeviceExchangeLog.Append(
             $"[RequestAirCalibration]   port timeouts: read={ReadTimeoutMilliseconds}ms write={WriteTimeoutMilliseconds}ms");
@@ -1228,6 +1228,7 @@ public sealed class SerialDeviceService : IDisposable
             port.DiscardInBuffer();
             port.DiscardOutBuffer();
             byte[] packet = BuildPacket(command, payload);
+            DeviceExchangeLog.AppendRaw(DeviceProtocolLog.FormatRawPacket("TX сырые", packet));
             DeviceProtocolLog.Write(
                 $"FRAMED TX | port={port.PortName} | cmd=0x{command:X2} | payload_length={payload.Length} | " +
                 $"packet_length={packet.Length} | packet={DeviceProtocolLog.FormatBytes(packet)}");
@@ -1442,11 +1443,11 @@ public sealed class SerialDeviceService : IDisposable
         }
     }
 
-    private void RaiseFrameReceived(ParsedToolFrame frame, byte[] rawPayload)
+    private void RaiseFrameReceived(ParsedToolFrame frame, byte[] rawPayload, long sessionFrameNumber)
     {
         try
         {
-            FrameReceived?.Invoke(this, new SerialFrameReceivedEventArgs(frame, rawPayload));
+            FrameReceived?.Invoke(this, new SerialFrameReceivedEventArgs(frame, rawPayload, sessionFrameNumber));
         }
         catch
         {

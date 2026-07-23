@@ -15,11 +15,13 @@ public static class DeviceExchangeLog
 {
     private const int MaximumBufferedLines = 300;
     private const int MaximumPendingFileCommands = 4096;
+    private const int MaximumSessionFiles = 3;
     private const long MaximumLogFileBytes = 32L * 1024L * 1024L;
     private const string LogDirectoryName = "AMK-Data-Visualization";
-    private const string LogFileName = "device_log.txt";
+    private const string LegacyLogFileName = "device_log.txt";
+    private const string SessionLogFilePrefix = "device_log_";
     private const string FileLimitMessage =
-        "[Журнал] Достигнут предел файла 32 МБ. Запись на диск приостановлена до следующего подключения.";
+        "[Журнал] Достигнут предел файла 32 МБ. Запись на диск приостановлена до следующей сессии.";
 
     private static readonly object Sync = new();
     private static readonly Queue<DeviceLogLine> Lines = new(MaximumBufferedLines);
@@ -31,19 +33,35 @@ public static class DeviceExchangeLog
             FullMode = BoundedChannelFullMode.Wait,
             AllowSynchronousContinuations = false
         });
-    private static readonly string ResolvedFilePath = ResolveFilePath();
+    private static readonly string ResolvedDirectoryPath = ResolveDirectoryPath();
     private static readonly Task FileWriterTask = Task.Run(ProcessFileCommandsAsync);
 
     private static long generation;
     private static long sequence;
+    private static long sessionSequence;
     private static long droppedFileLines;
     private static bool enabled = true;
     private static bool showRawData;
     private static bool rawDataAvailable = true;
+    private static DeviceLogSessionKind currentSessionKind;
+    private static string currentFilePath = string.Empty;
 
-    public static string FilePath => ResolvedFilePath;
+    public static string DirectoryPath => ResolvedDirectoryPath;
+
+    public static string FilePath
+    {
+        get
+        {
+            lock (Sync)
+            {
+                return currentFilePath;
+            }
+        }
+    }
 
     public static int MaximumLines => MaximumBufferedLines;
+
+    public static int MaximumFiles => MaximumSessionFiles;
 
     public static long Generation => Interlocked.Read(ref generation);
 
@@ -137,14 +155,25 @@ public static class DeviceExchangeLog
         }
     }
 
-    public static void OpenFile()
+    public static void BeginDeviceSession(string portName, int baudRate)
     {
-        EnqueueControlCommand(new FileCommand(FileCommandKind.Open, string.Empty));
+        BeginSession(DeviceLogSessionKind.Device, $"{portName}_{baudRate}", reuseSameKind: false);
+    }
+
+    public static void BeginFileSession(string sourceFilePath)
+    {
+        string sourceName = Path.GetFileNameWithoutExtension(sourceFilePath);
+        BeginSession(DeviceLogSessionKind.File, sourceName, reuseSameKind: true);
     }
 
     public static void CloseFile()
     {
-        EnqueueControlCommand(new FileCommand(FileCommandKind.Close, string.Empty));
+        lock (Sync)
+        {
+            currentSessionKind = DeviceLogSessionKind.None;
+        }
+
+        EnqueueControlCommand(new FileCommand(FileCommandKind.Close, string.Empty, string.Empty));
     }
 
     public static void Append(string line)
@@ -160,6 +189,20 @@ public static class DeviceExchangeLog
     public static void AppendRawBold(string line)
     {
         AppendCore(line, bold: true, isRawPayload: true);
+    }
+
+    internal static void AppendFileOnly(string line)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+        lock (Sync)
+        {
+            if (!enabled)
+            {
+                return;
+            }
+        }
+
+        EnqueueFileLine(line);
     }
 
     public static void Clear()
@@ -238,6 +281,55 @@ public static class DeviceExchangeLog
         }
     }
 
+    private static void BeginSession(DeviceLogSessionKind kind, string source, bool reuseSameKind)
+    {
+        string sessionFilePath;
+        lock (Sync)
+        {
+            if (reuseSameKind && currentSessionKind == kind && currentFilePath.Length > 0)
+            {
+                return;
+            }
+
+            currentSessionKind = kind;
+            sessionFilePath = BuildSessionFilePath(kind, source);
+            currentFilePath = sessionFilePath;
+        }
+
+        EnqueueControlCommand(new FileCommand(FileCommandKind.Open, sessionFilePath, string.Empty));
+    }
+
+    private static string BuildSessionFilePath(DeviceLogSessionKind kind, string source)
+    {
+        long currentSession = Interlocked.Increment(ref sessionSequence);
+        string kindLabel = kind == DeviceLogSessionKind.Device ? "COM" : "FILE";
+        string safeSource = SanitizeFileNamePart(source);
+        string sourceSuffix = safeSource.Length > 0 ? $"_{safeSource}" : string.Empty;
+        string fileName =
+            $"{SessionLogFilePrefix}{DateTime.Now:yyyyMMdd_HHmmss_fff}_{kindLabel}{sourceSuffix}_S{currentSession:D4}.txt";
+        return Path.Combine(ResolvedDirectoryPath, fileName);
+    }
+
+    private static string SanitizeFileNamePart(string value)
+    {
+        HashSet<char> invalidCharacters = Path.GetInvalidFileNameChars().ToHashSet();
+        StringBuilder builder = new(Math.Min(value.Length, 40));
+        foreach (char character in value)
+        {
+            if (builder.Length >= 40)
+            {
+                break;
+            }
+
+            if (!invalidCharacters.Contains(character) && !char.IsControl(character))
+            {
+                builder.Append(character == ' ' ? '_' : character);
+            }
+        }
+
+        return builder.ToString().Trim('_', '.');
+    }
+
     private static void AppendCore(string line, bool bold, bool isRawPayload)
     {
         ArgumentNullException.ThrowIfNull(line);
@@ -258,7 +350,12 @@ public static class DeviceExchangeLog
             Interlocked.Increment(ref generation);
         }
 
-        if (!FileCommands.Writer.TryWrite(new FileCommand(FileCommandKind.Write, line)))
+        EnqueueFileLine(line);
+    }
+
+    private static void EnqueueFileLine(string line)
+    {
+        if (!FileCommands.Writer.TryWrite(new FileCommand(FileCommandKind.Write, string.Empty, line)))
         {
             Interlocked.Increment(ref droppedFileLines);
         }
@@ -297,14 +394,10 @@ public static class DeviceExchangeLog
                                 bytesWritten = 0;
                                 limitReported = false;
                                 Interlocked.Exchange(ref droppedFileLines, 0);
-                                string? directory = Path.GetDirectoryName(ResolvedFilePath);
-                                if (!string.IsNullOrWhiteSpace(directory))
-                                {
-                                    Directory.CreateDirectory(directory);
-                                }
+                                Directory.CreateDirectory(ResolvedDirectoryPath);
 
                                 FileStream stream = new(
-                                    ResolvedFilePath,
+                                    command.FilePath,
                                     FileMode.Create,
                                     FileAccess.Write,
                                     FileShare.ReadWrite,
@@ -317,6 +410,7 @@ public static class DeviceExchangeLog
                                 {
                                     AutoFlush = false
                                 };
+                                PruneSessionFiles(command.FilePath);
                                 break;
 
                             case FileCommandKind.Close:
@@ -382,6 +476,46 @@ public static class DeviceExchangeLog
         }
     }
 
+    private static void PruneSessionFiles(string activeFilePath)
+    {
+        try
+        {
+            List<FileInfo> files = Directory
+                .EnumerateFiles(ResolvedDirectoryPath, "device_log*.txt", SearchOption.TopDirectoryOnly)
+                .Select(path => new FileInfo(path))
+                .Where(file =>
+                    file.Name.Equals(LegacyLogFileName, StringComparison.OrdinalIgnoreCase)
+                    || file.Name.StartsWith(SessionLogFilePrefix, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(file => file.LastWriteTimeUtc)
+                .ThenBy(file => file.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            while (files.Count > MaximumSessionFiles)
+            {
+                FileInfo? oldest = files.FirstOrDefault(file =>
+                    !file.FullName.Equals(activeFilePath, StringComparison.OrdinalIgnoreCase));
+                if (oldest is null)
+                {
+                    break;
+                }
+
+                files.Remove(oldest);
+                try
+                {
+                    oldest.Delete();
+                }
+                catch
+                {
+                    // Повторная сессия снова попытается привести каталог к лимиту.
+                }
+            }
+        }
+        catch
+        {
+            // Ошибка ротации не должна останавливать текущую запись.
+        }
+    }
+
     private static async Task<long> TryWriteLineAsync(StreamWriter writer, string text, long bytesWritten)
     {
         long required = Encoding.UTF8.GetByteCount(text) + Environment.NewLine.Length;
@@ -411,7 +545,7 @@ public static class DeviceExchangeLog
         }
     }
 
-    private static string ResolveFilePath()
+    private static string ResolveDirectoryPath()
     {
         string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         if (string.IsNullOrWhiteSpace(localAppData))
@@ -419,7 +553,14 @@ public static class DeviceExchangeLog
             localAppData = Path.GetTempPath();
         }
 
-        return Path.Combine(localAppData, LogDirectoryName, "Logs", LogFileName);
+        return Path.Combine(localAppData, LogDirectoryName, "Logs");
+    }
+
+    private enum DeviceLogSessionKind
+    {
+        None,
+        Device,
+        File
     }
 
     private enum FileCommandKind
@@ -429,5 +570,5 @@ public static class DeviceExchangeLog
         Close
     }
 
-    private readonly record struct FileCommand(FileCommandKind Kind, string Text);
+    private readonly record struct FileCommand(FileCommandKind Kind, string FilePath, string Text);
 }

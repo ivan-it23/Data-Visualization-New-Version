@@ -7,7 +7,7 @@ namespace AMK.DataVisualization.Hardware.Serial;
 
 internal static class DeviceLogPayloadFormatter
 {
-    public static void Append(ParsedToolFrame parsedFrame)
+    public static void Append(ParsedToolFrame parsedFrame, long sessionFrameNumber)
     {
         GpToolData data = parsedFrame.CanonicalData;
         int transmitterCount = Math.Clamp(
@@ -21,7 +21,7 @@ internal static class DeviceLogPayloadFormatter
         DeviceExchangeLog.AppendRaw(string.Empty);
         DeviceExchangeLog.AppendRaw("───────────────────────────────────────────────────────────────────");
         DeviceExchangeLog.AppendRawBold(
-            $"▶ Кадр #{data.Frame} | signature=0x{data.Signature:X8} | condition={data.Condition} | " +
+            $"▶ Кадр #{sessionFrameNumber} | signature=0x{data.Signature:X8} | condition={data.Condition} | " +
             $"T={Format(data.Temperature)} °C");
         DeviceExchangeLog.AppendRaw(FormatFields(data, transmitterCount));
     }

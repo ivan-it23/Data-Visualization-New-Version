@@ -44,18 +44,23 @@ public sealed record SerialStatusSnapshot(
     int PollIntervalMilliseconds,
     long PacketsReceived,
     long PacketErrors,
-    uint LastFrameNumber,
+    long LastFrameNumber,
     string LastError,
     uint? DeviceSignature,
     DeviceMetrologySummary? Metrology,
     string RecordFilePath,
     long RecordedFrames);
 
-public sealed class SerialFrameReceivedEventArgs(ParsedToolFrame frame, byte[] rawPayload) : EventArgs
+public sealed class SerialFrameReceivedEventArgs(
+    ParsedToolFrame frame,
+    byte[] rawPayload,
+    long sessionFrameNumber) : EventArgs
 {
     public ParsedToolFrame Frame { get; } = frame;
 
     public byte[] RawPayload { get; } = rawPayload;
+
+    public long SessionFrameNumber { get; } = sessionFrameNumber;
 }
 
 public sealed class SerialStatusChangedEventArgs(SerialStatusSnapshot status) : EventArgs

@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Diagnostics;
 using AMK.DataVisualization.App.Services;
 using AMK.DataVisualization.Hardware.Serial;
@@ -6,9 +8,12 @@ using Microsoft.UI.Text;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Graphics;
+using Windows.System;
 using WinRT.Interop;
 
 namespace AMK.DataVisualization.App.Views;
@@ -17,19 +22,29 @@ public sealed partial class DeviceLogWindow : Window
 {
     private const int WindowWidth = 1040;
     private const int WindowHeight = 680;
-    private readonly ObservableCollection<DeviceLogRow> rows = [];
+    private readonly DeviceLogRowCollection rows = [];
     private readonly DispatcherTimer refreshTimer;
     private bool allowPermanentClose;
     private bool activated;
     private bool forceFullRefresh = true;
+    private bool followTail = true;
+    private bool applyingSnapshot;
+    private bool tailScrollRequested;
+    private bool applyingTailScroll;
     private long renderedGeneration = -1;
     private ScrollViewer? logScrollViewer;
+    private ScrollBar? logVerticalScrollBar;
 
     internal DeviceLogWindow()
     {
         InitializeComponent();
         LogListView.ItemsSource = rows;
-        LogPathTextBlock.Text = DeviceExchangeLog.FilePath;
+        LogListView.LayoutUpdated += LogListView_LayoutUpdated;
+        LogListView.KeyDown += LogListView_KeyDown;
+        LogListView.AddHandler(
+            UIElement.PointerWheelChangedEvent,
+            new PointerEventHandler(LogListView_PointerWheelChanged),
+            handledEventsToo: true);
         AppWindow.Resize(new SizeInt32(WindowWidth, WindowHeight));
         AppWindow.Closing += AppWindow_Closing;
 
@@ -63,6 +78,7 @@ public sealed partial class DeviceLogWindow : Window
         DispatcherQueue.TryEnqueue(() =>
             SecondaryWindowIntegration.CenterOverOwner(windowHandle, ownerHandle));
 
+        followTail = true;
         forceFullRefresh = true;
         RefreshLog();
         refreshTimer.Start();
@@ -73,13 +89,60 @@ public sealed partial class DeviceLogWindow : Window
         allowPermanentClose = true;
         refreshTimer.Stop();
         refreshTimer.Tick -= RefreshTimer_Tick;
+        if (logScrollViewer is not null)
+        {
+            logScrollViewer.ViewChanged -= LogScrollViewer_ViewChanged;
+        }
+
+        if (logVerticalScrollBar is not null)
+        {
+            logVerticalScrollBar.Scroll -= LogVerticalScrollBar_Scroll;
+        }
+
+        LogListView.LayoutUpdated -= LogListView_LayoutUpdated;
+        LogListView.KeyDown -= LogListView_KeyDown;
+
         Close();
     }
 
     private void RootGrid_Loaded(object sender, RoutedEventArgs e)
     {
-        logScrollViewer = FindDescendant<ScrollViewer>(LogListView);
+        EnsureScrollInfrastructure();
         RefreshLog();
+    }
+
+    private void EnsureScrollInfrastructure()
+    {
+        ScrollViewer? scrollViewer = FindDescendant<ScrollViewer>(LogListView);
+        if (!ReferenceEquals(logScrollViewer, scrollViewer))
+        {
+            if (logScrollViewer is not null)
+            {
+                logScrollViewer.ViewChanged -= LogScrollViewer_ViewChanged;
+            }
+
+            logScrollViewer = scrollViewer;
+            if (logScrollViewer is not null)
+            {
+                logScrollViewer.ViewChanged += LogScrollViewer_ViewChanged;
+            }
+        }
+
+        DependencyObject scrollRoot = logScrollViewer is not null ? logScrollViewer : LogListView;
+        ScrollBar? verticalScrollBar = FindVerticalScrollBar(scrollRoot);
+        if (!ReferenceEquals(logVerticalScrollBar, verticalScrollBar))
+        {
+            if (logVerticalScrollBar is not null)
+            {
+                logVerticalScrollBar.Scroll -= LogVerticalScrollBar_Scroll;
+            }
+
+            logVerticalScrollBar = verticalScrollBar;
+            if (logVerticalScrollBar is not null)
+            {
+                logVerticalScrollBar.Scroll += LogVerticalScrollBar_Scroll;
+            }
+        }
     }
 
     private void RefreshTimer_Tick(object? sender, object e)
@@ -95,17 +158,24 @@ public sealed partial class DeviceLogWindow : Window
             return;
         }
 
-        bool wasPinnedToBottom = IsPinnedToBottom();
         IReadOnlyList<DeviceLogLine> snapshot = DeviceExchangeLog.GetLines();
-        ApplySnapshot(snapshot, forceFullRefresh);
+        applyingSnapshot = true;
+        try
+        {
+            ApplySnapshot(snapshot, forceFullRefresh);
+        }
+        finally
+        {
+            applyingSnapshot = false;
+        }
+
         forceFullRefresh = false;
         renderedGeneration = generation;
         SynchronizeControls();
 
-        if (wasPinnedToBottom && rows.Count > 0)
+        if (followTail && rows.Count > 0)
         {
-            DeviceLogRow last = rows[^1];
-            DispatcherQueue.TryEnqueue(() => LogListView.ScrollIntoView(last));
+            RequestTailScroll();
         }
     }
 
@@ -123,15 +193,15 @@ public sealed partial class DeviceLogWindow : Window
             return;
         }
 
-        HashSet<long> desiredSequences = snapshot.Select(line => line.Sequence).ToHashSet();
-        while (rows.Count > 0 && !desiredSequences.Contains(rows[0].Sequence))
+        long firstDesiredSequence = snapshot[0].Sequence;
+        while (rows.Count > 0 && rows[0].Sequence < firstDesiredSequence)
         {
             rows.RemoveAt(0);
         }
 
         if (rows.Count == 0)
         {
-            ReplaceRows(snapshot);
+            AppendRows(snapshot, 0);
             return;
         }
 
@@ -160,19 +230,157 @@ public sealed partial class DeviceLogWindow : Window
             }
         }
 
-        for (int index = snapshotStart + rows.Count; index < snapshot.Count; index++)
+        AppendRows(snapshot, snapshotStart + rows.Count);
+    }
+
+    private void ReplaceRows(IReadOnlyList<DeviceLogLine> snapshot)
+    {
+        rows.ReplaceWith(snapshot);
+    }
+
+    private void AppendRows(IReadOnlyList<DeviceLogLine> snapshot, int startIndex)
+    {
+        for (int index = startIndex; index < snapshot.Count; index++)
         {
             rows.Add(new DeviceLogRow(snapshot[index]));
         }
     }
 
-    private void ReplaceRows(IReadOnlyList<DeviceLogLine> snapshot)
+    private void LogScrollViewer_ViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
     {
-        rows.Clear();
-        foreach (DeviceLogLine line in snapshot)
+        bool pinnedToBottom = IsPinnedToBottom();
+        if (applyingTailScroll)
         {
-            rows.Add(new DeviceLogRow(line));
+            if (!e.IsIntermediate)
+            {
+                applyingTailScroll = false;
+                if (followTail && !pinnedToBottom)
+                {
+                    RequestTailScroll();
+                }
+            }
+
+            return;
         }
+
+        if (pinnedToBottom)
+        {
+            followTail = true;
+            tailScrollRequested = false;
+            return;
+        }
+
+        if (applyingSnapshot)
+        {
+            RequestTailScroll();
+            return;
+        }
+
+        if (e.IsIntermediate)
+        {
+            StopFollowingTail();
+            return;
+        }
+
+        if (followTail)
+        {
+            RequestTailScroll();
+            TryScrollToTail();
+        }
+    }
+
+    private void LogListView_LayoutUpdated(object? sender, object e)
+    {
+        if (logScrollViewer is null || logVerticalScrollBar is null)
+        {
+            EnsureScrollInfrastructure();
+        }
+
+        if (tailScrollRequested)
+        {
+            TryScrollToTail();
+        }
+    }
+
+    private void RequestTailScroll()
+    {
+        if (followTail && rows.Count > 0)
+        {
+            tailScrollRequested = true;
+        }
+    }
+
+    private void TryScrollToTail()
+    {
+        if (!tailScrollRequested || !followTail || rows.Count == 0)
+        {
+            tailScrollRequested = false;
+            return;
+        }
+
+        logScrollViewer ??= FindDescendant<ScrollViewer>(LogListView);
+        if (logScrollViewer is null)
+        {
+            return;
+        }
+
+        if (IsPinnedToBottom())
+        {
+            tailScrollRequested = false;
+            return;
+        }
+
+        double targetOffset = logScrollViewer.ScrollableHeight;
+        tailScrollRequested = false;
+        applyingTailScroll = true;
+        if (!logScrollViewer.ChangeView(
+                horizontalOffset: null,
+                verticalOffset: targetOffset,
+                zoomFactor: null,
+                disableAnimation: true))
+        {
+            applyingTailScroll = false;
+            tailScrollRequested = true;
+        }
+    }
+
+    private void LogListView_PointerWheelChanged(object sender, PointerRoutedEventArgs e)
+    {
+        int wheelDelta = e.GetCurrentPoint(LogListView).Properties.MouseWheelDelta;
+        if (wheelDelta > 0 || !IsPinnedToBottom())
+        {
+            StopFollowingTail();
+        }
+    }
+
+    private void LogListView_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        bool movesUp = e.Key is VirtualKey.Up or VirtualKey.PageUp or VirtualKey.Home;
+        bool movesDown = e.Key is VirtualKey.Down or VirtualKey.PageDown or VirtualKey.End;
+        if (movesUp || (movesDown && !IsPinnedToBottom()))
+        {
+            StopFollowingTail();
+        }
+    }
+
+    private void LogVerticalScrollBar_Scroll(object sender, ScrollEventArgs e)
+    {
+        bool movesAwayFromTail = e.ScrollEventType is ScrollEventType.SmallDecrement
+            or ScrollEventType.LargeDecrement
+            or ScrollEventType.First
+            or ScrollEventType.ThumbTrack;
+        if (movesAwayFromTail
+            || (e.ScrollEventType != ScrollEventType.EndScroll && !IsPinnedToBottom()))
+        {
+            StopFollowingTail();
+        }
+    }
+
+    private void StopFollowingTail()
+    {
+        followTail = false;
+        tailScrollRequested = false;
+        applyingTailScroll = false;
     }
 
     private bool IsPinnedToBottom()
@@ -180,7 +388,7 @@ public sealed partial class DeviceLogWindow : Window
         logScrollViewer ??= FindDescendant<ScrollViewer>(LogListView);
         return logScrollViewer is null
             || logScrollViewer.ScrollableHeight <= 0
-            || logScrollViewer.VerticalOffset >= logScrollViewer.ScrollableHeight - 24;
+            || logScrollViewer.VerticalOffset >= logScrollViewer.ScrollableHeight - 2;
     }
 
     private void SynchronizeControls()
@@ -192,7 +400,12 @@ public sealed partial class DeviceLogWindow : Window
         RawDataToggleButton.Visibility = rawAvailable ? Visibility.Visible : Visibility.Collapsed;
         RecordingStateIcon.Opacity = enabled ? 1.0 : 0.45;
         RecordingStateTextBlock.Text = enabled ? "Запись включена" : "Запись приостановлена";
-        LogSummaryTextBlock.Text = $"Строк: {rows.Count} из {DeviceExchangeLog.MaximumLines}";
+        LogSummaryTextBlock.Text =
+            $"Строк: {rows.Count} из {DeviceExchangeLog.MaximumLines} · файлов сессий: до {DeviceExchangeLog.MaximumFiles}";
+        string activeFilePath = DeviceExchangeLog.FilePath;
+        LogPathTextBlock.Text = activeFilePath.Length > 0
+            ? activeFilePath
+            : $"Папка журналов: {DeviceExchangeLog.DirectoryPath}";
         EmptyStatePanel.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         refreshTimer.Interval = TimeSpan.FromMilliseconds(DeviceExchangeLog.ShowRawData ? 500 : 300);
     }
@@ -206,6 +419,7 @@ public sealed partial class DeviceLogWindow : Window
     private void RawDataToggleButton_Click(object sender, RoutedEventArgs e)
     {
         DeviceExchangeLog.ShowRawData = RawDataToggleButton.IsChecked == true;
+        followTail = true;
         forceFullRefresh = true;
         RefreshLog();
     }
@@ -213,6 +427,7 @@ public sealed partial class DeviceLogWindow : Window
     private void ClearButton_Click(object sender, RoutedEventArgs e)
     {
         DeviceExchangeLog.Clear();
+        followTail = true;
         forceFullRefresh = true;
         RefreshLog();
     }
@@ -237,24 +452,12 @@ public sealed partial class DeviceLogWindow : Window
     {
         try
         {
-            string? directory = Path.GetDirectoryName(DeviceExchangeLog.FilePath);
-            if (!string.IsNullOrWhiteSpace(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            if (File.Exists(DeviceExchangeLog.FilePath))
-            {
-                Process.Start(new ProcessStartInfo(DeviceExchangeLog.FilePath) { UseShellExecute = true });
-            }
-            else if (!string.IsNullOrWhiteSpace(directory))
-            {
-                Process.Start(new ProcessStartInfo(directory) { UseShellExecute = true });
-            }
+            Directory.CreateDirectory(DeviceExchangeLog.DirectoryPath);
+            Process.Start(new ProcessStartInfo(DeviceExchangeLog.DirectoryPath) { UseShellExecute = true });
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
         {
-            LogSummaryTextBlock.Text = $"Не удалось открыть журнал: {exception.Message}";
+            LogSummaryTextBlock.Text = $"Не удалось открыть папку журналов: {exception.Message}";
         }
     }
 
@@ -296,6 +499,43 @@ public sealed partial class DeviceLogWindow : Window
         }
 
         return null;
+    }
+
+    private static ScrollBar? FindVerticalScrollBar(DependencyObject root)
+    {
+        int childCount = VisualTreeHelper.GetChildrenCount(root);
+        for (int index = 0; index < childCount; index++)
+        {
+            DependencyObject child = VisualTreeHelper.GetChild(root, index);
+            if (child is ScrollBar { Orientation: Orientation.Vertical } scrollBar)
+            {
+                return scrollBar;
+            }
+
+            ScrollBar? descendant = FindVerticalScrollBar(child);
+            if (descendant is not null)
+            {
+                return descendant;
+            }
+        }
+
+        return null;
+    }
+}
+
+internal sealed class DeviceLogRowCollection : ObservableCollection<DeviceLogRow>
+{
+    public void ReplaceWith(IEnumerable<DeviceLogLine> lines)
+    {
+        Items.Clear();
+        foreach (DeviceLogLine line in lines)
+        {
+            Items.Add(new DeviceLogRow(line));
+        }
+
+        OnPropertyChanged(new PropertyChangedEventArgs(nameof(Count)));
+        OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
+        OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
     }
 }
 

@@ -513,7 +513,7 @@ public sealed partial class MainWindow : Window
                 RenderGraph(2);
             }
 
-            SetStatus($"Получен кадр {e.Frame.CanonicalData.Frame}");
+            SetStatus($"Получен кадр {e.SessionFrameNumber}");
             UpdateStatusBarFileInfo();
         });
     }
@@ -1319,6 +1319,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        DeviceExchangeLog.BeginFileSession(filePath);
         DeviceExchangeLog.SetRawDataAvailable(false);
         DeviceExchangeLog.Append($"Файл загружен: {filePath}");
         uint low20 = (firstRecord.Signature << 12) >> 12;
