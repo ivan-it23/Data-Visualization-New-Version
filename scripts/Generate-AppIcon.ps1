@@ -22,6 +22,21 @@ function New-RoundedRectanglePath {
     return $path
 }
 
+function New-PolylinePoints {
+    param(
+        [int]$Size,
+        [double[]]$Coordinates
+    )
+
+    $points = for ($index = 0; $index -lt $Coordinates.Length; $index += 2) {
+        [System.Drawing.PointF]::new(
+            [float]($Size * $Coordinates[$index]),
+            [float]($Size * $Coordinates[$index + 1]))
+    }
+
+    return [System.Drawing.PointF[]]$points
+}
+
 function New-AppIconBitmap {
     param([int]$Size)
 
@@ -32,76 +47,98 @@ function New-AppIconBitmap {
     $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
     $graphics.Clear([System.Drawing.Color]::Transparent)
 
+    $cornerRadius = [float]($Size * 0.203125)
     $margin = [Math]::Max(1.0, $Size * 0.03125)
     $backgroundRect = [System.Drawing.RectangleF]::new($margin, $margin, $Size - 2 * $margin, $Size - 2 * $margin)
-    $backgroundPath = New-RoundedRectanglePath -Rectangle $backgroundRect -Radius ($Size * 0.203125)
-    $backgroundBrush = [System.Drawing.Drawing2D.LinearGradientBrush]::new(
-        $backgroundRect,
-        [System.Drawing.ColorTranslator]::FromHtml('#173B63'),
-        [System.Drawing.ColorTranslator]::FromHtml('#071A2E'),
-        45.0)
+    $backgroundPath = New-RoundedRectanglePath -Rectangle $backgroundRect -Radius $cornerRadius
+    $backgroundBrush = [System.Drawing.SolidBrush]::new(
+        [System.Drawing.ColorTranslator]::FromHtml('#E9F0F7'))
     $graphics.FillPath($backgroundBrush, $backgroundPath)
 
-    $axisColor = [System.Drawing.ColorTranslator]::FromHtml('#EAF3FA')
-    $axisWidth = [float][Math]::Max(1.15, $Size * 0.046875)
-    $axisPen = [System.Drawing.Pen]::new($axisColor, $axisWidth)
-    $axisPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
-    $axisPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-    $axisPen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
+    # The light plate needs an outline of its own, otherwise it dissolves into
+    # Explorer, dialog and light-theme taskbar backgrounds.
+    $borderWidth = [float][Math]::Max(1.0, $Size * 0.01171875)
+    $borderRect = [System.Drawing.RectangleF]::new(
+        $backgroundRect.X + $borderWidth / 2,
+        $backgroundRect.Y + $borderWidth / 2,
+        $backgroundRect.Width - $borderWidth,
+        $backgroundRect.Height - $borderWidth)
+    $borderPath = New-RoundedRectanglePath `
+        -Rectangle $borderRect `
+        -Radius ([float][Math]::Max(1.0, $cornerRadius - $borderWidth / 2))
+    $borderPen = [System.Drawing.Pen]::new(
+        [System.Drawing.ColorTranslator]::FromHtml('#A9BDD1'),
+        $borderWidth)
+    $graphics.DrawPath($borderPen, $borderPath)
 
-    $x0 = [float]($Size * 0.21875)
-    $y0 = [float]($Size * 0.777344)
-    $x1 = [float]($Size * 0.808594)
-    $y1 = [float]($Size * 0.203125)
-    $arrow = [float]($Size * 0.052734)
-    $graphics.DrawLine($axisPen, $x0, $y0, $x0, $y1)
-    $graphics.DrawLine($axisPen, $x0, $y1, $x0 - $arrow, $y1 + $arrow * 1.35)
-    $graphics.DrawLine($axisPen, $x0, $y1, $x0 + $arrow, $y1 + $arrow * 1.35)
-    $graphics.DrawLine($axisPen, $x0, $y0, $x1, $y0)
-    $graphics.DrawLine($axisPen, $x1, $y0, $x1 - $arrow * 1.35, $y0 - $arrow)
-    $graphics.DrawLine($axisPen, $x1, $y0, $x1 - $arrow * 1.35, $y0 + $arrow)
+    $plotLeft = [float]($Size * 0.1796875)
+    $plotRight = [float]($Size * 0.828125)
+    $plotTop = [float]($Size * 0.21875)
+    $plotBottom = [float]($Size * 0.8203125)
 
-    $tealPen = [System.Drawing.Pen]::new(
-        [System.Drawing.ColorTranslator]::FromHtml('#35D0BA'),
-        [float][Math]::Max(1.15, $Size * 0.048828))
-    $tealPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
-    $tealPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-    $tealPen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
-    $tealPoints = [System.Drawing.PointF[]]@(
-        [System.Drawing.PointF]::new($Size * 0.21875, $Size * 0.652344),
-        [System.Drawing.PointF]::new($Size * 0.308594, $Size * 0.613281),
-        [System.Drawing.PointF]::new($Size * 0.339844, $Size * 0.441406),
-        [System.Drawing.PointF]::new($Size * 0.433594, $Size * 0.488281),
-        [System.Drawing.PointF]::new($Size * 0.539063, $Size * 0.683594),
-        [System.Drawing.PointF]::new($Size * 0.636719, $Size * 0.585938),
-        [System.Drawing.PointF]::new($Size * 0.726563, $Size * 0.339844),
-        [System.Drawing.PointF]::new($Size * 0.808594, $Size * 0.3125)
-    )
-    $graphics.DrawCurve($tealPen, $tealPoints, 0.55)
+    # Below 32 px the grid collapses into a grey wash and hides the curves.
+    if ($Size -ge 32) {
+        $gridPen = [System.Drawing.Pen]::new(
+            [System.Drawing.ColorTranslator]::FromHtml('#D3DEE9'),
+            [float][Math]::Max(0.75, $Size * 0.0078125))
+        foreach ($fraction in @(0.3046875, 0.4375, 0.5703125, 0.703125)) {
+            $x = [float]($Size * $fraction)
+            $graphics.DrawLine($gridPen, $x, $plotTop, $x, $plotBottom)
+        }
 
-    $amberPen = [System.Drawing.Pen]::new(
-        [System.Drawing.ColorTranslator]::FromHtml('#F5B841'),
-        [float][Math]::Max(1.0, $Size * 0.039063))
-    $amberPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
-    $amberPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-    $amberPen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
-    $amberPoints = [System.Drawing.PointF[]]@(
-        [System.Drawing.PointF]::new($Size * 0.21875, $Size * 0.550781),
-        [System.Drawing.PointF]::new($Size * 0.304688, $Size * 0.527344),
-        [System.Drawing.PointF]::new($Size * 0.367188, $Size * 0.636719),
-        [System.Drawing.PointF]::new($Size * 0.433594, $Size * 0.589844),
-        [System.Drawing.PointF]::new($Size * 0.542969, $Size * 0.367188),
-        [System.Drawing.PointF]::new($Size * 0.628906, $Size * 0.425781),
-        [System.Drawing.PointF]::new($Size * 0.730469, $Size * 0.621094),
-        [System.Drawing.PointF]::new($Size * 0.808594, $Size * 0.503906)
-    )
-    $graphics.DrawCurve($amberPen, $amberPoints, 0.5)
+        foreach ($fraction in @(0.3515625, 0.484375, 0.6171875, 0.75)) {
+            $y = [float]($Size * $fraction)
+            $graphics.DrawLine($gridPen, $plotLeft, $y, $plotRight, $y)
+        }
+
+        $gridPen.Dispose()
+    }
+
+    $axisPen = [System.Drawing.Pen]::new(
+        [System.Drawing.ColorTranslator]::FromHtml('#5C7E9E'),
+        [float][Math]::Max(1.0, $Size * 0.01953125))
+    $axisPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Square
+    $axisPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Square
+    $graphics.DrawLine($axisPen, $plotLeft, $plotTop, $plotLeft, $plotBottom)
+    $graphics.DrawLine($axisPen, $plotLeft, $plotBottom, $plotRight, $plotBottom)
+
+    $steelPen = [System.Drawing.Pen]::new(
+        [System.Drawing.ColorTranslator]::FromHtml('#1B4A73'),
+        [float][Math]::Max(1.0, $Size * 0.0234375))
+    $steelPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $steelPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $steelPen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
+    $graphics.DrawLines($steelPen, (New-PolylinePoints -Size $Size -Coordinates @(
+        0.1796875, 0.765625,
+        0.3046875, 0.734375,
+        0.4375, 0.6484375,
+        0.5703125, 0.6875,
+        0.703125, 0.5859375,
+        0.828125, 0.6171875
+    )))
+
+    $accentPen = [System.Drawing.Pen]::new(
+        [System.Drawing.ColorTranslator]::FromHtml('#0087C4'),
+        [float][Math]::Max(1.25, $Size * 0.03515625))
+    $accentPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $accentPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $accentPen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
+    $graphics.DrawLines($accentPen, (New-PolylinePoints -Size $Size -Coordinates @(
+        0.1796875, 0.703125,
+        0.3046875, 0.640625,
+        0.4375, 0.7265625,
+        0.5703125, 0.5078125,
+        0.703125, 0.5703125,
+        0.828125, 0.453125
+    )))
 
     Add-CompanyEmblemBadge -Graphics $graphics -Size $Size
 
-    $amberPen.Dispose()
-    $tealPen.Dispose()
+    $accentPen.Dispose()
+    $steelPen.Dispose()
     $axisPen.Dispose()
+    $borderPen.Dispose()
+    $borderPath.Dispose()
     $backgroundBrush.Dispose()
     $backgroundPath.Dispose()
     $graphics.Dispose()
@@ -114,11 +151,14 @@ function Add-CompanyEmblemBadge {
         [int]$Size
     )
 
+    # The badge is still enlarged for small frames so the emblem stays visible,
+    # but less aggressively than on the previous icon: at 16-24 px an oversized
+    # badge covered the plot area and the emblem itself turned into a blob.
     $badgeScale = if ($Size -le 24) {
-        0.42
+        0.38
     }
     elseif ($Size -le 48) {
-        0.36
+        0.33
     }
     else {
         0.30
@@ -133,21 +173,14 @@ function Add-CompanyEmblemBadge {
         $diameter,
         $diameter)
 
-    $shadowOffset = [float][Math]::Max(0.5, $Size * 0.009)
-    $shadowRect = [System.Drawing.RectangleF]::new(
-        $badgeRect.X + $shadowOffset,
-        $badgeRect.Y + $shadowOffset,
-        $badgeRect.Width,
-        $badgeRect.Height)
-    $shadowBrush = [System.Drawing.SolidBrush]::new(
-        [System.Drawing.Color]::FromArgb(80, 0, 8, 18))
+    # On the light plate a drop shadow reads as dirt, so the badge is flat and
+    # is separated by the same steel outline as the plate itself.
     $badgeBrush = [System.Drawing.SolidBrush]::new(
-        [System.Drawing.Color]::FromArgb(250, 255, 255, 255))
+        [System.Drawing.Color]::FromArgb(255, 255, 255, 255))
     $badgePen = [System.Drawing.Pen]::new(
-        [System.Drawing.Color]::FromArgb(230, 98, 205, 245),
-        [float][Math]::Max(0.65, $Size * 0.008))
+        [System.Drawing.ColorTranslator]::FromHtml('#A9BDD1'),
+        [float][Math]::Max(0.65, $Size * 0.009765625))
 
-    $Graphics.FillEllipse($shadowBrush, $shadowRect)
     $Graphics.FillEllipse($badgeBrush, $badgeRect)
     $Graphics.DrawEllipse($badgePen, $badgeRect)
 
@@ -169,7 +202,6 @@ function Add-CompanyEmblemBadge {
 
     $badgePen.Dispose()
     $badgeBrush.Dispose()
-    $shadowBrush.Dispose()
 }
 
 function Save-AppIconCanvas {
