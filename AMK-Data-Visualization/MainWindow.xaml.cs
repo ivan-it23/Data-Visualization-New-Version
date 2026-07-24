@@ -49,6 +49,14 @@ public sealed partial class MainWindow : Window
     private bool updatingRangeControls;
     private bool startupUpdateCheckScheduled;
     private bool updateCheckInProgress;
+    private readonly ChartDisplaySettingsStore chartDisplaySettingsStore = new();
+    private ChartDisplaySettings chartDisplaySettings = new();
+    private readonly Dictionary<int, DropDownButton> presetDropDowns = [];
+    private readonly Dictionary<int, DropDownButton> frequencyDropDowns = [];
+    private readonly Dictionary<int, InlineSchematicBar> inlineSchematicBars = [];
+    private readonly Dictionary<int, SchematicConfigurationEditor?> inlineSchematicEditors = new() { [1] = null, [2] = null };
+    private readonly Dictionary<int, ChartConfiguration?> inlineSchematicBaseConfig = new() { [1] = null, [2] = null };
+    private readonly Dictionary<int, bool> inlineSchematicPending = new() { [1] = false, [2] = false };
 
     public MainWindow()
     {
@@ -71,8 +79,16 @@ public sealed partial class MainWindow : Window
         Graph2Control.NoteMarkerActivated += async (_, args) => await OpenNoteAsync(2, args.NoteId);
         GraphControl.ChartContextRequested += (_, args) => ShowChartContextMenu(1, GraphControl, args);
         Graph2Control.ChartContextRequested += (_, args) => ShowChartContextMenu(2, Graph2Control, args);
+        GraphControl.DisplaySettingsRequested += (_, anchor) => ShowDisplaySettingsFlyout(1, anchor);
+        Graph2Control.DisplaySettingsRequested += (_, anchor) => ShowDisplaySettingsFlyout(2, anchor);
+        GraphControl.CurveVisibilityRequested += (_, anchor) => ShowCurveVisibilityFlyout(1, anchor);
+        Graph2Control.CurveVisibilityRequested += (_, anchor) => ShowCurveVisibilityFlyout(2, anchor);
+        chartDisplaySettings = chartDisplaySettingsStore.Load();
+        InitializeDisplayOverlays();
         ShowLegacyEmptyState(1, hasData: false);
         ShowLegacyEmptyState(2, hasData: false);
+        ApplyDisplayOverlayOptions(1);
+        ApplyDisplayOverlayOptions(2);
         UpdateDualModeLayout();
         serialDeviceService.FrameReceived += SerialDeviceService_FrameReceived;
         serialDeviceService.StatusChanged += SerialDeviceService_StatusChanged;
@@ -800,6 +816,407 @@ public sealed partial class MainWindow : Window
         RenderGraph(graphNumber);
     }
 
+    // ----- On-chart curve-selection overlays (gear / preset dropdown / schematic / eye) -----
+
+    private void InitializeDisplayOverlays()
+    {
+        BuildDisplayOverlay(1, GraphControl);
+        BuildDisplayOverlay(2, Graph2Control);
+    }
+
+    private void BuildDisplayOverlay(int graphNumber, LineChartControl control)
+    {
+        DropDownButton presetButton = new()
+        {
+            Content = "Быстрые пресеты",
+            MinWidth = 0,
+            MinHeight = 0,
+            Height = 28,
+            Padding = new Thickness(10, 0, 8, 0),
+            FontSize = 12,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Visibility = Visibility.Collapsed,
+            Flyout = BuildPresetFlyout(graphNumber)
+        };
+        presetDropDowns[graphNumber] = presetButton;
+        control.LeftOverlayHost.Children.Add(presetButton);
+
+        DropDownButton frequencyButton = new()
+        {
+            Content = "400 кГц",
+            MinWidth = 0,
+            MinHeight = 0,
+            Height = 28,
+            Padding = new Thickness(10, 0, 8, 0),
+            FontSize = 12,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Visibility = Visibility.Collapsed,
+            Flyout = BuildFrequencyFlyout(graphNumber)
+        };
+        frequencyDropDowns[graphNumber] = frequencyButton;
+        control.LeftOverlayHost.Children.Add(frequencyButton);
+
+        InlineSchematicBar bar = new() { Visibility = Visibility.Collapsed };
+        bar.ElementToggled += (_, toggle) => OnInlineSchematicElementToggled(graphNumber, toggle);
+        bar.ApplyRequested += (_, _) => OnInlineSchematicApplyRequested(graphNumber);
+        inlineSchematicBars[graphNumber] = bar;
+        control.CenterOverlayHost.Children.Add(bar);
+    }
+
+    private MenuFlyout BuildFrequencyFlyout(int graphNumber)
+    {
+        MenuFlyout flyout = new();
+        MenuFlyoutItem item400 = new() { Text = "400 кГц" };
+        item400.Click += (_, _) => OnFrequencyChosen(graphNumber, FrequencyBand.Freq400KHz);
+        MenuFlyoutItem item2000 = new() { Text = "2000 кГц" };
+        item2000.Click += (_, _) => OnFrequencyChosen(graphNumber, FrequencyBand.Freq2000KHz);
+        flyout.Items.Add(item400);
+        flyout.Items.Add(item2000);
+        return flyout;
+    }
+
+    private void OnFrequencyChosen(int graphNumber, FrequencyBand frequency)
+    {
+        EnsureInlineEditor(graphNumber);
+        SchematicConfigurationEditor editor = inlineSchematicEditors[graphNumber]!;
+        editor.SetFrequency(frequency);
+        RefreshOverlayLabels(graphNumber);
+
+        // Re-apply the current selection at the new frequency when something is
+        // actually shown; otherwise the frequency is simply remembered for the
+        // next selection.
+        if (editor.CanApply && chartWorkspace.GetRepositoryForGraph(graphNumber).HasData)
+        {
+            ApplyInlineEditorConfiguration(graphNumber);
+        }
+    }
+
+    private void RefreshOverlayLabels(int graphNumber)
+    {
+        EnsureInlineEditor(graphNumber);
+        SchematicConfigurationEditor editor = inlineSchematicEditors[graphNumber]!;
+        if (presetDropDowns.TryGetValue(graphNumber, out DropDownButton? presetButton))
+        {
+            presetButton.Content = editor.CurrentPreset != PresetType.None && editor.CurrentPresetDisplayName.Length > 0
+                ? editor.CurrentPresetDisplayName
+                : "Быстрые пресеты";
+        }
+
+        if (frequencyDropDowns.TryGetValue(graphNumber, out DropDownButton? frequencyButton))
+        {
+            frequencyButton.Content = editor.Selection.Frequency == FrequencyBand.Freq400KHz ? "400 кГц" : "2000 кГц";
+        }
+    }
+
+    private MenuFlyout BuildPresetFlyout(int graphNumber)
+    {
+        MenuFlyout flyout = new();
+        AddPresetMenuItem(flyout, graphNumber, "Амплитуды R1", PresetType.AllAmplitudesR1, null);
+        AddPresetMenuItem(flyout, graphNumber, "Амплитуды R2", PresetType.AllAmplitudesR2, null);
+        AddPresetMenuItem(flyout, graphNumber, "Отношение амплитуд", PresetType.AmplitudeRatios, null);
+        AddPresetMenuItem(flyout, graphNumber, "Разность фаз", PresetType.PhaseDifferences, null);
+        AddPresetMenuItem(flyout, graphNumber, "Температура", PresetType.Temperature, null);
+        flyout.Items.Add(new MenuFlyoutSeparator());
+        AddPresetMenuItem(flyout, graphNumber, "Амплитуды молчащих", PresetType.SilentAmplitudes, null);
+        AddPresetMenuItem(flyout, graphNumber, "Разность фаз молчащих", PresetType.SilentPhaseDifference, null);
+        flyout.Items.Add(new MenuFlyoutSeparator());
+        AddPresetMenuItem(flyout, graphNumber, "УЭС (на приборе)", PresetType.RhoSmt, SmtComputationMode.FromSonde);
+        AddPresetMenuItem(flyout, graphNumber, "УЭС (на компьютере)", PresetType.RhoSmt, SmtComputationMode.FromComputer);
+        AddPresetMenuItem(flyout, graphNumber, "Симм. фазы (на приборе)", PresetType.PhaseSmt, SmtComputationMode.FromSonde);
+        AddPresetMenuItem(flyout, graphNumber, "Симм. фазы (на компьютере)", PresetType.PhaseSmt, SmtComputationMode.FromComputer);
+
+        flyout.Opening += (_, _) =>
+        {
+            foreach (MenuFlyoutItemBase item in flyout.Items)
+            {
+                if (item is MenuFlyoutItem menuItem && menuItem.Tag is PresetMenuTag tag
+                    && tag.Mode == SmtComputationMode.FromComputer)
+                {
+                    menuItem.IsEnabled = metrologySession.HasData;
+                }
+            }
+        };
+        return flyout;
+    }
+
+    private void AddPresetMenuItem(MenuFlyout flyout, int graphNumber, string label, PresetType preset, SmtComputationMode? mode)
+    {
+        MenuFlyoutItem item = new() { Text = label, Tag = new PresetMenuTag(preset, mode) };
+        item.Click += (_, _) => OnPresetChosen(graphNumber, preset, mode);
+        flyout.Items.Add(item);
+    }
+
+    private async void OnPresetChosen(int graphNumber, PresetType preset, SmtComputationMode? mode)
+    {
+        ToolDataRepository repository = chartWorkspace.GetRepositoryForGraph(graphNumber);
+        if (!repository.HasData)
+        {
+            await ShowUpdateMessageAsync(
+                "Нет данных для отображения",
+                "Невозможно вывести кривые: данные отсутствуют.\nОткройте файл данных или подключите прибор.",
+                compactCentered: true);
+            return;
+        }
+
+        EnsureInlineEditor(graphNumber);
+        SchematicConfigurationEditor editor = inlineSchematicEditors[graphNumber]!;
+        if (mode is SmtComputationMode requestedMode && preset is PresetType.RhoSmt or PresetType.PhaseSmt)
+        {
+            bool accepted = editor.TrySetSmtMode(preset, requestedMode, metrologySession.HasData, out string warning);
+            if (!accepted && warning.Length > 0)
+            {
+                await ShowUpdateMessageAsync("Метрология недоступна", warning, compactCentered: true);
+            }
+        }
+        else
+        {
+            editor.ApplyPreset(preset);
+        }
+
+        ApplyInlineEditorConfiguration(graphNumber);
+    }
+
+    private void OnInlineSchematicElementToggled(int graphNumber, SchematicElementToggle toggle)
+    {
+        EnsureInlineEditor(graphNumber);
+        SchematicConfigurationEditor editor = inlineSchematicEditors[graphNumber]!;
+        editor.ToggleElement(toggle.Type, toggle.Index);
+        inlineSchematicPending[graphNumber] = true;
+        UpdateInlineSchematicVisual(graphNumber);
+    }
+
+    private async void OnInlineSchematicApplyRequested(int graphNumber)
+    {
+        if (!inlineSchematicPending[graphNumber])
+        {
+            return;
+        }
+
+        SchematicConfigurationEditor? editor = inlineSchematicEditors[graphNumber];
+        if (editor is null || !editor.CanApply)
+        {
+            return;
+        }
+
+        ToolDataRepository repository = chartWorkspace.GetRepositoryForGraph(graphNumber);
+        if (!repository.HasData)
+        {
+            await ShowUpdateMessageAsync(
+                "Нет данных для отображения",
+                "Невозможно вывести кривые: данные отсутствуют.\nОткройте файл данных или подключите прибор.",
+                compactCentered: true);
+            return;
+        }
+
+        ApplyInlineEditorConfiguration(graphNumber);
+    }
+
+    private void ApplyInlineEditorConfiguration(int graphNumber)
+    {
+        SchematicConfigurationEditor? editor = inlineSchematicEditors[graphNumber];
+        if (editor is null || !editor.CanApply)
+        {
+            return;
+        }
+
+        ChartConfiguration configuration = editor.BuildConfiguration();
+        if (!curveSelectionService.ValidateConfiguration(configuration))
+        {
+            return;
+        }
+
+        chartWorkspace.ApplyConfigurationForGraph(graphNumber, configuration);
+        // Keep the existing inline editor as the source of truth for the on-chart
+        // schematic: pointing the base config at the just-applied configuration
+        // prevents EnsureInlineEditor from rebuilding it (a rebuild re-derives the
+        // selection from curves and mis-highlights elements).
+        inlineSchematicBaseConfig[graphNumber] = chartWorkspace.GetConfigurationForGraph(graphNumber);
+        inlineSchematicPending[graphNumber] = false;
+        schematicWindow?.RefreshDataContext(graphNumber);
+        RefreshOverlayLabels(graphNumber);
+        RenderGraph(graphNumber);
+    }
+
+    private void EnsureInlineEditor(int graphNumber)
+    {
+        ChartConfiguration configuration = chartWorkspace.GetConfigurationForGraph(graphNumber);
+        if (inlineSchematicEditors[graphNumber] is not null
+            && ReferenceEquals(inlineSchematicBaseConfig[graphNumber], configuration))
+        {
+            return;
+        }
+
+        ToolDataRepository repository = chartWorkspace.GetRepositoryForGraph(graphNumber);
+        int transmitterCount = SchematicSelection.UiTransmitterCount;
+        if (repository.TryGetRecordMetadata(0, out ToolRecordMetadata metadata) && metadata.Capabilities.TransmitterCount > 0)
+        {
+            transmitterCount = metadata.Capabilities.TransmitterCount;
+        }
+
+        inlineSchematicEditors[graphNumber] = new SchematicConfigurationEditor(
+            curveSelectionService,
+            transmitterCount,
+            configuration);
+        inlineSchematicBaseConfig[graphNumber] = configuration;
+        inlineSchematicPending[graphNumber] = false;
+    }
+
+    private void UpdateInlineSchematicVisual(int graphNumber)
+    {
+        if (!inlineSchematicBars.TryGetValue(graphNumber, out InlineSchematicBar? bar))
+        {
+            return;
+        }
+
+        EnsureInlineEditor(graphNumber);
+        SchematicConfigurationEditor editor = inlineSchematicEditors[graphNumber]!;
+        // Quick presets and combined schematic selections are independent
+        // branches: while a quick preset is active, no schematic element is
+        // highlighted.
+        bool showSelection = editor.CurrentPreset == PresetType.None;
+        bar.UpdateState(editor.Selection, inlineSchematicPending[graphNumber], editor.CanApply, showSelection);
+    }
+
+    private void ApplyDisplayOverlayOptions(int graphNumber)
+    {
+        GraphDisplayOptions options = chartDisplaySettings.ForGraph(graphNumber);
+        LineChartControl control = graphNumber == 1 ? GraphControl : Graph2Control;
+
+        presetDropDowns[graphNumber].Visibility = options.ShowPresetDropdown ? Visibility.Visible : Visibility.Collapsed;
+        frequencyDropDowns[graphNumber].Visibility = options.ShowFrequencyDropdown ? Visibility.Visible : Visibility.Collapsed;
+        inlineSchematicBars[graphNumber].Visibility = options.ShowTopSchematic ? Visibility.Visible : Visibility.Collapsed;
+
+        control.ShowCurveVisibilityToggle = options.ShowEye;
+        // The overlays share a single line, so a fixed reserve clears the tallest
+        // (the schematic) regardless of how many are shown.
+        control.LegendTopReserve = options.AnyTopRow ? 42 : 0;
+
+        RefreshOverlayLabels(graphNumber);
+        if (options.ShowTopSchematic)
+        {
+            UpdateInlineSchematicVisual(graphNumber);
+        }
+
+        RenderGraph(graphNumber);
+    }
+
+    private void ShowDisplaySettingsFlyout(int graphNumber, FrameworkElement anchor)
+    {
+        GraphDisplayOptions options = chartDisplaySettings.ForGraph(graphNumber);
+
+        CheckBox presetCheck = CreateDisplayOptionCheckBox(
+            "Список быстрых пресетов на графике",
+            options.ShowPresetDropdown,
+            enabled => UpdateDisplayOption(graphNumber, opt => opt.ShowPresetDropdown = enabled));
+        CheckBox frequencyCheck = CreateDisplayOptionCheckBox(
+            "Выбор частоты в левом углу графика",
+            options.ShowFrequencyDropdown,
+            enabled => UpdateDisplayOption(graphNumber, opt => opt.ShowFrequencyDropdown = enabled));
+        CheckBox schematicCheck = CreateDisplayOptionCheckBox(
+            "Схема прибора сверху графика",
+            options.ShowTopSchematic,
+            enabled => UpdateDisplayOption(graphNumber, opt => opt.ShowTopSchematic = enabled));
+
+        StackPanel content = new() { Spacing = 8 };
+        content.Children.Add(new TextBlock
+        {
+            Text = $"Отображение выбора кривых — График {graphNumber}",
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
+        });
+        content.Children.Add(presetCheck);
+        content.Children.Add(frequencyCheck);
+        content.Children.Add(schematicCheck);
+
+        Flyout flyout = new() { Content = content };
+        flyout.ShowAt(anchor);
+    }
+
+    private static CheckBox CreateDisplayOptionCheckBox(string label, bool isChecked, Action<bool> onChanged)
+    {
+        // A non-wrapping label keeps every option on a single line so the flyout
+        // widens to fit the longest text instead of clipping it.
+        CheckBox checkBox = new()
+        {
+            Content = new TextBlock { Text = label, TextWrapping = TextWrapping.NoWrap },
+            IsChecked = isChecked,
+            MinWidth = 0
+        };
+        checkBox.Checked += (_, _) => onChanged(true);
+        checkBox.Unchecked += (_, _) => onChanged(false);
+        return checkBox;
+    }
+
+    private void UpdateDisplayOption(int graphNumber, Action<GraphDisplayOptions> apply)
+    {
+        apply(chartDisplaySettings.ForGraph(graphNumber));
+        chartDisplaySettingsStore.Save(chartDisplaySettings);
+        ApplyDisplayOverlayOptions(graphNumber);
+    }
+
+    private void ShowCurveVisibilityFlyout(int graphNumber, FrameworkElement anchor)
+    {
+        ChartConfiguration configuration = chartWorkspace.GetConfigurationForGraph(graphNumber);
+        StackPanel content = new() { Spacing = 4, MinWidth = 220 };
+        content.Children.Add(new TextBlock
+        {
+            Text = "Видимые кривые",
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
+        });
+
+        if (configuration.Curves.Count == 0)
+        {
+            content.Children.Add(new TextBlock
+            {
+                Text = "Нет кривых. Выберите пресет или элементы схемы.",
+                TextWrapping = TextWrapping.Wrap,
+                Opacity = 0.75
+            });
+        }
+        else
+        {
+            StackPanel list = new() { Spacing = 2 };
+            foreach (CurveDefinition curve in configuration.Curves)
+            {
+                CheckBox curveCheck = new()
+                {
+                    Content = string.IsNullOrWhiteSpace(curve.Units) ? curve.DisplayName : $"{curve.DisplayName} ({curve.Units})",
+                    IsChecked = curve.Enabled,
+                    MinWidth = 0,
+                    Tag = curve.Id
+                };
+                curveCheck.Checked += (_, _) => SetCurveVisibility(graphNumber, curve.Id, true);
+                curveCheck.Unchecked += (_, _) => SetCurveVisibility(graphNumber, curve.Id, false);
+                list.Children.Add(curveCheck);
+            }
+
+            content.Children.Add(new ScrollViewer
+            {
+                Content = list,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                MaxHeight = 320
+            });
+        }
+
+        Flyout flyout = new() { Content = content };
+        flyout.ShowAt(anchor);
+    }
+
+    private void SetCurveVisibility(int graphNumber, string curveId, bool visible)
+    {
+        ChartConfiguration configuration = chartWorkspace.GetConfigurationForGraph(graphNumber);
+        CurveDefinition? curve = configuration.Curves.FirstOrDefault(item => item.Id == curveId);
+        if (curve is null || curve.Enabled == visible)
+        {
+            return;
+        }
+
+        curve.Enabled = visible;
+        configuration.UpdateAxisConfiguration();
+        RenderGraph(graphNumber);
+    }
+
+    private readonly record struct PresetMenuTag(PresetType Preset, SmtComputationMode? Mode);
+
     private void OnMetrologyUpdated()
     {
         schematicWindow?.RefreshMetrologyAvailability();
@@ -818,6 +1235,11 @@ public sealed partial class MainWindow : Window
         var graphControl = graphNumber == 1 ? GraphControl : Graph2Control;
         ChartConfiguration graphConfiguration = chartWorkspace.GetConfigurationForGraph(graphNumber);
         ChartViewportState viewport = chartWorkspace.GetViewportForGraph(graphNumber);
+
+        if (chartDisplaySettings.ForGraph(graphNumber).ShowTopSchematic)
+        {
+            UpdateInlineSchematicVisual(graphNumber);
+        }
 
         if (!repository.HasData || !repository.TryGetRecord(0, out var firstRecord))
         {

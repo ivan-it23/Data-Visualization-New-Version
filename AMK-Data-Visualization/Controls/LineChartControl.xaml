@@ -40,5 +40,14 @@
             Orientation="Vertical"
             Scroll="VerticalAxisScrollBar_Scroll"
             Visibility="Collapsed" />
+
+        <!-- Hit-transparent layer for interactive on-chart overlays (gear/eye).
+             Kept separate from ChartCanvas so overlay clicks do not reach the
+             chart's drag-zoom pointer handlers. -->
+        <Canvas
+            x:Name="OverlayCanvas"
+            Canvas.ZIndex="110"
+            Background="{x:Null}"
+            IsHitTestVisible="True" />
     </Grid>
 </UserControl>

@@ -77,6 +77,39 @@ public sealed partial class LineChartControl : UserControl
     private AxisScrollContext? leftYScrollContext;
     private AxisScrollContext? rightYScrollContext;
     private bool updatingScrollBars;
+    private readonly Button displaySettingsButton;
+    private readonly Button curveVisibilityButton;
+    private readonly StackPanel leftOverlayHost;
+    private readonly StackPanel centerOverlayHost;
+
+    /// <summary>
+    /// Horizontal host placed immediately to the right of the gear button, on the
+    /// title line. The host fills it with the preset and frequency dropdowns.
+    /// </summary>
+    public Panel LeftOverlayHost => leftOverlayHost;
+
+    /// <summary>
+    /// Horizontal host centred on the title line for the compact schematic.
+    /// </summary>
+    public Panel CenterOverlayHost => centerOverlayHost;
+
+    /// <summary>
+    /// Shows the "eye" toggle at the end of the legend. Set by the host when at
+    /// least one on-chart curve-selection overlay (preset dropdown or top
+    /// schematic) is enabled for this graph.
+    /// </summary>
+    public bool ShowCurveVisibilityToggle { get; set; }
+
+    /// <summary>
+    /// Minimum Y where the legend starts, so the host can reserve room above it
+    /// for the top-of-chart overlay (preset dropdown / schematic). Defaults to
+    /// the historical legend top.
+    /// </summary>
+    public double LegendTopReserve { get; set; }
+
+    public event EventHandler<FrameworkElement>? DisplaySettingsRequested;
+
+    public event EventHandler<FrameworkElement>? CurveVisibilityRequested;
 
     public event EventHandler<ChartZoomRequestedEventArgs>? ZoomRequested;
 
@@ -98,6 +131,48 @@ public sealed partial class LineChartControl : UserControl
     public LineChartControl()
     {
         InitializeComponent();
+        displaySettingsButton = CreateOverlayIconButton(
+            "",
+            "Настройка отображения кривых",
+            22,
+            20);
+        displaySettingsButton.Click += (_, _) => DisplaySettingsRequested?.Invoke(this, displaySettingsButton);
+        curveVisibilityButton = CreateOverlayIconButton(
+            "",
+            "Показать или скрыть кривые",
+            24,
+            18);
+        curveVisibilityButton.Click += (_, _) => CurveVisibilityRequested?.Invoke(this, curveVisibilityButton);
+        curveVisibilityButton.Visibility = Visibility.Collapsed;
+        leftOverlayHost = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Background = null };
+        centerOverlayHost = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Background = null };
+        OverlayCanvas.Children.Add(displaySettingsButton);
+        OverlayCanvas.Children.Add(leftOverlayHost);
+        OverlayCanvas.Children.Add(centerOverlayHost);
+        OverlayCanvas.Children.Add(curveVisibilityButton);
+    }
+
+    private static Button CreateOverlayIconButton(string glyph, string tooltip, double width, double height)
+    {
+        Button button = new()
+        {
+            Width = width,
+            Height = height,
+            MinWidth = 0,
+            MinHeight = 0,
+            Padding = new Thickness(0),
+            Background = new SolidColorBrush(Colors.Transparent),
+            BorderThickness = new Thickness(0),
+            Content = new FontIcon
+            {
+                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontSize = 13,
+                Glyph = glyph
+            }
+        };
+        ToolTipService.SetToolTip(button, tooltip);
+        Canvas.SetZIndex(button, 90);
+        return button;
     }
 
     public void SetSeries(IReadOnlyList<float> sourceValues, string seriesTitle, string seriesUnits)
@@ -642,16 +717,39 @@ public sealed partial class LineChartControl : UserControl
         Canvas.SetLeft(titleBlock, 12);
         Canvas.SetTop(titleBlock, 6);
         ChartCanvas.Children.Add(titleBlock);
+
+        titleBlock.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        double gearLeft = Math.Min(12 + titleBlock.DesiredSize.Width + 6, Math.Max(12, width - 26));
+        Canvas.SetLeft(displaySettingsButton, gearLeft);
+        Canvas.SetTop(displaySettingsButton, 5);
+        displaySettingsButton.Visibility = Visibility.Visible;
+
+        // Left overlay group (preset + frequency dropdowns) sits right after the
+        // gear; the schematic group is centred. Both share the title line.
+        double leftHostLeft = gearLeft + 22 + 8;
+        Canvas.SetLeft(leftOverlayHost, leftHostLeft);
+        Canvas.SetTop(leftOverlayHost, 2);
+        leftOverlayHost.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        double leftHostRight = leftHostLeft + leftOverlayHost.DesiredSize.Width;
+
+        centerOverlayHost.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        double centerWidth = centerOverlayHost.DesiredSize.Width;
+        double centerLeft = Math.Max(leftHostRight + 12, (width - centerWidth) / 2);
+        centerLeft = Math.Min(centerLeft, Math.Max(leftHostRight + 12, width - centerWidth - 120));
+        Canvas.SetLeft(centerOverlayHost, centerLeft);
+        Canvas.SetTop(centerOverlayHost, 2);
     }
 
     private double DrawLegend(double width)
     {
+        double legendTop = Math.Max(28, LegendTopReserve);
         if (series.Count == 0)
         {
-            return 30;
+            curveVisibilityButton.Visibility = Visibility.Collapsed;
+            return Math.Max(30, LegendTopReserve);
         }
 
-        double top = 28;
+        double top = legendTop;
         const double horizontalGap = 14;
         const double rowHeight = 21;
         List<LegendToken> tokens = [];
@@ -689,6 +787,8 @@ public sealed partial class LineChartControl : UserControl
             currentWidth += gap + token.Width;
         }
 
+        double lastRowEndLeft = 12;
+        double lastRowTop = legendTop;
         foreach (List<LegendToken> row in rows)
         {
             double rowWidth = row.Sum(token => token.Width) + horizontalGap * Math.Max(0, row.Count - 1);
@@ -715,7 +815,21 @@ public sealed partial class LineChartControl : UserControl
                 left += token.LabelWidth + horizontalGap;
             }
 
+            lastRowEndLeft = left - horizontalGap;
+            lastRowTop = top;
             top += rowHeight;
+        }
+
+        if (ShowCurveVisibilityToggle)
+        {
+            double eyeLeft = Math.Min(lastRowEndLeft + 6, Math.Max(12, width - 28));
+            Canvas.SetLeft(curveVisibilityButton, eyeLeft);
+            Canvas.SetTop(curveVisibilityButton, lastRowTop);
+            curveVisibilityButton.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            curveVisibilityButton.Visibility = Visibility.Collapsed;
         }
 
         return top;

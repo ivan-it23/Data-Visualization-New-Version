@@ -188,10 +188,44 @@ Graph 1 использует primary repository. Graph 2 в стандартно
 
 Zoom, прокрутка и автомасштабирование подтверждены владельцем.
 
+### On-chart оверлеи выбора кривых
+
+Дополнительный способ настройки вывода кривых, не требующий открытия окна
+«Схема прибора». Разделение ответственности:
+
+- `LineChartControl` знает геометрию заголовка и легенды и владеет двумя
+  интерактивными кнопками на отдельном `OverlayCanvas` (hit-transparent слой
+  поверх `ChartCanvas`, чтобы клики не попадали в drag-zoom): «шестерёнка» после
+  подписи графика (`DisplaySettingsRequested`) и «глаз» после последней кривой
+  легенды (`CurveVisibilityRequested`). Свойство `ShowCurveVisibilityToggle`
+  включает «глаз», `LegendTopReserve` опускает легенду ниже верхнего оверлея;
+- `MainWindow` держит логику: строит на `Graph1DisplayOverlay`/
+  `Graph2DisplayOverlay` (top-center поверх каждого графика) `DropDownButton`
+  быстрых пресетов и `InlineSchematicBar`, реагирует на события кнопок и
+  переиспользует `SchematicConfigurationEditor` / `CurveSelectionService` /
+  `ChartWorkspace`;
+- `InlineSchematicBar` (`Controls/InlineSchematicBar.cs`) — компактная строка
+  элементов схемы (T1–T5, R1/R2, молчащие) с инлайн-кнопкой «Применить» рядом с
+  «Молч. R2», появляющейся при наличии несохранённого изменения;
+- инлайн-редактор схемы на графике ephemeral: пересобирается из текущей
+  `ChartConfiguration` только при смене её ссылки (apply), поэтому live-кадры не
+  сбрасывают несохранённые правки;
+- «глаз» напрямую переключает `CurveDefinition.Enabled` в текущей конфигурации и
+  перерисовывает график (`GroupCurvesByAxis` исключает выключенные кривые);
+- «глаз» виден только при включённой опции списка пресетов и/или верхней схемы;
+  «шестерёнка» видна всегда;
+- выбор опций для каждого графика сохраняется на диск
+  (`Services/ChartDisplaySettingsStore.cs` →
+  `%LOCALAPPDATA%\AMK-Data-Visualization\chart-display-settings.json`);
+- оверлей Graph 2 показывается только в двойном режиме.
+
+Реализовано и build-verified; ручная визуальная проверка владельцем ожидается.
+
 Не реализовано:
 
 - LOD/downsampling и cache;
-- отдельно выделенная общая geometry-модель для draw/hit-test.
+- отдельно выделенная общая geometry-модель для draw/hit-test;
+- размещение частоты и выбора оси X на графике (следующий шаг по плану владельца).
 
 ## 8. Окно «Схема прибора»
 

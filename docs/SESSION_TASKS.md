@@ -90,6 +90,18 @@ payload — `0.1.3.0`, все обязательные PRI/XBF присутст�
 - reporting, печать и экспорт;
 - code signing и полный install/update/uninstall release-цикл.
 
+## Контракт on-chart оверлеев выбора кривых
+
+Кнопка-шестерёнка у подписи каждого графика открывает Flyout с двумя опциями:
+список быстрых пресетов на графике и схема прибора сверху графика. При активной
+опции у конца легенды появляется «глаз» для показа/скрытия кривых. Логика —
+в `MainWindow` (переиспользует `SchematicConfigurationEditor`), позиционирование
+кнопок — в `LineChartControl` (`OverlayCanvas`, `ShowCurveVisibilityToggle`,
+`LegendTopReserve`), компактная схема — `Controls/InlineSchematicBar.cs`. Выбор
+опций сохраняется на диск для каждого графика в
+`chart-display-settings.json` (`Services/ChartDisplaySettingsStore.cs`). Статус:
+build-verified; ручная визуальная проверка владельцем ожидается.
+
 ## Актуальный контракт порта и интервала опроса
 
 `LastPort` сохраняется стабильно: он перезаписывается только реально выбранным
