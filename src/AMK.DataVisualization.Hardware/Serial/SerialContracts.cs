@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using AMK.DataVisualization.Core.Adapters;
 using AMK.DataVisualization.Core.Binary;
 
@@ -73,6 +74,11 @@ public sealed class SerialConnectionSettings
 {
     public string LastPort { get; set; } = string.Empty;
 
+    // The poll interval is intentionally not persisted: every session starts at
+    // the default and any change made by the user applies to the current
+    // session only. JsonIgnore keeps it out of connection-settings.json so a
+    // fresh Load always yields the default below.
+    [JsonIgnore]
     public int PollIntervalMilliseconds { get; set; } = 2000;
 
     public bool RecordingEnabled { get; set; } = true;

@@ -15,7 +15,9 @@ public sealed class SerialDeviceService : IDisposable
     private const byte CommandSelectedKey = 0x17;
     private const byte CommandAirCalibration = 0x1A;
     private const int DefaultBaudRate = 125000;
-    private const int MinimumPollInterval = 500;
+    // Below 700 ms the device cannot keep up with frame delivery, so this is a
+    // hard floor regardless of what the user types.
+    private const int MinimumPollInterval = 700;
     private const int MaximumPollInterval = 30000;
     private const int ReadTimeoutMilliseconds = 2000;
     private const int ControlReadTimeoutMilliseconds = 5000;

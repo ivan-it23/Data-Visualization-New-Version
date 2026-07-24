@@ -54,8 +54,6 @@ public sealed class SerialConnectionSettingsStore
 
     private static void Prepare(SerialConnectionSettings settings)
     {
-        settings.PollIntervalMilliseconds = Math.Clamp(settings.PollIntervalMilliseconds, 500, 30000);
-
         if (settings.RecordFolderSettingsVersion < CurrentRecordFolderSettingsVersion)
         {
             if (string.IsNullOrWhiteSpace(settings.RecordFolder)

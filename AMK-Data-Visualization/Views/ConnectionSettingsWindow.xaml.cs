@@ -79,7 +79,8 @@ public sealed partial class ConnectionSettingsWindow : Window
     private void ApplySettingsToControls()
     {
         applyingSettings = true;
-        PollIntervalTextBox.Text = settings.PollIntervalMilliseconds.ToString();
+        // The interval reflects the current session, not a persisted value.
+        PollIntervalTextBox.Text = deviceService.PollIntervalMilliseconds.ToString();
         RecordingCheckBox.IsChecked = settings.RecordingEnabled;
         AppendCheckBox.IsChecked = settings.AppendToExistingFile;
         ShowFullFileCheckBox.IsChecked = settings.ShowFullExistingFile;
@@ -89,7 +90,16 @@ public sealed partial class ConnectionSettingsWindow : Window
 
     private void CaptureSettingsFromControls()
     {
-        settings.LastPort = PortComboBox.SelectedItem as string ?? PortComboBox.Text ?? string.Empty;
+        // Only an actual selected port overwrites the saved value. When the
+        // combo has no selection yet (e.g. the port list is still loading, or
+        // the saved port is offline and no explicit choice was made), the
+        // previously saved LastPort is preserved instead of being wiped.
+        string selectedPort = PortComboBox.SelectedItem as string ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(selectedPort))
+        {
+            settings.LastPort = selectedPort;
+        }
+
         settings.PollIntervalMilliseconds = GetPollInterval();
         settings.RecordingEnabled = RecordingCheckBox.IsChecked == true;
         settings.AppendToExistingFile = AppendCheckBox.IsChecked == true;
@@ -98,12 +108,14 @@ public sealed partial class ConnectionSettingsWindow : Window
 
     private int GetPollInterval()
     {
-        if (!int.TryParse(PollIntervalTextBox.Text, out int interval) || interval < 500)
+        if (!int.TryParse(PollIntervalTextBox.Text, out int interval))
         {
             interval = 2000;
         }
 
-        interval = Math.Clamp(interval, 500, 30000);
+        // 700 ms is the hard minimum: below it the device cannot deliver frames
+        // in time. There is no persistence — this only shapes the session value.
+        interval = Math.Clamp(interval, 700, 30000);
         PollIntervalTextBox.Text = interval.ToString();
         return interval;
     }
@@ -126,14 +138,33 @@ public sealed partial class ConnectionSettingsWindow : Window
         ConnectionStateTextBlock.Text = "Поиск COM-портов...";
         try
         {
-            string selected = PortComboBox.SelectedItem as string ?? settings.LastPort;
-            IReadOnlyList<string> ports = await Task.Run(SerialDeviceService.GetAvailablePorts);
-            PortComboBox.ItemsSource = ports;
-            if (!string.IsNullOrWhiteSpace(selected) && ports.Contains(selected, StringComparer.OrdinalIgnoreCase))
+            // Prefer the current on-screen selection, otherwise the saved port.
+            string desired = PortComboBox.SelectedItem as string ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(desired))
             {
-                PortComboBox.SelectedItem = ports.First(port => port.Equals(selected, StringComparison.OrdinalIgnoreCase));
+                desired = settings.LastPort;
             }
-            else if (ports.Count > 0)
+
+            IReadOnlyList<string> ports = await Task.Run(SerialDeviceService.GetAvailablePorts);
+
+            // Keep the desired port present and selected even when it is not
+            // currently connected, so the user's port is never silently replaced
+            // by the first available one. Reconnecting the device and pressing
+            // "Подключить" then works against the correct port.
+            List<string> items = ports.ToList();
+            bool desiredOffline = !string.IsNullOrWhiteSpace(desired)
+                && !items.Contains(desired, StringComparer.OrdinalIgnoreCase);
+            if (desiredOffline)
+            {
+                items.Insert(0, desired);
+            }
+
+            PortComboBox.ItemsSource = items;
+            if (!string.IsNullOrWhiteSpace(desired))
+            {
+                PortComboBox.SelectedItem = items.First(port => port.Equals(desired, StringComparison.OrdinalIgnoreCase));
+            }
+            else if (items.Count > 0)
             {
                 PortComboBox.SelectedIndex = 0;
             }
@@ -203,8 +234,8 @@ public sealed partial class ConnectionSettingsWindow : Window
 
     private void PollIntervalTextBox_LostFocus(object sender, RoutedEventArgs e)
     {
+        // Session-only: apply to the running device, never persist.
         settings.PollIntervalMilliseconds = GetPollInterval();
-        settingsStore.Save(settings);
         deviceService.SetPollInterval(settings.PollIntervalMilliseconds);
     }
 

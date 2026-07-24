@@ -392,10 +392,25 @@ public sealed partial class MainWindow : Window
 
         SerialConnectionSettings settings = serialSettingsStore.Load();
         IReadOnlyList<string> ports = await Task.Run(SerialDeviceService.GetAvailablePorts);
-        if (string.IsNullOrWhiteSpace(settings.LastPort)
-            || !ports.Contains(settings.LastPort, StringComparer.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(settings.LastPort))
         {
             SetStatus("Выберите COM-порт в настройках подключения");
+            ShowConnectionSettingsWindow();
+            return;
+        }
+
+        if (!ports.Contains(settings.LastPort, StringComparer.OrdinalIgnoreCase))
+        {
+            // The saved port is not present right now. Instead of silently
+            // switching to another port, tell the user why so they can connect
+            // the device to this port and retry.
+            SetStatus($"COM-порт {settings.LastPort} недоступен");
+            await ShowUpdateMessageAsync(
+                "Подключение к прибору",
+                $"Сохранённый COM-порт {settings.LastPort} сейчас недоступен.\n\n" +
+                "Подключите прибор к этому порту и нажмите «Включить» ещё раз, " +
+                "либо выберите другой порт в настройках подключения.",
+                compactCentered: true);
             ShowConnectionSettingsWindow();
             return;
         }
@@ -411,7 +426,7 @@ public sealed partial class MainWindow : Window
             SerialOperationResult result = await serialDeviceService.ConnectAsync(settings.LastPort);
             if (result == SerialOperationResult.Success)
             {
-                await serialDeviceService.StartPollingAsync(settings.PollIntervalMilliseconds);
+                await serialDeviceService.StartPollingAsync(serialDeviceService.PollIntervalMilliseconds);
                 SetStatus($"Опрос {settings.LastPort} запущен");
             }
             else
@@ -447,8 +462,7 @@ public sealed partial class MainWindow : Window
         }
         else
         {
-            SerialConnectionSettings settings = serialSettingsStore.Load();
-            await serialDeviceService.StartPollingAsync(settings.PollIntervalMilliseconds);
+            await serialDeviceService.StartPollingAsync(serialDeviceService.PollIntervalMilliseconds);
             DeviceExchangeLog.Append("▶ Опрос возобновлён");
             SetStatus("Опрос прибора продолжен");
         }
