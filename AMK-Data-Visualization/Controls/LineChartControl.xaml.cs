@@ -20,11 +20,28 @@ public sealed record ChartRenderSeries(
     int ColorRef,
     int YAxisGroup);
 
+/// <summary>
+/// A drag-zoom gesture. Besides the selected Y ranges it reports the range each
+/// axis is currently drawn from, so the host can pin the axis it is not zooming
+/// to exactly what is on screen.
+/// </summary>
 public sealed record ChartZoomRequestedEventArgs(
     double StartFraction,
     double EndFraction,
     (double Min, double Max)? LeftYRange,
-    (double Min, double Max)? RightYRange);
+    (double Min, double Max)? RightYRange,
+    (double Min, double Max)? LeftAxisBaseRange,
+    (double Min, double Max)? RightAxisBaseRange);
+
+/// <summary>
+/// Which Y axis the vertical scroll bar drives while two axes are shown.
+/// </summary>
+public enum ChartVerticalScrollTarget
+{
+    Both,
+    LeftOnly,
+    RightOnly
+}
 
 public sealed record ChartXScrollRequestedEventArgs(int StartIndex);
 
@@ -54,6 +71,9 @@ public sealed record ChartContextRequestedEventArgs(Point Position, bool HasCros
 public sealed partial class LineChartControl : UserControl
 {
     private const double HorizontalScrollBarBottomMargin = 4.0;
+    private const double ScrollBarThickness = 16.0;
+    private const double ScrollBarRightMargin = 4.0;
+    private const double AxisUndoButtonSize = 16.0;
     private readonly List<ChartRenderSeries> series = [];
     private string title = string.Empty;
     private string leftAxisUnits = string.Empty;
@@ -79,6 +99,8 @@ public sealed partial class LineChartControl : UserControl
     private bool updatingScrollBars;
     private readonly Button displaySettingsButton;
     private readonly Button curveVisibilityButton;
+    private readonly Button horizontalUndoButton;
+    private readonly Button verticalUndoButton;
     private readonly StackPanel leftOverlayHost;
     private readonly StackPanel centerOverlayHost;
 
@@ -117,6 +139,24 @@ public sealed partial class LineChartControl : UserControl
 
     public event EventHandler<ChartYScrollRequestedEventArgs>? VerticalScrollRequested;
 
+    /// <summary>
+    /// Raised by the "−" button next to the horizontal scroll bar: step the X
+    /// window back one zoom level, leaving Y alone.
+    /// </summary>
+    public event EventHandler? HorizontalUndoRequested;
+
+    /// <summary>
+    /// Raised by the "−" button next to the vertical scroll bar: step the Y ranges
+    /// back one zoom level, leaving the X window alone.
+    /// </summary>
+    public event EventHandler? VerticalUndoRequested;
+
+    /// <summary>
+    /// Axis the vertical scroll bar moves. Set by the host from the graph's
+    /// "Zoom оси Y" selection so a targeted zoom scrolls only the axis it zoomed.
+    /// </summary>
+    public ChartVerticalScrollTarget VerticalScrollTarget { get; set; } = ChartVerticalScrollTarget.Both;
+
     public event EventHandler<ChartPointSelectedEventArgs>? PointSelected;
 
     public event EventHandler<ChartNoteMarkerEventArgs>? NoteMarkerActivated;
@@ -144,12 +184,43 @@ public sealed partial class LineChartControl : UserControl
             18);
         curveVisibilityButton.Click += (_, _) => CurveVisibilityRequested?.Invoke(this, curveVisibilityButton);
         curveVisibilityButton.Visibility = Visibility.Collapsed;
+        horizontalUndoButton = CreateAxisUndoButton("Отменить шаг zoom по оси X");
+        horizontalUndoButton.Click += (_, _) => HorizontalUndoRequested?.Invoke(this, EventArgs.Empty);
+        verticalUndoButton = CreateAxisUndoButton("Отменить шаг zoom по оси Y");
+        verticalUndoButton.Click += (_, _) => VerticalUndoRequested?.Invoke(this, EventArgs.Empty);
         leftOverlayHost = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Background = null };
         centerOverlayHost = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Background = null };
         OverlayCanvas.Children.Add(displaySettingsButton);
         OverlayCanvas.Children.Add(leftOverlayHost);
         OverlayCanvas.Children.Add(centerOverlayHost);
         OverlayCanvas.Children.Add(curveVisibilityButton);
+        OverlayCanvas.Children.Add(horizontalUndoButton);
+        OverlayCanvas.Children.Add(verticalUndoButton);
+    }
+
+    /// <summary>
+    /// Compact "−" button sitting at the start of a scroll bar, matching the legacy
+    /// per-axis undo controls.
+    /// </summary>
+    private static Button CreateAxisUndoButton(string tooltip)
+    {
+        Button button = new()
+        {
+            Content = "−",
+            Width = AxisUndoButtonSize,
+            Height = AxisUndoButtonSize,
+            MinWidth = 0,
+            MinHeight = 0,
+            Padding = new Thickness(0),
+            FontSize = 12,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Visibility = Visibility.Collapsed
+        };
+        ToolTipService.SetToolTip(button, tooltip);
+        Canvas.SetZIndex(button, 90);
+        return button;
     }
 
     private static Button CreateOverlayIconButton(string glyph, string tooltip, double width, double height)
@@ -259,8 +330,19 @@ public sealed partial class LineChartControl : UserControl
         }
 
         ConfigureVerticalScrollBar();
+        SyncAxisUndoButtons();
         updatingScrollBars = false;
         UpdateScrollBarLayout(currentPlot, ActualWidth, ActualHeight);
+    }
+
+    /// <summary>
+    /// A per-axis undo button is offered exactly while its scroll bar is, matching
+    /// legacy ShowAxisUndoButtons.
+    /// </summary>
+    private void SyncAxisUndoButtons()
+    {
+        horizontalUndoButton.Visibility = HorizontalAxisScrollBar.Visibility;
+        verticalUndoButton.Visibility = VerticalAxisScrollBar.Visibility;
     }
 
     public void ClearSeries(string emptyTitle = "Файл не загружен")
@@ -921,6 +1003,16 @@ public sealed partial class LineChartControl : UserControl
 
     private (double Min, double Max)? GetAxisRange(int axisGroup)
     {
+        return GetRawAxisRange(axisGroup) is { } raw ? ApplyDisplayPadding(raw) : null;
+    }
+
+    /// <summary>
+    /// Axis extent before display padding. This is the value the renderer pads, so
+    /// handing it back as an explicit range reproduces the current axis exactly
+    /// instead of padding an already padded range.
+    /// </summary>
+    private (double Min, double Max)? GetRawAxisRange(int axisGroup)
+    {
         List<float> finite = series
             .Where(item => item.YAxisGroup == axisGroup)
             .SelectMany(item => item.Values)
@@ -939,7 +1031,17 @@ public sealed partial class LineChartControl : UserControl
             max += 1.0f;
         }
 
-        return ApplyDisplayPadding((min, max));
+        return (min, max);
+    }
+
+    /// <summary>
+    /// Range the axis is currently drawn from: the explicit range when one is set,
+    /// otherwise the unpadded data extent.
+    /// </summary>
+    private (double Min, double Max)? GetAxisBaseRange(int axisGroup)
+    {
+        (double Min, double Max)? requested = axisGroup == 1 ? requestedRightRange : requestedLeftRange;
+        return requested ?? GetRawAxisRange(axisGroup);
     }
 
     private static (double Min, double Max) ApplyDisplayPadding((double Min, double Max) range)
@@ -1193,8 +1295,7 @@ public sealed partial class LineChartControl : UserControl
     {
         leftYScrollContext = BuildAxisScrollContext(GetAxisRange(0), requestedLeftRange);
         rightYScrollContext = BuildAxisScrollContext(GetAxisRange(1), requestedRightRange);
-        AxisScrollContext? primary = leftYScrollContext ?? rightYScrollContext;
-        if (primary is not { } context)
+        if (ResolvePrimaryVerticalScrollContext() is not { } context)
         {
             SetScrollBarVisibility(VerticalAxisScrollBar, false);
             return;
@@ -1279,8 +1380,7 @@ public sealed partial class LineChartControl : UserControl
             return;
         }
 
-        AxisScrollContext? primary = leftYScrollContext ?? rightYScrollContext;
-        if (primary is not { } context)
+        if (ResolvePrimaryVerticalScrollContext() is not { } context)
         {
             return;
         }
@@ -1288,11 +1388,23 @@ public sealed partial class LineChartControl : UserControl
         double ratio = context.MaximumOffset > 0
             ? Math.Clamp(e.NewValue / context.MaximumOffset, 0, 1)
             : 0;
+
+        // A targeted zoom must scroll only the axis it zoomed; the pinned axis is
+        // reported as null so the host leaves it untouched.
         VerticalScrollRequested?.Invoke(
             this,
             new ChartYScrollRequestedEventArgs(
-                leftYScrollContext?.GetRange(ratio),
-                rightYScrollContext?.GetRange(ratio)));
+                VerticalScrollTarget == ChartVerticalScrollTarget.RightOnly ? null : leftYScrollContext?.GetRange(ratio),
+                VerticalScrollTarget == ChartVerticalScrollTarget.LeftOnly ? null : rightYScrollContext?.GetRange(ratio)));
+    }
+
+    private AxisScrollContext? ResolvePrimaryVerticalScrollContext()
+    {
+        return VerticalScrollTarget switch
+        {
+            ChartVerticalScrollTarget.RightOnly => rightYScrollContext ?? leftYScrollContext,
+            _ => leftYScrollContext ?? rightYScrollContext
+        };
     }
 
     private void UpdateScrollBarLayout(Rect plot, double width, double height)
@@ -1308,7 +1420,22 @@ public sealed partial class LineChartControl : UserControl
             0,
             horizontalRight,
             HorizontalScrollBarBottomMargin);
-        VerticalAxisScrollBar.Margin = new Thickness(0, plot.Top, 4, Math.Max(0, height - plot.Bottom));
+        // The vertical bar starts below its "−" button so the button stays inside
+        // the plot band instead of reaching into the host's top-right controls.
+        double verticalBarTop = plot.Top + AxisUndoButtonSize + 2;
+        VerticalAxisScrollBar.Margin = new Thickness(
+            0,
+            verticalBarTop,
+            ScrollBarRightMargin,
+            Math.Max(0, height - plot.Bottom));
+
+        // Each "−" button sits just before the start of its scroll bar: left of the
+        // horizontal bar and above the vertical one, as in the legacy layout.
+        double horizontalBarTop = height - HorizontalScrollBarBottomMargin - ScrollBarThickness;
+        Canvas.SetLeft(horizontalUndoButton, Math.Max(0, plot.Left - AxisUndoButtonSize - 2));
+        Canvas.SetTop(horizontalUndoButton, Math.Max(0, horizontalBarTop));
+        Canvas.SetLeft(verticalUndoButton, Math.Max(0, width - ScrollBarRightMargin - ScrollBarThickness));
+        Canvas.SetTop(verticalUndoButton, Math.Max(0, plot.Top));
     }
 
     private void HideScrollBars()
@@ -1316,6 +1443,7 @@ public sealed partial class LineChartControl : UserControl
         updatingScrollBars = true;
         SetScrollBarVisibility(HorizontalAxisScrollBar, false);
         SetScrollBarVisibility(VerticalAxisScrollBar, false);
+        SyncAxisUndoButtons();
         leftYScrollContext = null;
         rightYScrollContext = null;
         updatingScrollBars = false;
@@ -1399,7 +1527,9 @@ public sealed partial class LineChartControl : UserControl
             startFraction,
             endFraction,
             ToSelectedYRange(start.Y, end.Y, currentLeftScale),
-            ToSelectedYRange(start.Y, end.Y, currentRightScale)));
+            ToSelectedYRange(start.Y, end.Y, currentRightScale),
+            GetAxisBaseRange(0),
+            GetAxisBaseRange(1)));
         e.Handled = true;
     }
 

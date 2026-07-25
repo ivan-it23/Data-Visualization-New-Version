@@ -283,13 +283,30 @@
                     TextAlignment="Center" />
                 <TextBox
                     x:Name="CursorY1TextBox"
-                    Width="95"
+                    Width="115"
                     Height="24"
                     MinHeight="0"
                     Padding="4,1"
                     HorizontalContentAlignment="Center"
                     IsReadOnly="True"
                     Text="—" />
+                <TextBlock
+                    x:Name="CursorY2Separator"
+                    Width="10"
+                    VerticalAlignment="Center"
+                    Text=":"
+                    TextAlignment="Center"
+                    Visibility="Collapsed" />
+                <TextBox
+                    x:Name="CursorY2TextBox"
+                    Width="115"
+                    Height="24"
+                    MinHeight="0"
+                    Padding="4,1"
+                    HorizontalContentAlignment="Center"
+                    IsReadOnly="True"
+                    Text="—"
+                    Visibility="Collapsed" />
             </StackPanel>
         </Grid>
 
@@ -312,6 +329,26 @@
                 VerticalAlignment="Top"
                 Orientation="Horizontal"
                 Spacing="4">
+                <TextBlock
+                    x:Name="Graph1YZoomTargetLabel"
+                    VerticalAlignment="Center"
+                    Text="Zoom оси Y:"
+                    Visibility="Collapsed" />
+                <ComboBox
+                    x:Name="Graph1YZoomTargetComboBox"
+                    Width="150"
+                    Height="24"
+                    MinWidth="0"
+                    MinHeight="0"
+                    Padding="8,0,0,0"
+                    SelectedIndex="0"
+                    SelectionChanged="Graph1YZoomTargetComboBox_SelectionChanged"
+                    ToolTipService.ToolTip="Выбор оси Y для масштабирования"
+                    Visibility="Collapsed">
+                    <ComboBoxItem Content="По двум осям" />
+                    <ComboBoxItem Content="По левой оси" />
+                    <ComboBoxItem Content="По правой оси" />
+                </ComboBox>
                 <Button
                     x:Name="Graph1UndoZoomButton"
                     Width="22"
@@ -488,13 +525,30 @@
                         TextAlignment="Center" />
                     <TextBox
                         x:Name="Cursor2Y1TextBox"
-                        Width="95"
+                        Width="115"
                         Height="24"
                         MinHeight="0"
                         Padding="4,1"
                         HorizontalContentAlignment="Center"
                         IsReadOnly="True"
                         Text="—" />
+                    <TextBlock
+                        x:Name="Cursor2Y2Separator"
+                        Width="10"
+                        VerticalAlignment="Center"
+                        Text=":"
+                        TextAlignment="Center"
+                        Visibility="Collapsed" />
+                    <TextBox
+                        x:Name="Cursor2Y2TextBox"
+                        Width="115"
+                        Height="24"
+                        MinHeight="0"
+                        Padding="4,1"
+                        HorizontalContentAlignment="Center"
+                        IsReadOnly="True"
+                        Text="—"
+                        Visibility="Collapsed" />
                 </StackPanel>
             </Grid>
 
@@ -512,6 +566,26 @@
                 Orientation="Horizontal"
                 Spacing="4"
                 Visibility="Collapsed">
+                <TextBlock
+                    x:Name="Graph2YZoomTargetLabel"
+                    VerticalAlignment="Center"
+                    Text="Zoom оси Y:"
+                    Visibility="Collapsed" />
+                <ComboBox
+                    x:Name="Graph2YZoomTargetComboBox"
+                    Width="150"
+                    Height="24"
+                    MinWidth="0"
+                    MinHeight="0"
+                    Padding="8,0,0,0"
+                    SelectedIndex="0"
+                    SelectionChanged="Graph2YZoomTargetComboBox_SelectionChanged"
+                    ToolTipService.ToolTip="Выбор оси Y для масштабирования"
+                    Visibility="Collapsed">
+                    <ComboBoxItem Content="По двум осям" />
+                    <ComboBoxItem Content="По левой оси" />
+                    <ComboBoxItem Content="По правой оси" />
+                </ComboBox>
                 <Button
                     x:Name="Graph2UndoZoomButton"
                     Width="22"

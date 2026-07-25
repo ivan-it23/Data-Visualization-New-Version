@@ -58,6 +58,14 @@ public sealed partial class MainWindow : Window
     private readonly Dictionary<int, ChartConfiguration?> inlineSchematicBaseConfig = new() { [1] = null, [2] = null };
     private readonly Dictionary<int, bool> inlineSchematicPending = new() { [1] = false, [2] = false };
 
+    // Legacy keeps the "Zoom оси Y" choice per graph for the session only and
+    // starts every session on "По двум осям".
+    private readonly Dictionary<int, YZoomTarget> yZoomTargets = new()
+    {
+        [1] = YZoomTarget.Both,
+        [2] = YZoomTarget.Both
+    };
+
     public MainWindow()
     {
         InitializeComponent();
@@ -73,6 +81,10 @@ public sealed partial class MainWindow : Window
         Graph2Control.HorizontalScrollRequested += (_, args) => ScrollGraphX(2, args);
         GraphControl.VerticalScrollRequested += (_, args) => ScrollGraphY(1, args);
         Graph2Control.VerticalScrollRequested += (_, args) => ScrollGraphY(2, args);
+        GraphControl.HorizontalUndoRequested += (_, _) => UndoZoomAxis(1, isVertical: false);
+        Graph2Control.HorizontalUndoRequested += (_, _) => UndoZoomAxis(2, isVertical: false);
+        GraphControl.VerticalUndoRequested += (_, _) => UndoZoomAxis(1, isVertical: true);
+        Graph2Control.VerticalUndoRequested += (_, _) => UndoZoomAxis(2, isVertical: true);
         GraphControl.PointSelected += (_, args) => ChartPointSelected(1, args);
         Graph2Control.PointSelected += (_, args) => ChartPointSelected(2, args);
         GraphControl.NoteMarkerActivated += async (_, args) => await OpenNoteAsync(1, args.NoteId);
@@ -1440,6 +1452,23 @@ public sealed partial class MainWindow : Window
             Cursor2XTextBox.Text = args.SourceIndex.ToString(CultureInfo.CurrentCulture);
             Cursor2Y1TextBox.Text = FormatCursorValue(args.YLeft, configuration.LeftAxisUnits);
         }
+
+        // With a combined preset both axes carry a value, so the crosshair reports
+        // the left and the right one, as legacy does through its Y2 field.
+        SetSecondCursorValue(
+            graphNumber,
+            args.HasRightAxis,
+            FormatCursorValue(args.YRight, configuration.RightAxisUnits));
+    }
+
+    private void SetSecondCursorValue(int graphNumber, bool hasRightAxis, string text)
+    {
+        TextBlock separator = graphNumber == 1 ? CursorY2Separator : Cursor2Y2Separator;
+        TextBox valueBox = graphNumber == 1 ? CursorY2TextBox : Cursor2Y2TextBox;
+        Visibility visibility = hasRightAxis ? Visibility.Visible : Visibility.Collapsed;
+        separator.Visibility = visibility;
+        valueBox.Visibility = visibility;
+        valueBox.Text = hasRightAxis ? text : "—";
     }
 
     private void Cursor1ClearButton_Click(object sender, RoutedEventArgs e) => ClearChartCrosshair(1);
@@ -1463,6 +1492,8 @@ public sealed partial class MainWindow : Window
             Cursor2Y1TextBox.Text = "—";
             Graph2Control.ClearCrosshair();
         }
+
+        SetSecondCursorValue(graphNumber, hasRightAxis: false, text: "—");
     }
 
     private static string FormatCursorValue(double value, string units)
@@ -2141,15 +2172,92 @@ public sealed partial class MainWindow : Window
 
         ToolDataRepository repository = chartWorkspace.GetRepositoryForGraph(graphNumber);
         ChartViewportState viewport = chartWorkspace.GetViewportForGraph(graphNumber);
-        if (!viewport.ApplyDragZoom(repository.DataSize, args.StartFraction, args.EndFraction, args.LeftYRange, args.RightYRange))
+        YZoomTarget target = GetEffectiveYZoomTarget(graphNumber);
+        YZoomRequest yZoom = new(
+            target,
+            args.LeftYRange,
+            args.RightYRange,
+            args.LeftAxisBaseRange,
+            args.RightAxisBaseRange);
+        if (!viewport.ApplyDragZoom(repository.DataSize, args.StartFraction, args.EndFraction, yZoom))
         {
             SetStatus(viewport.IsFlowEnabled
                 ? "Минимальный диапазон Y — 10 единиц"
                 : "Минимальный диапазон X — 10 записей");
             return;
         }
+
         RenderGraph(graphNumber);
-        SetStatus($"График {graphNumber}: zoom применён");
+        SetStatus(target switch
+        {
+            YZoomTarget.LeftOnly => $"График {graphNumber}: zoom применён по левой оси Y",
+            YZoomTarget.RightOnly => $"График {graphNumber}: zoom применён по правой оси Y",
+            _ => $"График {graphNumber}: zoom применён"
+        });
+    }
+
+    // ----- Selective Y-axis zoom ("Zoom оси Y") -----
+
+    private void Graph1YZoomTargetComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        => ChangeYZoomTarget(1, Graph1YZoomTargetComboBox.SelectedIndex);
+
+    private void Graph2YZoomTargetComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        => ChangeYZoomTarget(2, Graph2YZoomTargetComboBox.SelectedIndex);
+
+    private void ChangeYZoomTarget(int graphNumber, int selectedIndex)
+    {
+        if (updatingRangeControls)
+        {
+            return;
+        }
+
+        yZoomTargets[graphNumber] = selectedIndex switch
+        {
+            1 => YZoomTarget.LeftOnly,
+            2 => YZoomTarget.RightOnly,
+            _ => YZoomTarget.Both
+        };
+        ApplyVerticalScrollTarget(graphNumber);
+    }
+
+    /// <summary>
+    /// The stored choice only applies while the graph really shows two axes; a
+    /// single-axis configuration always zooms the one axis it has.
+    /// </summary>
+    private YZoomTarget GetEffectiveYZoomTarget(int graphNumber)
+    {
+        return chartWorkspace.GetConfigurationForGraph(graphNumber).HasDualAxis
+            ? yZoomTargets[graphNumber]
+            : YZoomTarget.Both;
+    }
+
+    private void ApplyVerticalScrollTarget(int graphNumber)
+    {
+        LineChartControl control = graphNumber == 1 ? GraphControl : Graph2Control;
+        control.VerticalScrollTarget = GetEffectiveYZoomTarget(graphNumber) switch
+        {
+            YZoomTarget.LeftOnly => ChartVerticalScrollTarget.LeftOnly,
+            YZoomTarget.RightOnly => ChartVerticalScrollTarget.RightOnly,
+            _ => ChartVerticalScrollTarget.Both
+        };
+    }
+
+    // ----- Per-axis zoom undo ("−" next to each scroll bar) -----
+
+    private void UndoZoomAxis(int graphNumber, bool isVertical)
+    {
+        activeChartNumber = graphNumber;
+        ChartViewportState viewport = chartWorkspace.GetViewportForGraph(graphNumber);
+        bool undone = isVertical ? viewport.TryUndoZoomY() : viewport.TryUndoZoomX();
+        if (!undone)
+        {
+            return;
+        }
+
+        RenderGraph(graphNumber);
+        SetStatus(isVertical
+            ? $"График {graphNumber}: отменён шаг zoom по оси Y"
+            : $"График {graphNumber}: отменён шаг zoom по оси X");
     }
 
     private void ScrollGraphX(int graphNumber, ChartXScrollRequestedEventArgs args)
@@ -2191,6 +2299,7 @@ public sealed partial class MainWindow : Window
         ChartViewportState viewport = chartWorkspace.GetViewportForGraph(graphNumber);
         bool hasData = repository.HasData;
         updatingRangeControls = true;
+        UpdateYZoomTargetControls(graphNumber);
         if (graphNumber == 1)
         {
             Graph1ApplyRangeButton.IsEnabled = hasData && !viewport.IsFlowEnabled;
@@ -2212,6 +2321,28 @@ public sealed partial class MainWindow : Window
             Chart2SurfTextBox.Text = viewport.FlowWindowSize.ToString();
         }
         updatingRangeControls = false;
+    }
+
+    /// <summary>
+    /// The axis selector is only meaningful with two Y axes, so it appears exactly
+    /// while the configuration is dual-axis (legacy UpdateYZoomTargetVisibility).
+    /// Callers must already hold <see cref="updatingRangeControls"/>.
+    /// </summary>
+    private void UpdateYZoomTargetControls(int graphNumber)
+    {
+        bool hasDualAxis = chartWorkspace.GetConfigurationForGraph(graphNumber).HasDualAxis;
+        Visibility visibility = hasDualAxis ? Visibility.Visible : Visibility.Collapsed;
+        TextBlock label = graphNumber == 1 ? Graph1YZoomTargetLabel : Graph2YZoomTargetLabel;
+        ComboBox selector = graphNumber == 1 ? Graph1YZoomTargetComboBox : Graph2YZoomTargetComboBox;
+        label.Visibility = visibility;
+        selector.Visibility = visibility;
+        selector.SelectedIndex = yZoomTargets[graphNumber] switch
+        {
+            YZoomTarget.LeftOnly => 1,
+            YZoomTarget.RightOnly => 2,
+            _ => 0
+        };
+        ApplyVerticalScrollTarget(graphNumber);
     }
 
     private async void Graph1SaveRangeButton_Click(object sender, RoutedEventArgs e)

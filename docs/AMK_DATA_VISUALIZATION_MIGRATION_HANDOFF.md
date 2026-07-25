@@ -179,6 +179,10 @@ Graph 1 использует primary repository. Graph 2 в стандартно
   `MouseIndicator`;
 - клик по графику устанавливает crosshair и заполняет cursor-поля, кнопка `⌖`
   сбрасывает оба состояния;
+- при двух осях Y crosshair показывает координаты обеих осей: поле Y2 и его
+  разделитель появляются только при `HasRightAxis` и скрываются при сбросе
+  (legacy `UpdateClickCoordinates` / `ShowDualAxisControls`);
+- выборочный zoom оси Y и пошаговый осевой undo — см. отдельные разделы ниже;
 - контекстное меню crosshair переносит его X в начальную или конечную границу
   диапазона и открывает создание заметки;
 - заметки совместимы с legacy append-only `.notes.jsonl`, фильтруются по
@@ -189,6 +193,50 @@ Graph 1 использует primary repository. Graph 2 в стандартно
   COM-записи; при двух независимых файлах показывает выбор Graph 1/Graph 2.
 
 Zoom, прокрутка и автомасштабирование подтверждены владельцем.
+
+### Выборочный zoom оси Y и осевой undo
+
+Перенесено из legacy (`ChartManager::GetEffectiveYZoomTarget`,
+`HandleAxisUndoZoomStep`, `PushAxisHistory`, `PopAxisHistoryX/Y`,
+`UIModule::ShowAxisUndoButtons`).
+
+Цель zoom по Y:
+
+- список «Zoom оси Y» с элементами «По двум осям» / «По левой оси» /
+  «По правой оси» расположен в правом верхнем углу графика перед кнопкой `↶`;
+  виден только при `HasDualAxis`, значение хранится в сессии per-graph и по
+  умолчанию «По двум осям» (не персистится, как в legacy);
+- `MainWindow.GetEffectiveYZoomTarget` возвращает `Both` для single-axis
+  независимо от выбранного значения;
+- нецелевая ось не пересчитывается: `ChartViewportState.TryResolveZoomedYRanges`
+  закрепляет её на диапазоне, из которого она сейчас рисуется. Этот диапазон
+  приходит из контрола в `ChartZoomRequestedEventArgs.LeftAxisBaseRange` /
+  `RightAxisBaseRange` как `requested…Range ?? GetRawAxisRange(group)` —
+  **до** display padding, потому что `Render` добавляет 5% сам; передача уже
+  padded-диапазона расширяла бы закреплённую ось на каждый zoom;
+- вертикальный скроллбар двигает только целевую ось:
+  `LineChartControl.VerticalScrollTarget` выбирает primary-контекст и
+  подавляет диапазон закреплённой оси (`null`), а
+  `TrySetScrolledYRanges` не трогает ось, для которой пришёл `null`.
+
+Осевой undo:
+
+- `ChartViewportState` ведёт три стека: общий `zoomHistory` для кнопки `↶` и
+  `xZoomHistory` / `yZoomHistory` для осевого undo. Все три пишутся вместе в
+  `ApplyDragZoom`; `TryUndoZoom` снимает по одному элементу с каждого, чтобы
+  стеки не расходились;
+- `TryUndoZoomX` восстанавливает только X-окно, `TryUndoZoomY` — только
+  диапазоны Y. Пустой стек возвращает ось к исходному состоянию (X — на весь
+  файл, Y — к авто-подгонке), как в legacy;
+- стеки осей очищаются везде, где сбрасывается диапазон:
+  `TryApplyXRange`, `TrySetFlow`, `ResetRange` (и, через неё, `ResetZoom` /
+  `ResetAll`);
+- кнопки `−` живут в `LineChartControl` рядом со своими скроллбарами
+  (`HorizontalUndoRequested` / `VerticalUndoRequested`) и показываются ровно
+  тогда, когда виден соответствующий скроллбар (`SyncAxisUndoButtons`);
+- вертикальный скроллбар начинается ниже своей кнопки `−`
+  (`plot.Top + AxisUndoButtonSize + 2`), иначе кнопка попадала бы в
+  верхнюю правую панель главного окна.
 
 ### On-chart оверлеи выбора кривых
 

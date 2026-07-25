@@ -2,9 +2,36 @@ namespace AMK.DataVisualization.App.Services;
 
 internal readonly record struct ChartIndexRange(int StartIndex, int EndIndex);
 
+/// <summary>
+/// Which Y axis a drag-zoom acts on while the graph shows two axes. Legacy
+/// exposes this as the "Zoom оси Y" combo and forces <see cref="Both"/> whenever
+/// the configuration is single-axis.
+/// </summary>
+internal enum YZoomTarget
+{
+    Both,
+    LeftOnly,
+    RightOnly
+}
+
+/// <summary>
+/// Y part of a drag-zoom gesture. Besides the selected ranges it carries the
+/// range each axis is currently drawn from, so the axis that is not being zoomed
+/// can be pinned to exactly what the user already sees instead of being
+/// proportionally rescaled.
+/// </summary>
+internal readonly record struct YZoomRequest(
+    YZoomTarget Target,
+    (double Min, double Max)? LeftSelection,
+    (double Min, double Max)? RightSelection,
+    (double Min, double Max)? LeftAxisBaseRange,
+    (double Min, double Max)? RightAxisBaseRange);
+
 internal sealed class ChartViewportState
 {
     private readonly List<ChartViewportSnapshot> zoomHistory = [];
+    private readonly List<XAxisSnapshot> xZoomHistory = [];
+    private readonly List<YAxisSnapshot> yZoomHistory = [];
     private int startIndex;
     private int endIndex;
 
@@ -18,6 +45,15 @@ internal sealed class ChartViewportState
     public bool IsZoomed => IsFlowEnabled || HasCustomXRange || LeftYRange is not null || RightYRange is not null;
 
     public bool CanUndoZoom => zoomHistory.Count > 0;
+
+    /// <summary>
+    /// The per-axis undo buttons stay usable while the axis still has something to
+    /// step back to: either a recorded step or a custom window that legacy returns
+    /// to the full range.
+    /// </summary>
+    public bool CanUndoZoomX => !IsFlowEnabled && (xZoomHistory.Count > 0 || HasCustomXRange);
+
+    public bool CanUndoZoomY => yZoomHistory.Count > 0 || LeftYRange is not null || RightYRange is not null;
 
     public ChartIndexRange GetVisibleRange(int recordCount)
     {
@@ -78,6 +114,7 @@ internal sealed class ChartViewportState
         startIndex = from;
         endIndex = to;
         zoomHistory.Clear();
+        ClearAxisHistory();
         HasCustomXRange = true;
         IsToLatest = string.IsNullOrWhiteSpace(toText);
         LeftYRange = null;
@@ -107,6 +144,7 @@ internal sealed class ChartViewportState
         IsToLatest = false;
         LeftYRange = null;
         RightYRange = null;
+        ClearAxisHistory();
         return true;
     }
 
@@ -165,8 +203,7 @@ internal sealed class ChartViewportState
         int recordCount,
         double startFraction,
         double endFraction,
-        (double Min, double Max)? leftYRange,
-        (double Min, double Max)? rightYRange)
+        YZoomRequest yZoom)
     {
         ChartIndexRange visible = GetVisibleRange(recordCount);
         int selectedStart = visible.StartIndex;
@@ -182,19 +219,20 @@ internal sealed class ChartViewportState
             }
         }
 
-        (double Min, double Max)? normalizedLeft = Normalize(leftYRange);
-        (double Min, double Max)? normalizedRight = Normalize(rightYRange);
-        if (normalizedLeft is null && normalizedRight is null)
+        if (!TryResolveZoomedYRanges(
+                yZoom,
+                out (double Min, double Max)? resolvedLeft,
+                out (double Min, double Max)? resolvedRight))
         {
             return false;
         }
 
-        if (IsFlowEnabled && normalizedLeft is { } flowLeft && flowLeft.Max - flowLeft.Min < 10.0)
+        if (IsFlowEnabled && resolvedLeft is { } flowLeft && flowLeft.Max - flowLeft.Min < 10.0)
         {
             return false;
         }
 
-        zoomHistory.Add(CaptureSnapshot());
+        PushHistory();
         if (!IsFlowEnabled)
         {
             startIndex = selectedStart;
@@ -203,9 +241,38 @@ internal sealed class ChartViewportState
             IsToLatest = false;
         }
 
-        LeftYRange = normalizedLeft;
-        RightYRange = normalizedRight;
+        LeftYRange = resolvedLeft;
+        RightYRange = resolvedRight;
         return true;
+    }
+
+    /// <summary>
+    /// Turns the gesture into the ranges both axes end up with. For a targeted
+    /// zoom the other axis keeps its stored range, or is pinned to the range it is
+    /// currently drawn from, so it does not move while the target axis zooms.
+    /// </summary>
+    private bool TryResolveZoomedYRanges(
+        YZoomRequest yZoom,
+        out (double Min, double Max)? resolvedLeft,
+        out (double Min, double Max)? resolvedRight)
+    {
+        switch (yZoom.Target)
+        {
+            case YZoomTarget.LeftOnly:
+                resolvedLeft = Normalize(yZoom.LeftSelection);
+                resolvedRight = RightYRange ?? Normalize(yZoom.RightAxisBaseRange);
+                return resolvedLeft is not null;
+
+            case YZoomTarget.RightOnly:
+                resolvedRight = Normalize(yZoom.RightSelection);
+                resolvedLeft = LeftYRange ?? Normalize(yZoom.LeftAxisBaseRange);
+                return resolvedRight is not null;
+
+            default:
+                resolvedLeft = Normalize(yZoom.LeftSelection);
+                resolvedRight = Normalize(yZoom.RightSelection);
+                return resolvedLeft is not null || resolvedRight is not null;
+        }
     }
 
     public bool TryUndoZoom()
@@ -217,6 +284,11 @@ internal sealed class ChartViewportState
 
         ChartViewportSnapshot previous = zoomHistory[^1];
         zoomHistory.RemoveAt(zoomHistory.Count - 1);
+
+        // The per-axis stacks are pushed together with the combined one, so a
+        // combined undo consumes one step from each to keep them aligned.
+        PopAxisHistories();
+
         startIndex = previous.StartIndex;
         endIndex = previous.EndIndex;
         HasCustomXRange = IsFlowEnabled ? false : previous.HasCustomXRange;
@@ -226,12 +298,70 @@ internal sealed class ChartViewportState
         return true;
     }
 
+    /// <summary>
+    /// Steps the X window back one zoom level without touching Y. An exhausted
+    /// history returns X to the whole file, as legacy does.
+    /// </summary>
+    public bool TryUndoZoomX()
+    {
+        if (IsFlowEnabled)
+        {
+            return false;
+        }
+
+        if (xZoomHistory.Count > 0)
+        {
+            XAxisSnapshot previous = xZoomHistory[^1];
+            xZoomHistory.RemoveAt(xZoomHistory.Count - 1);
+            startIndex = previous.StartIndex;
+            endIndex = previous.EndIndex;
+            HasCustomXRange = previous.HasCustomXRange;
+            IsToLatest = previous.IsToLatest;
+            return true;
+        }
+
+        if (!HasCustomXRange)
+        {
+            return false;
+        }
+
+        HasCustomXRange = false;
+        IsToLatest = false;
+        return true;
+    }
+
+    /// <summary>
+    /// Steps both Y ranges back one zoom level without touching the X window. An
+    /// exhausted history drops back to the automatic Y fit.
+    /// </summary>
+    public bool TryUndoZoomY()
+    {
+        if (yZoomHistory.Count > 0)
+        {
+            YAxisSnapshot previous = yZoomHistory[^1];
+            yZoomHistory.RemoveAt(yZoomHistory.Count - 1);
+            LeftYRange = previous.LeftYRange;
+            RightYRange = previous.RightYRange;
+            return true;
+        }
+
+        if (LeftYRange is null && RightYRange is null)
+        {
+            return false;
+        }
+
+        LeftYRange = null;
+        RightYRange = null;
+        return true;
+    }
+
     public void ResetRange()
     {
         HasCustomXRange = false;
         IsToLatest = false;
         LeftYRange = null;
         RightYRange = null;
+        ClearAxisHistory();
     }
 
     public void ResetZoom()
@@ -297,15 +427,40 @@ internal sealed class ChartViewportState
         return max - min > 0.000001 ? (min, max) : null;
     }
 
-    private ChartViewportSnapshot CaptureSnapshot()
+    /// <summary>
+    /// Records one zoom step on the combined stack and on both per-axis stacks, so
+    /// the whole step and each axis alone can be undone independently.
+    /// </summary>
+    private void PushHistory()
     {
-        return new ChartViewportSnapshot(
+        zoomHistory.Add(new ChartViewportSnapshot(
             startIndex,
             endIndex,
             HasCustomXRange,
             IsToLatest,
             LeftYRange,
-            RightYRange);
+            RightYRange));
+        xZoomHistory.Add(new XAxisSnapshot(startIndex, endIndex, HasCustomXRange, IsToLatest));
+        yZoomHistory.Add(new YAxisSnapshot(LeftYRange, RightYRange));
+    }
+
+    private void PopAxisHistories()
+    {
+        if (xZoomHistory.Count > 0)
+        {
+            xZoomHistory.RemoveAt(xZoomHistory.Count - 1);
+        }
+
+        if (yZoomHistory.Count > 0)
+        {
+            yZoomHistory.RemoveAt(yZoomHistory.Count - 1);
+        }
+    }
+
+    private void ClearAxisHistory()
+    {
+        xZoomHistory.Clear();
+        yZoomHistory.Clear();
     }
 
     private readonly record struct ChartViewportSnapshot(
@@ -313,6 +468,16 @@ internal sealed class ChartViewportState
         int EndIndex,
         bool HasCustomXRange,
         bool IsToLatest,
+        (double Min, double Max)? LeftYRange,
+        (double Min, double Max)? RightYRange);
+
+    private readonly record struct XAxisSnapshot(
+        int StartIndex,
+        int EndIndex,
+        bool HasCustomXRange,
+        bool IsToLatest);
+
+    private readonly record struct YAxisSnapshot(
         (double Min, double Max)? LeftYRange,
         (double Min, double Max)? RightYRange);
 }
