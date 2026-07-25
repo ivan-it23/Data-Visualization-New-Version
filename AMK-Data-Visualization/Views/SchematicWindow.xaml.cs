@@ -76,7 +76,7 @@ public sealed partial class SchematicWindow : Window
         }
 
         targetGraphNumber = graphNumber;
-        Title = $"Схема прибора - График {targetGraphNumber}";
+        Title = $"Настройка кривых — График {targetGraphNumber}";
         ActivateEditorForGraph(graphNumber);
 
         IntPtr windowHandle = WindowNative.GetWindowHandle(this);
@@ -147,10 +147,13 @@ public sealed partial class SchematicWindow : Window
             return;
         }
 
+        // Only a configuration this window produced may be re-derived into a
+        // schematic selection; one built on the chart opens without highlighting.
         editor = new SchematicConfigurationEditor(
             curveSelectionService,
             chartWorkspace.GetAvailableTransmitterCountForGraph(graphNumber),
-            chartWorkspace.GetConfigurationForGraph(graphNumber));
+            chartWorkspace.GetConfigurationForGraph(graphNumber),
+            chartWorkspace.GetConfigurationSourceForGraph(graphNumber) == ChartConfigurationSource.CurveSetupWindow);
         editorSessions[graphNumber] = new EditorSession(editor, repository, repository.DataVersion);
         RefreshControls();
     }
@@ -171,7 +174,7 @@ public sealed partial class SchematicWindow : Window
         RefreshCurveList();
 
         ApplyButton.IsEnabled = editor.ConfigurationError.Length == 0;
-        Title = $"Схема прибора - График {targetGraphNumber}";
+        Title = $"Настройка кривых — График {targetGraphNumber}";
         controlsAreUpdating = false;
     }
 
@@ -410,7 +413,7 @@ public sealed partial class SchematicWindow : Window
 
         editor.SetCurveEnabled(curveId, checkBox.IsChecked == true);
         ApplyButton.IsEnabled = editor.ConfigurationError.Length == 0;
-        Title = $"Схема прибора - График {targetGraphNumber}";
+        Title = $"Настройка кривых — График {targetGraphNumber}";
     }
 
     private async void ApplyButton_Click(object sender, RoutedEventArgs e)
@@ -436,7 +439,10 @@ public sealed partial class SchematicWindow : Window
             return;
         }
 
-        chartWorkspace.ApplyConfigurationForGraph(targetGraphNumber, configuration);
+        chartWorkspace.ApplyConfigurationForGraph(
+            targetGraphNumber,
+            configuration,
+            ChartConfigurationSource.CurveSetupWindow);
         configurationApplied(targetGraphNumber);
     }
 

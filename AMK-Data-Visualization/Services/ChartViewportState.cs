@@ -168,12 +168,73 @@ internal sealed class ChartViewportState
         endIndex = newStart + visibleCount - 1;
         IsToLatest = false;
 
-        // Horizontal navigation changes the data represented by the viewport.
-        // Release the Y selection made by drag-zoom so the renderer recalculates
-        // both axes from the newly visible records, matching legacy AutoFitYForCurrentX.
-        LeftYRange = null;
-        RightYRange = null;
+        // A manual Y zoom survives horizontal navigation, as in legacy: the caller
+        // clamps it into the extent of the newly visible records once they are
+        // known. An automatic Y fit stays automatic and simply recalculates.
         return true;
+    }
+
+    /// <summary>
+    /// Fits the manual Y windows to the extent of the records now visible: the
+    /// window keeps its height and slides inside the extent, or adopts the extent
+    /// when the extent is the smaller of the two. Ranges left on automatic stay
+    /// automatic. Returns whether anything moved.
+    /// </summary>
+    public bool ClampYRangesToData(
+        (double Min, double Max)? leftDataRange,
+        (double Min, double Max)? rightDataRange)
+    {
+        bool changed = false;
+        if (TryFitWindow(LeftYRange, leftDataRange, out (double Min, double Max)? fittedLeft))
+        {
+            LeftYRange = fittedLeft;
+            changed = true;
+        }
+
+        if (TryFitWindow(RightYRange, rightDataRange, out (double Min, double Max)? fittedRight))
+        {
+            RightYRange = fittedRight;
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    private static bool TryFitWindow(
+        (double Min, double Max)? window,
+        (double Min, double Max)? dataRange,
+        out (double Min, double Max)? fitted)
+    {
+        fitted = window;
+        if (window is not { } view || dataRange is not { } data)
+        {
+            return false;
+        }
+
+        double height = view.Max - view.Min;
+        double dataMin = Math.Min(data.Min, data.Max);
+        double dataMax = Math.Max(data.Min, data.Max);
+        if (!(height > 0) || !double.IsFinite(height) || !double.IsFinite(dataMax - dataMin))
+        {
+            return false;
+        }
+
+        (double Min, double Max) target = dataMax - dataMin <= height
+            ? (dataMin, dataMax)
+            : Slide(view.Min, height, dataMin, dataMax);
+        if (Math.Abs(target.Min - view.Min) < 1e-9 && Math.Abs(target.Max - view.Max) < 1e-9)
+        {
+            return false;
+        }
+
+        fitted = target;
+        return true;
+    }
+
+    private static (double Min, double Max) Slide(double currentMin, double height, double dataMin, double dataMax)
+    {
+        double min = Math.Clamp(currentMin, dataMin, dataMax - height);
+        return (min, min + height);
     }
 
     public bool TrySetScrolledYRanges(

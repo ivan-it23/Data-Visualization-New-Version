@@ -12,6 +12,19 @@ internal enum Graph2DataMode
 }
 
 /// <summary>
+/// Surface a graph's applied configuration came from. The curve-setup window only
+/// highlights schematic elements for configurations it produced itself: a
+/// selection made on the chart cannot be re-derived from the curves without
+/// mis-highlighting elements the user never touched.
+/// </summary>
+internal enum ChartConfigurationSource
+{
+    CurveSetupWindow,
+    OnChartOverlay,
+    NoteSnapshot
+}
+
+/// <summary>
 /// Owns the source-of-data contract for the two graph surfaces.
 /// Graph 2 keeps its own repository, but reads the primary repository while
 /// its legacy "Стандартный режим" is selected.
@@ -37,6 +50,9 @@ internal sealed class ChartWorkspace
     public ChartConfiguration Graph2Configuration { get; private set; }
 
     public Graph2DataMode Graph2Mode { get; private set; } = Graph2DataMode.LinkedToGraph1;
+
+    private ChartConfigurationSource graph1ConfigurationSource = ChartConfigurationSource.CurveSetupWindow;
+    private ChartConfigurationSource graph2ConfigurationSource = ChartConfigurationSource.CurveSetupWindow;
 
     public bool IsGraph2Independent => Graph2Mode == Graph2DataMode.IndependentFile;
 
@@ -118,16 +134,31 @@ internal sealed class ChartWorkspace
         return true;
     }
 
-    public void ApplyConfigurationForGraph(int graphNumber, ChartConfiguration configuration)
+    public ChartConfigurationSource GetConfigurationSourceForGraph(int graphNumber)
+    {
+        return graphNumber switch
+        {
+            1 => graph1ConfigurationSource,
+            2 => graph2ConfigurationSource,
+            _ => throw new ArgumentOutOfRangeException(nameof(graphNumber))
+        };
+    }
+
+    public void ApplyConfigurationForGraph(
+        int graphNumber,
+        ChartConfiguration configuration,
+        ChartConfigurationSource source)
     {
         ChartConfiguration copy = configuration.Copy();
         switch (graphNumber)
         {
             case 1:
                 Graph1Configuration = copy;
+                graph1ConfigurationSource = source;
                 break;
             case 2:
                 Graph2Configuration = copy;
+                graph2ConfigurationSource = source;
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(graphNumber));

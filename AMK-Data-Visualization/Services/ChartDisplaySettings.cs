@@ -25,6 +25,11 @@ public sealed class GraphDisplayOptions
 
     public bool ShowFrequencyDropdown { get; set; }
 
+    /// <summary>X-axis selector in the graph's control panel, next to the device
+    /// toggle for Graph 1 and next to the data-mode button for Graph 2. It sits in
+    /// the panel rather than on the chart, so it does not affect the top row.</summary>
+    public bool ShowXAxisDropdown { get; set; }
+
     /// <summary>The "eye" curve-visibility toggle follows the preset dropdown and
     /// the schematic, but not the frequency dropdown.</summary>
     public bool ShowEye => ShowPresetDropdown || ShowTopSchematic;

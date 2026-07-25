@@ -93,9 +93,16 @@
                 Content="Проверить обновления"
                 Click="CheckForUpdatesButton_Click" />
 
-            <MenuBar Padding="0">
-                <MenuBarItem Title="Документация" />
-            </MenuBar>
+            <Button
+                MinWidth="0"
+                MinHeight="0"
+                Padding="12,0"
+                VerticalAlignment="Stretch"
+                AutomationProperties.Name="Документация"
+                Background="Transparent"
+                BorderThickness="0"
+                Content="Документация"
+                Click="DocumentationButton_Click" />
         </StackPanel>
 
         <Grid
@@ -122,12 +129,12 @@
             <Button
                 x:Name="Graph1SchematicButton"
                 Grid.Column="1"
-                Width="120"
+                Width="150"
                 Height="24"
                 Margin="4,0,0,0"
                 Padding="8,0"
                 VerticalAlignment="Center"
-                Content="Схема прибора"
+                Content="Настройка кривых"
                 FontWeight="SemiBold"
                 Click="Graph1SchematicButton_Click" />
 
@@ -251,6 +258,26 @@
                     FontWeight="SemiBold"
                     Click="ConnectionToggleButton_Click"
                     ToolTipService.ToolTip="Включение/Отключение прибора" />
+                <TextBlock
+                    x:Name="Graph1XAxisLabel"
+                    Margin="8,0,0,0"
+                    VerticalAlignment="Center"
+                    Text="Ось X:"
+                    Visibility="Collapsed" />
+                <ComboBox
+                    x:Name="Graph1XAxisComboBox"
+                    Width="140"
+                    Height="24"
+                    MinWidth="0"
+                    MinHeight="0"
+                    Padding="8,0,0,0"
+                    SelectedIndex="0"
+                    SelectionChanged="Graph1XAxisComboBox_SelectionChanged"
+                    ToolTipService.ToolTip="Величина по оси X графика 1"
+                    Visibility="Collapsed">
+                    <ComboBoxItem Content="Номер кадра" />
+                    <ComboBoxItem Content="Температура" />
+                </ComboBox>
             </StackPanel>
 
             <StackPanel
@@ -381,11 +408,11 @@
                     Spacing="4">
                     <Button
                         x:Name="Graph2SchematicButton"
-                        Width="140"
+                        Width="150"
                         Height="24"
                         MinWidth="0"
                         Padding="8,0"
-                        Content="Схема прибора"
+                        Content="Настройка кривых"
                         FontWeight="SemiBold"
                         Click="Graph2SchematicButton_Click" />
                     <TextBox
@@ -492,6 +519,26 @@
                             Source="ms-appx:///Assets/SystemFolder.png"
                             Stretch="Uniform" />
                     </Button>
+                    <TextBlock
+                        x:Name="Graph2XAxisLabel"
+                        Margin="4,0,0,0"
+                        VerticalAlignment="Center"
+                        Text="Ось X:"
+                        Visibility="Collapsed" />
+                    <ComboBox
+                        x:Name="Graph2XAxisComboBox"
+                        Width="140"
+                        Height="24"
+                        MinWidth="0"
+                        MinHeight="0"
+                        Padding="8,0,0,0"
+                        SelectedIndex="0"
+                        SelectionChanged="Graph2XAxisComboBox_SelectionChanged"
+                        ToolTipService.ToolTip="Величина по оси X графика 2"
+                        Visibility="Collapsed">
+                        <ComboBoxItem Content="Номер кадра" />
+                        <ComboBoxItem Content="Температура" />
+                    </ComboBox>
                 </StackPanel>
 
                 <StackPanel

@@ -25,6 +25,14 @@ public sealed partial class MainWindow : Window
 {
     private sealed record FolderTarget(string Label, string FolderPath);
 
+    private const string DocumentationUrl =
+        "http://ivanbohg.beget.tech/FilesForProgramVisualisation/Документация.pdf";
+
+    // The control panels and both graphs need room, so the window may not be shrunk
+    // below this share of the monitor it sits on.
+    private const double MinimumWindowWidthFraction = 0.90;
+    private const double MinimumWindowHeightFraction = 0.80;
+
     private readonly CurveSelectionService curveSelectionService = new();
     private readonly ChartWorkspace chartWorkspace = new(new ChartConfiguration(), new ChartConfiguration());
     private readonly SerialDeviceService serialDeviceService = new();
@@ -49,6 +57,8 @@ public sealed partial class MainWindow : Window
     private bool updatingRangeControls;
     private bool startupUpdateCheckScheduled;
     private bool updateCheckInProgress;
+    private readonly MinimumWindowSize minimumWindowSize =
+        new(MinimumWindowWidthFraction, MinimumWindowHeightFraction);
     private readonly ChartDisplaySettingsStore chartDisplaySettingsStore = new();
     private ChartDisplaySettings chartDisplaySettings = new();
     private readonly Dictionary<int, DropDownButton> presetDropDowns = [];
@@ -69,6 +79,7 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        minimumWindowSize.Attach(WindowNative.GetWindowHandle(this));
         string iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "DataVisualization.ico");
         if (File.Exists(iconPath))
         {
@@ -1037,7 +1048,10 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        chartWorkspace.ApplyConfigurationForGraph(graphNumber, configuration);
+        chartWorkspace.ApplyConfigurationForGraph(
+            graphNumber,
+            configuration,
+            ChartConfigurationSource.OnChartOverlay);
         // Keep the existing inline editor as the source of truth for the on-chart
         // schematic: pointing the base config at the just-applied configuration
         // prevents EnsureInlineEditor from rebuilding it (a rebuild re-derives the
@@ -1066,10 +1080,15 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        // Same rule as the curve-setup window: a configuration built on the other
+        // surface is not re-derived into a schematic selection, because a combined
+        // selection cannot be recovered from curves without lighting up elements
+        // the user never picked.
         inlineSchematicEditors[graphNumber] = new SchematicConfigurationEditor(
             curveSelectionService,
             transmitterCount,
-            configuration);
+            configuration,
+            chartWorkspace.GetConfigurationSourceForGraph(graphNumber) == ChartConfigurationSource.OnChartOverlay);
         inlineSchematicBaseConfig[graphNumber] = configuration;
         inlineSchematicPending[graphNumber] = false;
     }
@@ -1110,7 +1129,60 @@ public sealed partial class MainWindow : Window
             UpdateInlineSchematicVisual(graphNumber);
         }
 
+        UpdateXAxisSelectorControls(graphNumber);
         RenderGraph(graphNumber);
+    }
+
+    // ----- X-axis selector in the graph control panel -----
+
+    private void Graph1XAxisComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        => ChangeXAxisType(1, Graph1XAxisComboBox.SelectedIndex);
+
+    private void Graph2XAxisComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        => ChangeXAxisType(2, Graph2XAxisComboBox.SelectedIndex);
+
+    private void ChangeXAxisType(int graphNumber, int selectedIndex)
+    {
+        if (updatingRangeControls)
+        {
+            return;
+        }
+
+        XAxisType axisType = selectedIndex == 1 ? XAxisType.Temperature : XAxisType.FrameNumber;
+        ChartConfiguration configuration = chartWorkspace.GetConfigurationForGraph(graphNumber);
+        if (configuration.XAxisType == axisType)
+        {
+            return;
+        }
+
+        configuration.XAxisType = axisType;
+        // Both curve-setup surfaces must follow, otherwise the next apply from
+        // either of them would silently restore the previous axis.
+        if (inlineSchematicEditors[graphNumber] is { } inlineEditor)
+        {
+            inlineEditor.XAxisType = axisType;
+        }
+
+        schematicWindow?.RefreshDataContext(graphNumber);
+        RenderGraph(graphNumber);
+        SetStatus($"График {graphNumber}: ось X — {(axisType == XAxisType.Temperature ? "температура" : "номер кадра")}");
+    }
+
+    /// <summary>
+    /// Shows the axis selector next to the device toggle for Graph 1 and at the end
+    /// of the Graph 2 panel, and keeps it on the graph's current axis. Callers must
+    /// already hold <see cref="updatingRangeControls"/>.
+    /// </summary>
+    private void UpdateXAxisSelectorControls(int graphNumber)
+    {
+        bool show = chartDisplaySettings.ForGraph(graphNumber).ShowXAxisDropdown;
+        Visibility visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        TextBlock label = graphNumber == 1 ? Graph1XAxisLabel : Graph2XAxisLabel;
+        ComboBox selector = graphNumber == 1 ? Graph1XAxisComboBox : Graph2XAxisComboBox;
+        label.Visibility = visibility;
+        selector.Visibility = visibility;
+        selector.SelectedIndex =
+            chartWorkspace.GetConfigurationForGraph(graphNumber).XAxisType == XAxisType.Temperature ? 1 : 0;
     }
 
     private void ShowDisplaySettingsFlyout(int graphNumber, FrameworkElement anchor)
@@ -1129,6 +1201,10 @@ public sealed partial class MainWindow : Window
             "Схема прибора сверху графика",
             options.ShowTopSchematic,
             enabled => UpdateDisplayOption(graphNumber, opt => opt.ShowTopSchematic = enabled));
+        CheckBox xAxisCheck = CreateDisplayOptionCheckBox(
+            "Выбор оси X в панели управления графика",
+            options.ShowXAxisDropdown,
+            enabled => UpdateDisplayOption(graphNumber, opt => opt.ShowXAxisDropdown = enabled));
 
         StackPanel content = new() { Spacing = 8 };
         content.Children.Add(new TextBlock
@@ -1139,6 +1215,7 @@ public sealed partial class MainWindow : Window
         content.Children.Add(presetCheck);
         content.Children.Add(frequencyCheck);
         content.Children.Add(schematicCheck);
+        content.Children.Add(xAxisCheck);
 
         Flyout flyout = new() { Content = content };
         flyout.ShowAt(anchor);
@@ -1779,6 +1856,26 @@ public sealed partial class MainWindow : Window
         notesJournalWindow.ShowForOwner(WindowNative.GetWindowHandle(this));
     }
 
+    /// <summary>
+    /// Opens the published documentation in the default browser, matching legacy
+    /// OpenDocumentation: the PDF lives next to the update descriptor in the same
+    /// HTTP catalogue.
+    /// </summary>
+    private async void DocumentationButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(DocumentationUrl) { UseShellExecute = true });
+        }
+        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            await ShowUpdateMessageAsync(
+                "Документация недоступна",
+                "Не удалось открыть документацию.\nПроверьте подключение к интернету и попробуйте снова.",
+                compactCentered: true);
+        }
+    }
+
     private void LogsButton_Click(object sender, RoutedEventArgs e)
     {
         deviceLogWindow ??= new DeviceLogWindow();
@@ -1910,7 +2007,10 @@ public sealed partial class MainWindow : Window
                 "Конфигурация из заметки не прошла проверку валидности.");
         }
 
-        chartWorkspace.ApplyConfigurationForGraph(graphNumber, configuration);
+        chartWorkspace.ApplyConfigurationForGraph(
+            graphNumber,
+            configuration,
+            ChartConfigurationSource.NoteSnapshot);
         schematicWindow?.RefreshDataContext(graphNumber);
         RenderGraph(graphNumber);
         return NoteOperationResult.Ok;
@@ -2271,6 +2371,17 @@ public sealed partial class MainWindow : Window
 
         ChartIndexRange visibleRange = viewport.GetVisibleRange(repository.DataSize);
         RenderGraph(graphNumber);
+
+        // The render just measured the newly visible records, so a manual Y window
+        // can now be fitted to them. It keeps the Y zoom — and with it the vertical
+        // scroll bar — alive across a horizontal scroll. A second render only runs
+        // when the window actually moved.
+        LineChartControl control = graphNumber == 1 ? GraphControl : Graph2Control;
+        if (viewport.ClampYRangesToData(control.GetAutoAxisRange(0), control.GetAutoAxisRange(1)))
+        {
+            RenderGraph(graphNumber);
+        }
+
         SetStatus($"График {graphNumber}: участок {visibleRange.StartIndex}–{visibleRange.EndIndex}");
     }
 
@@ -2300,6 +2411,7 @@ public sealed partial class MainWindow : Window
         bool hasData = repository.HasData;
         updatingRangeControls = true;
         UpdateYZoomTargetControls(graphNumber);
+        UpdateXAxisSelectorControls(graphNumber);
         if (graphNumber == 1)
         {
             Graph1ApplyRangeButton.IsEnabled = hasData && !viewport.IsFlowEnabled;
@@ -2758,7 +2870,7 @@ public sealed partial class MainWindow : Window
         graphControl.ShowLegacyEmptyState(
             $"График {graphNumber}",
             hasData
-                ? "Нажмите 'Схема прибора' для настройки графика"
+                ? "Нажмите «Настройка кривых» или иконку «Ключ с шестерёнкой» в левом углу графика для настройки вывода кривых"
                 : "Сначала откройте файл данных");
         UpdateRangeControls(graphNumber);
     }

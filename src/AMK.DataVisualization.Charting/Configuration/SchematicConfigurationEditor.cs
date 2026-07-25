@@ -9,11 +9,12 @@ public sealed class SchematicConfigurationEditor
     public SchematicConfigurationEditor(
         CurveSelectionService curveSelectionService,
         int availableTransmitterCount,
-        ChartConfiguration existingConfiguration)
+        ChartConfiguration existingConfiguration,
+        bool restoreSchematicSelection = true)
     {
         this.curveSelectionService = curveSelectionService;
         Selection = new SchematicSelection(availableTransmitterCount);
-        LoadExistingConfiguration(existingConfiguration);
+        LoadExistingConfiguration(existingConfiguration, restoreSchematicSelection);
     }
 
     public SchematicSelection Selection { get; }
@@ -182,7 +183,7 @@ public sealed class SchematicConfigurationEditor
         return curveSelectionService.NormalizeForApplication(CreateConfiguration(normalize: false));
     }
 
-    private void LoadExistingConfiguration(ChartConfiguration existingConfiguration)
+    private void LoadExistingConfiguration(ChartConfiguration existingConfiguration, bool restoreSchematicSelection)
     {
         // A configuration can outlive the source it was built for, so curves of
         // transmitters the current tool does not have are dropped here. Keeping
@@ -200,8 +201,18 @@ public sealed class SchematicConfigurationEditor
 
         Selection.Clear();
         Selection.Frequency = supportedCurves[0].Frequency;
-        Selection.DataFilter = curveSelectionService.DetermineDataFilterFromCurves(supportedCurves);
         XAxisType = existingConfiguration.XAxisType;
+
+        if (!restoreSchematicSelection)
+        {
+            // The configuration was built somewhere else, so the schematic opens
+            // neutral: deriving a selection from the curves highlights elements the
+            // user never chose. Frequency and X axis still carry over.
+            AvailableCurves = supportedCurves;
+            return;
+        }
+
+        Selection.DataFilter = curveSelectionService.DetermineDataFilterFromCurves(supportedCurves);
         CurrentPreset = existingConfiguration.ActivePreset;
         CurrentPresetDisplayName = existingConfiguration.PresetDisplayName;
 

@@ -176,6 +176,7 @@ public sealed partial class LineChartControl : UserControl
             "Настройка отображения кривых",
             22,
             20);
+        displaySettingsButton.Content = CreateCurveSetupIcon();
         displaySettingsButton.Click += (_, _) => DisplaySettingsRequested?.Invoke(this, displaySettingsButton);
         curveVisibilityButton = CreateOverlayIconButton(
             "",
@@ -196,6 +197,35 @@ public sealed partial class LineChartControl : UserControl
         OverlayCanvas.Children.Add(curveVisibilityButton);
         OverlayCanvas.Children.Add(horizontalUndoButton);
         OverlayCanvas.Children.Add(verticalUndoButton);
+    }
+
+    /// <summary>
+    /// "Wrench turning a gear" icon for the curve-setup button. Segoe MDL2 has no
+    /// single glyph for it (E90F is a bare wrench), so the wrench is drawn at full
+    /// size with a smaller gear tucked under its head. A plain gear would collide
+    /// visually with the Graph 2 data-mode button, which already uses one.
+    /// </summary>
+    private static Grid CreateCurveSetupIcon()
+    {
+        FontFamily iconFont = new("Segoe MDL2 Assets");
+        Grid icon = new() { Width = 18, Height = 16 };
+        icon.Children.Add(new FontIcon
+        {
+            FontFamily = iconFont,
+            FontSize = 13,
+            Glyph = "",
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top
+        });
+        icon.Children.Add(new FontIcon
+        {
+            FontFamily = iconFont,
+            FontSize = 9,
+            Glyph = "",
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Bottom
+        });
+        return icon;
     }
 
     /// <summary>
@@ -987,15 +1017,21 @@ public sealed partial class LineChartControl : UserControl
 
     private void DrawEmptyState(Rect plot)
     {
+        // The hint is the only thing on an empty chart and it now names both ways
+        // of picking curves, so it is drawn at full strength instead of dimmed.
         TextBlock message = new()
         {
             Text = emptyStateMessage,
-            FontSize = 14,
-            Opacity = 0.72,
-            Foreground = Foreground
+            FontSize = 15,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Foreground = Foreground,
+            TextAlignment = TextAlignment.Center,
+            TextWrapping = TextWrapping.Wrap
         };
 
-        message.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        // The hint names two controls and is long, so it wraps inside the plot
+        // instead of running past its edges on a narrow window.
+        message.Measure(new Size(Math.Max(120, plot.Width - 24), double.PositiveInfinity));
         Canvas.SetLeft(message, plot.Left + Math.Max(0, (plot.Width - message.DesiredSize.Width) / 2));
         Canvas.SetTop(message, plot.Top + Math.Max(0, (plot.Height - message.DesiredSize.Height) / 2));
         ChartCanvas.Children.Add(message);
@@ -1032,6 +1068,16 @@ public sealed partial class LineChartControl : UserControl
         }
 
         return (min, max);
+    }
+
+    /// <summary>
+    /// Unpadded extent of the records currently drawn on the axis, ignoring any
+    /// explicit range. The host uses it to fit a manual Y window to a new X window
+    /// after a horizontal scroll.
+    /// </summary>
+    public (double Min, double Max)? GetAutoAxisRange(int axisGroup)
+    {
+        return GetRawAxisRange(axisGroup);
     }
 
     /// <summary>
