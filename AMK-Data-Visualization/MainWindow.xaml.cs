@@ -1040,17 +1040,18 @@ public sealed partial class MainWindow : Window
     private void EnsureInlineEditor(int graphNumber)
     {
         ChartConfiguration configuration = chartWorkspace.GetConfigurationForGraph(graphNumber);
-        if (inlineSchematicEditors[graphNumber] is not null
-            && ReferenceEquals(inlineSchematicBaseConfig[graphNumber], configuration))
+        int transmitterCount = chartWorkspace.GetAvailableTransmitterCountForGraph(graphNumber);
+        SchematicConfigurationEditor? existingEditor = inlineSchematicEditors[graphNumber];
+        // The transmitter count belongs to the cache key: the editor is normally
+        // created before any data is loaded, so without it a five-transmitter
+        // selection would stay alive after a Картограф LWD 4tx source appears.
+        // Capabilities are stable while data streams in, so live frames still do
+        // not rebuild the editor and unsaved inline edits survive.
+        if (existingEditor is not null
+            && ReferenceEquals(inlineSchematicBaseConfig[graphNumber], configuration)
+            && existingEditor.Selection.AvailableTransmitterCount == transmitterCount)
         {
             return;
-        }
-
-        ToolDataRepository repository = chartWorkspace.GetRepositoryForGraph(graphNumber);
-        int transmitterCount = SchematicSelection.UiTransmitterCount;
-        if (repository.TryGetRecordMetadata(0, out ToolRecordMetadata metadata) && metadata.Capabilities.TransmitterCount > 0)
-        {
-            transmitterCount = metadata.Capabilities.TransmitterCount;
         }
 
         inlineSchematicEditors[graphNumber] = new SchematicConfigurationEditor(
@@ -1233,6 +1234,11 @@ public sealed partial class MainWindow : Window
     {
         ToolDataRepository repository = chartWorkspace.GetRepositoryForGraph(graphNumber);
         var graphControl = graphNumber == 1 ? GraphControl : Graph2Control;
+        // Every data-source change funnels through here, so this is where a
+        // configuration that no longer matches the tool loses its extra curves
+        // (a T5 curve carried over to a four-transmitter source). Runs before the
+        // schematic and legend read the configuration.
+        chartWorkspace.DropUnsupportedCurvesForGraph(graphNumber);
         ChartConfiguration graphConfiguration = chartWorkspace.GetConfigurationForGraph(graphNumber);
         ChartViewportState viewport = chartWorkspace.GetViewportForGraph(graphNumber);
 

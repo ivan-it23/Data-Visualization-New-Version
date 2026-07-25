@@ -147,15 +147,9 @@ public sealed partial class SchematicWindow : Window
             return;
         }
 
-        int transmitterCount = SchematicSelection.UiTransmitterCount;
-        if (repository.TryGetRecordMetadata(0, out ToolRecordMetadata metadata) && metadata.Capabilities.TransmitterCount > 0)
-        {
-            transmitterCount = metadata.Capabilities.TransmitterCount;
-        }
-
         editor = new SchematicConfigurationEditor(
             curveSelectionService,
-            transmitterCount,
+            chartWorkspace.GetAvailableTransmitterCountForGraph(graphNumber),
             chartWorkspace.GetConfigurationForGraph(graphNumber));
         editorSessions[graphNumber] = new EditorSession(editor, repository, repository.DataVersion);
         RefreshControls();

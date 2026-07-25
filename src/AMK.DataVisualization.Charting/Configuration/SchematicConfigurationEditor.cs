@@ -184,20 +184,28 @@ public sealed class SchematicConfigurationEditor
 
     private void LoadExistingConfiguration(ChartConfiguration existingConfiguration)
     {
-        if (existingConfiguration.IsEmpty)
+        // A configuration can outlive the source it was built for, so curves of
+        // transmitters the current tool does not have are dropped here. Keeping
+        // them would let the editor offer T5 on a four-transmitter tool and feed
+        // it back into the applied configuration.
+        List<CurveDefinition> supportedCurves = existingConfiguration.Curves
+            .Where(IsSupportedByCapabilities)
+            .Select(curve => curve.Copy())
+            .ToList();
+        if (supportedCurves.Count == 0)
         {
             RefreshAvailableCurves();
             return;
         }
 
         Selection.Clear();
-        Selection.Frequency = existingConfiguration.Curves[0].Frequency;
-        Selection.DataFilter = curveSelectionService.DetermineDataFilterFromCurves(existingConfiguration.Curves);
+        Selection.Frequency = supportedCurves[0].Frequency;
+        Selection.DataFilter = curveSelectionService.DetermineDataFilterFromCurves(supportedCurves);
         XAxisType = existingConfiguration.XAxisType;
         CurrentPreset = existingConfiguration.ActivePreset;
         CurrentPresetDisplayName = existingConfiguration.PresetDisplayName;
 
-        foreach (CurveDefinition curve in existingConfiguration.Curves)
+        foreach (CurveDefinition curve in supportedCurves)
         {
             if (curve.DataType == DataType.RhoSmt)
             {
@@ -209,8 +217,14 @@ public sealed class SchematicConfigurationEditor
             }
         }
 
-        RestoreSelectionFromCurves(existingConfiguration.Curves);
-        AvailableCurves = existingConfiguration.Curves.Select(curve => curve.Copy()).ToList();
+        RestoreSelectionFromCurves(supportedCurves);
+        AvailableCurves = supportedCurves;
+    }
+
+    private bool IsSupportedByCapabilities(CurveDefinition curve)
+    {
+        return curve.SourceElement != ElementType.Transmitter
+            || Selection.SupportsTransmitter(curve.ElementIndex);
     }
 
     private void RestoreSelectionFromCurves(IReadOnlyList<CurveDefinition> curves)

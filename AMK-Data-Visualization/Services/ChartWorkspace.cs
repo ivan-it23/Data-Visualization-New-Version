@@ -1,4 +1,6 @@
+using AMK.DataVisualization.Charting.Configuration;
 using AMK.DataVisualization.Charting.Series;
+using AMK.DataVisualization.Core;
 using AMK.DataVisualization.IO.DataFiles;
 
 namespace AMK.DataVisualization.App.Services;
@@ -72,6 +74,48 @@ internal sealed class ChartWorkspace
             2 => Graph2Viewport,
             _ => throw new ArgumentOutOfRangeException(nameof(graphNumber))
         };
+    }
+
+    /// <summary>
+    /// Number of transmitters the source loaded into the graph actually has.
+    /// Both the schematic window and the on-chart schematic must ask here instead
+    /// of assuming the full UI set, otherwise T5 stays selectable on a tool that
+    /// has four transmitters (Картограф LWD 4tx).
+    /// </summary>
+    public int GetAvailableTransmitterCountForGraph(int graphNumber)
+    {
+        ToolDataRepository repository = GetRepositoryForGraph(graphNumber);
+        return repository.TryGetRecordMetadata(0, out ToolRecordMetadata metadata)
+            && metadata.Capabilities.TransmitterCount > 0
+            ? metadata.Capabilities.TransmitterCount
+            : SchematicSelection.UiTransmitterCount;
+    }
+
+    /// <summary>
+    /// Drops curves the loaded source cannot provide and reports whether anything
+    /// was removed. A configuration built for a 5Tx tool survives a switch to a
+    /// four-transmitter source, and its T5 curves would otherwise keep appearing
+    /// in the legend, in the on-chart schematic and in the visibility list.
+    /// </summary>
+    public bool DropUnsupportedCurvesForGraph(int graphNumber)
+    {
+        ChartConfiguration configuration = GetConfigurationForGraph(graphNumber);
+        if (configuration.IsEmpty)
+        {
+            return false;
+        }
+
+        int availableTransmitterCount = GetAvailableTransmitterCountForGraph(graphNumber);
+        int removedCount = configuration.Curves.RemoveAll(curve =>
+            curve.SourceElement == ElementType.Transmitter
+            && (curve.ElementIndex < 0 || curve.ElementIndex >= availableTransmitterCount));
+        if (removedCount == 0)
+        {
+            return false;
+        }
+
+        configuration.UpdateAxisConfiguration();
+        return true;
     }
 
     public void ApplyConfigurationForGraph(int graphNumber, ChartConfiguration configuration)
