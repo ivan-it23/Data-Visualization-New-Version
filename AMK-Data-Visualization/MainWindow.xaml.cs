@@ -47,6 +47,7 @@ public sealed partial class MainWindow : Window
     private FileConstructorWindow? fileConstructorWindow;
     private NotesJournalWindow? notesJournalWindow;
     private DeviceLogWindow? deviceLogWindow;
+    private WindowScaleWindow? windowScaleWindow;
     private string currentDataFilePath = string.Empty;
     private string configuredAppendRecordPath = string.Empty;
     private bool serialRecordingEnabled;
@@ -60,6 +61,8 @@ public sealed partial class MainWindow : Window
     private readonly MinimumWindowSize minimumWindowSize =
         new(MinimumWindowWidthFraction, MinimumWindowHeightFraction);
     private readonly ChartDisplaySettingsStore chartDisplaySettingsStore = new();
+    private readonly WindowScaleSettingsStore windowScaleSettingsStore = new();
+    private readonly WindowScaleService windowScaleService = new();
     private ChartDisplaySettings chartDisplaySettings = new();
     private readonly Dictionary<int, DropDownButton> presetDropDowns = [];
     private readonly Dictionary<int, DropDownButton> frequencyDropDowns = [];
@@ -80,6 +83,13 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         minimumWindowSize.Attach(WindowNative.GetWindowHandle(this));
+
+        // Applied before anything reads the visual tree: the service re-parents the
+        // window content under a host panel it sizes itself. The main window is
+        // maximized, so only its content scales - the frame is left alone.
+        windowScaleService.Initialize(windowScaleSettingsStore.Load());
+        windowScaleService.ScaleChanged += WindowScaleService_ScaleChanged;
+        windowScaleService.Attach(this, resizeWithScale: false);
         string iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "DataVisualization.ico");
         if (File.Exists(iconPath))
         {
@@ -173,6 +183,7 @@ public sealed partial class MainWindow : Window
     {
         bool windowCreated = fileConstructorWindow is null;
         fileConstructorWindow ??= new FileConstructorWindow(OnFileConstructorSaved);
+        windowScaleService.Attach(fileConstructorWindow, resizeWithScale: true);
         fileConstructorWindow.ShowForOwner(WindowNative.GetWindowHandle(this));
 
         string currentFilePath = chartWorkspace.Graph1Repository.LoadedFilePath;
@@ -228,6 +239,7 @@ public sealed partial class MainWindow : Window
         try
         {
             metrologyWindow ??= new MetrologyWindow(serialDeviceService, metrologySession, OnMetrologyUpdated);
+            windowScaleService.Attach(metrologyWindow, resizeWithScale: true);
             metrologyWindow.ShowForOwner(WindowNative.GetWindowHandle(this));
         }
         catch (Exception exception)
@@ -417,6 +429,7 @@ public sealed partial class MainWindow : Window
             serialDeviceService,
             serialSettingsStore,
             PrepareSerialSession);
+        windowScaleService.Attach(connectionSettingsWindow, resizeWithScale: true);
         connectionSettingsWindow.ShowForOwner(WindowNative.GetWindowHandle(this));
     }
 
@@ -825,6 +838,7 @@ public sealed partial class MainWindow : Window
         try
         {
             schematicWindow ??= new SchematicWindow(chartWorkspace, curveSelectionService, metrologySession, OnCurveConfigurationApplied);
+            windowScaleService.Attach(schematicWindow, resizeWithScale: true);
             schematicWindow.ShowForGraph(graphNumber, WindowNative.GetWindowHandle(this));
         }
         catch (Exception exception)
@@ -1853,6 +1867,7 @@ public sealed partial class MainWindow : Window
             GetActiveChartNumber,
             ApplyNoteConfiguration,
             UpdateNoteTextById);
+        windowScaleService.Attach(notesJournalWindow, resizeWithScale: true);
         notesJournalWindow.ShowForOwner(WindowNative.GetWindowHandle(this));
     }
 
@@ -1879,7 +1894,20 @@ public sealed partial class MainWindow : Window
     private void LogsButton_Click(object sender, RoutedEventArgs e)
     {
         deviceLogWindow ??= new DeviceLogWindow();
+        windowScaleService.Attach(deviceLogWindow, resizeWithScale: true);
         deviceLogWindow.ShowForOwner(WindowNative.GetWindowHandle(this));
+    }
+
+    private void WindowScaleButton_Click(object sender, RoutedEventArgs e)
+    {
+        windowScaleWindow ??= new WindowScaleWindow(windowScaleService);
+        windowScaleService.Attach(windowScaleWindow, resizeWithScale: true);
+        windowScaleWindow.ShowForOwner(WindowNative.GetWindowHandle(this));
+    }
+
+    private void WindowScaleService_ScaleChanged(object? sender, EventArgs e)
+    {
+        windowScaleSettingsStore.Save(windowScaleService.Settings);
     }
 
     private static void LogLoadedDataFile(string filePath, ToolDataRepository repository)
@@ -2871,7 +2899,7 @@ public sealed partial class MainWindow : Window
             $"График {graphNumber}",
             hasData
                 ? "Нажмите «Настройка кривых» или иконку «Ключ с шестерёнкой» в левом углу графика для настройки вывода кривых"
-                : "Сначала откройте файл данных");
+                : "Сначала откройте файл данных или включите прибор");
         UpdateRangeControls(graphNumber);
     }
 
@@ -2967,6 +2995,9 @@ public sealed partial class MainWindow : Window
         notesJournalWindow = null;
         deviceLogWindow?.ClosePermanently();
         deviceLogWindow = null;
+        windowScaleWindow?.ClosePermanently();
+        windowScaleWindow = null;
+        windowScaleService.ScaleChanged -= WindowScaleService_ScaleChanged;
         serialDeviceService.Dispose();
         autoUpdateService.Dispose();
         autoUpdateCancellation.Dispose();

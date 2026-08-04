@@ -74,6 +74,15 @@ public sealed partial class LineChartControl : UserControl
     private const double ScrollBarThickness = 16.0;
     private const double ScrollBarRightMargin = 4.0;
     private const double AxisUndoButtonSize = 16.0;
+
+    /// <summary>
+    /// Colour of a chart drawn as a single unnamed series. It is fixed instead of
+    /// read from SystemAccentColor so the curve looks the same on every machine:
+    /// a workstation personalized with a yellow accent drew a yellow curve, and a
+    /// machine-dependent colour also makes parity screenshots against the legacy
+    /// application unreliable. Matches the accent palette pinned in App.xaml.
+    /// </summary>
+    private static readonly Color DefaultSeriesColor = Color.FromArgb(255, 0x00, 0x78, 0xD7);
     private readonly List<ChartRenderSeries> series = [];
     private string title = string.Empty;
     private string leftAxisUnits = string.Empty;
@@ -279,7 +288,7 @@ public sealed partial class LineChartControl : UserControl
     public void SetSeries(IReadOnlyList<float> sourceValues, string seriesTitle, string seriesUnits)
     {
         SetSeries(
-            [new ChartRenderSeries(sourceValues, seriesTitle, seriesTitle, string.Empty, seriesUnits, ToColorRef(GetAccentColor()), 0)],
+            [new ChartRenderSeries(sourceValues, seriesTitle, seriesTitle, string.Empty, seriesUnits, ToColorRef(DefaultSeriesColor), 0)],
             seriesTitle,
             seriesUnits,
             string.Empty);
@@ -1752,12 +1761,6 @@ public sealed partial class LineChartControl : UserControl
     private static int ToColorRef(Color color)
     {
         return color.R | (color.G << 8) | (color.B << 16);
-    }
-
-    private static Color GetAccentColor()
-    {
-        object? accent = Application.Current.Resources["SystemAccentColor"];
-        return accent is Color color ? color : Colors.DodgerBlue;
     }
 
     private static bool NearlyEqual(float left, float right)

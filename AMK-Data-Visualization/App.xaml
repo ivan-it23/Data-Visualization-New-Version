@@ -1,12 +1,58 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Application
     x:Class="AMK.DataVisualization.App.App"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:muxc="using:Microsoft.UI.Xaml.Controls"
+    RequestedTheme="Light">
+    <!--
+        RequestedTheme is pinned: without it WinUI follows the system "app mode",
+        so the application opened dark on a workstation whose Windows is dark.
+        That is not only cosmetic here - LineChartControl draws axes, grid, note
+        markers and tooltips with fixed light-theme colours, so a dark canvas made
+        the plot unreadable. The value cannot be changed at run time; a user facing
+        theme switch would have to move to ElementTheme on every window root.
+    -->
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
-                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+                <muxc:XamlControlsResources>
+                    <muxc:XamlControlsResources.MergedDictionaries>
+                        <!--
+                            Every accent-derived brush (checkbox and radio fill,
+                            combo box selection and focus, slider, list selection)
+                            resolves from this palette. Left to Windows it is the
+                            machine's personalization accent, which rendered the
+                            checkboxes yellow on one production computer. The values
+                            are the Windows default blue palette, i.e. exactly what
+                            the owner's workstation already showed.
+                            The HighContrast dictionary is deliberately not
+                            overridden: high contrast must keep the system colours.
+                        -->
+                        <ResourceDictionary>
+                            <ResourceDictionary.ThemeDictionaries>
+                                <ResourceDictionary x:Key="Default">
+                                    <Color x:Key="SystemAccentColor">#FF0078D7</Color>
+                                    <Color x:Key="SystemAccentColorLight1">#FF429CE3</Color>
+                                    <Color x:Key="SystemAccentColorLight2">#FF76B9ED</Color>
+                                    <Color x:Key="SystemAccentColorLight3">#FFA6D8FF</Color>
+                                    <Color x:Key="SystemAccentColorDark1">#FF005A9E</Color>
+                                    <Color x:Key="SystemAccentColorDark2">#FF004275</Color>
+                                    <Color x:Key="SystemAccentColorDark3">#FF002642</Color>
+                                </ResourceDictionary>
+                                <ResourceDictionary x:Key="Light">
+                                    <Color x:Key="SystemAccentColor">#FF0078D7</Color>
+                                    <Color x:Key="SystemAccentColorLight1">#FF429CE3</Color>
+                                    <Color x:Key="SystemAccentColorLight2">#FF76B9ED</Color>
+                                    <Color x:Key="SystemAccentColorLight3">#FFA6D8FF</Color>
+                                    <Color x:Key="SystemAccentColorDark1">#FF005A9E</Color>
+                                    <Color x:Key="SystemAccentColorDark2">#FF004275</Color>
+                                    <Color x:Key="SystemAccentColorDark3">#FF002642</Color>
+                                </ResourceDictionary>
+                            </ResourceDictionary.ThemeDictionaries>
+                        </ResourceDictionary>
+                    </muxc:XamlControlsResources.MergedDictionaries>
+                </muxc:XamlControlsResources>
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </Application.Resources>
