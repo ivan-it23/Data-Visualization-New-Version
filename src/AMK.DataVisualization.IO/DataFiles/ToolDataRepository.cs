@@ -30,6 +30,18 @@ public sealed class ToolDataRepository
 
     public int DataSize => records.Count;
 
+    /// <summary>
+    /// Bytes of the incomplete record the loaded file ended with, or zero. Live
+    /// recording appends whole frames, so this only ever describes a file source.
+    /// </summary>
+    public int LoadedTrailingByteCount { get; private set; }
+
+    /// <summary>
+    /// Complete frames of the loaded file that failed the canonical parse and were
+    /// left out of the data.
+    /// </summary>
+    public int LoadedSkippedFrameCount { get; private set; }
+
     public void LoadDataFromFile(string fileName)
     {
         ApplyLoadedData(ToolDataFileReader.LoadDataFromFile(fileName), fileName);
@@ -61,6 +73,8 @@ public sealed class ToolDataRepository
         loadedFileName = loadedData.LoadedFileName;
         loadedFilePath = string.IsNullOrWhiteSpace(sourceFilePath) ? string.Empty : Path.GetFullPath(sourceFilePath);
         loadedFileFormat = loadedData.Format;
+        LoadedTrailingByteCount = loadedData.TrailingByteCount;
+        LoadedSkippedFrameCount = loadedData.SkippedFrameCount;
         dataVersion++;
         InvalidateDerivedCaches();
     }
@@ -72,6 +86,8 @@ public sealed class ToolDataRepository
         loadedFileName = string.Empty;
         loadedFilePath = string.Empty;
         loadedFileFormat = FileFormat.Unknown;
+        LoadedTrailingByteCount = 0;
+        LoadedSkippedFrameCount = 0;
         dataVersion++;
         InvalidateDerivedCaches();
     }

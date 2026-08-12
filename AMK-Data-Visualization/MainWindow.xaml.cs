@@ -163,6 +163,7 @@ public sealed partial class MainWindow : Window
             RenderGraph(2);
             SetStatus("Готов");
             UpdateStatusBarFileInfo();
+            await ReportFileLoadIssuesAsync(chartWorkspace.Graph1Repository);
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException)
         {
@@ -176,7 +177,50 @@ public sealed partial class MainWindow : Window
 
             SetStatus("Ошибка загрузки");
             UpdateStatusBarFileInfo();
+            await ShowFileLoadErrorAsync(file.Path, ex);
         }
+    }
+
+    /// <summary>
+    /// Shows why a data file was rejected. The reason used to be discarded with the
+    /// exception, so an unreadable file produced nothing but an empty chart and the
+    /// user had no way to tell a wrong signature from a damaged file.
+    /// </summary>
+    private async Task ShowFileLoadErrorAsync(string filePath, Exception exception)
+    {
+        await ShowOperationMessageAsync(
+            "Файл данных не открыт",
+            $"{Path.GetFileName(filePath)}\n\n{exception.Message}");
+    }
+
+    /// <summary>
+    /// Reports damaged and incomplete records the file was opened despite. Neither
+    /// costs the user the rest of the file any more, so this is information rather
+    /// than an error - but it has to be said out loud, otherwise a partly corrupt
+    /// recording is indistinguishable from an intact one.
+    /// </summary>
+    private async Task ReportFileLoadIssuesAsync(ToolDataRepository repository)
+    {
+        int skippedFrames = repository.LoadedSkippedFrameCount;
+        int trailingBytes = repository.LoadedTrailingByteCount;
+        if (skippedFrames <= 0 && trailingBytes <= 0)
+        {
+            return;
+        }
+
+        List<string> lines = [];
+        if (skippedFrames > 0)
+        {
+            lines.Add($"Повреждённых кадров пропущено: {skippedFrames}.");
+        }
+
+        if (trailingBytes > 0)
+        {
+            lines.Add($"Последняя запись оборвана — {trailingBytes} байт вместо полного кадра, пропущена.");
+        }
+
+        lines.Add($"Загружено кадров: {repository.DataSize}.");
+        await ShowOperationMessageAsync("Файл открыт с замечаниями", string.Join("\n", lines));
     }
 
     private async void FileConstructorMenuItem_Click(object sender, RoutedEventArgs e)
@@ -640,6 +684,7 @@ public sealed partial class MainWindow : Window
             RenderGraph(2);
             SetStatus("Готов");
             UpdateStatusBarFileInfo();
+            await ReportFileLoadIssuesAsync(chartWorkspace.Graph2IndependentRepository);
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException)
         {
@@ -647,6 +692,7 @@ public sealed partial class MainWindow : Window
             Graph2Control.ClearSeries("Ошибка загрузки");
             SetStatus("Ошибка загрузки");
             UpdateStatusBarFileInfo();
+            await ShowFileLoadErrorAsync(file.Path, ex);
         }
     }
 

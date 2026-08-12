@@ -11,7 +11,7 @@ public static class ToolDataFileReader
     private const string OpenErrorMessage = "Не удалось открыть файл данных";
     private const string ShortFileMessage = "Файл слишком короткий или не содержит корректную сигнатуру";
     private const string UnsupportedSignatureMessage = "Файл содержит неподдерживаемую сигнатуру или формат. Поддерживаются Автономный, LWD и Картограф с четырьмя передатчиками в режиме LWD 4tx с canonical GP_TOOL_DATA по 240 байт на кадр.";
-    private const string InvalidSizeMessage = "Файл имеет неправильный размер или повреждён. Ожидается кратность 240 (или 251 для .DEV) байт.";
+    private const string InvalidSizeMessage = "Файл не содержит ни одного полного кадра. Ожидается не менее 240 байт (или 251 для .DEV).";
 
     public static FileFormat DetectFileFormat(string fileName)
     {
@@ -68,13 +68,29 @@ public static class ToolDataFileReader
         }
 
         int physicalFrameSize = GetPhysicalFrameSize(format);
-        if (fileSize < physicalFrameSize || fileSize % physicalFrameSize != 0)
+        int frameCount = checked((int)(fileSize / physicalFrameSize));
+        if (frameCount == 0)
         {
             return DataFileValidationResult.Invalid(InvalidSizeMessage, format);
         }
 
-        int frameCount = checked((int)(fileSize / physicalFrameSize));
-        return new DataFileValidationResult(true, null, format, signature, physicalFrameSize, fileSize, frameCount);
+        // A trailing partial frame is tolerated instead of failing the whole file.
+        // A RAM dump taken off the tool stops wherever the recording stopped, so its
+        // last record is routinely cut in the middle: the observed .DEV files end
+        // with a fragment of the next 251-byte record. Legacy rejected such a file
+        // outright and so did this reader, which left several thousand perfectly
+        // readable frames unreachable. The fragment itself carries no complete
+        // measurement and is skipped.
+        int trailingByteCount = checked((int)(fileSize % physicalFrameSize));
+        return new DataFileValidationResult(
+            true,
+            null,
+            format,
+            signature,
+            physicalFrameSize,
+            fileSize,
+            frameCount,
+            trailingByteCount);
     }
 
     public static bool TryValidateDataFile(string fileName, out DataFileValidationResult result)
@@ -96,6 +112,7 @@ public static class ToolDataFileReader
 
         using FileStream stream = File.OpenRead(fileName);
         byte[] rawFrame = new byte[BinaryLayoutConstants.GpToolDataSize];
+        int skippedFrameCount = 0;
         for (int index = 0; index < validation.FrameCount; index++)
         {
             if (ReadParsedFrameAt(stream, validation.Format, validation.PhysicalFrameSize, index, rawFrame, out ParsedToolFrame frame))
@@ -103,14 +120,34 @@ public static class ToolDataFileReader
                 records.Add(frame.CanonicalData);
                 metadata.Add(new ToolRecordMetadata(frame.Kind, frame.Capabilities));
             }
+            else
+            {
+                // A frame whose signature or layout does not parse is dropped, not
+                // fatal: one damaged record in the middle of a long recording must
+                // not make the rest of the file unreachable. The count is carried
+                // out so the user can be told the file is not intact.
+                skippedFrameCount++;
+            }
         }
 
         if (records.Count == 0)
         {
-            throw new InvalidDataException("Не удалось прочитать данные из файла.");
+            // The signature at the head of the file passed, so the file is of a
+            // known tool; naming the frame count separates "wrong device" from
+            // "frames do not match the canonical layout".
+            throw new InvalidDataException(
+                $"Ни один из {validation.FrameCount} кадров файла не удалось разобрать. "
+                + $"Сигнатура файла — 0x{validation.Signature:X8}.");
         }
 
-        return new DataLoadResult(records, metadata, BuildLoadedFileName(fileName), validation.Format, validation.PhysicalFrameSize);
+        return new DataLoadResult(
+            records,
+            metadata,
+            BuildLoadedFileName(fileName),
+            validation.Format,
+            validation.PhysicalFrameSize,
+            validation.TrailingByteCount,
+            skippedFrameCount);
     }
 
     public static bool TryLoadDataFromFile(string fileName, out DataLoadResult? result, out string? errorMessage)

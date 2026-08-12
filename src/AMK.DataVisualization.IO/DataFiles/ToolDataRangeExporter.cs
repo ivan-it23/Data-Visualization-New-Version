@@ -55,11 +55,11 @@ public static class ToolDataRangeExporter
             }
 
             int physicalFrameSize = ToolDataFileReader.GetPhysicalFrameSize(sourceFormat);
-            if (fileSize % physicalFrameSize != 0)
-            {
-                return false;
-            }
 
+            // Only complete frames are copied. A source whose recording stopped
+            // mid-record is accepted here for the same reason the reader accepts it,
+            // and its trailing fragment is left out of the result rather than
+            // rejecting the operation.
             long frameCount = fileSize / physicalFrameSize;
             if (frameCount == 0
                 || startIndex < 0
