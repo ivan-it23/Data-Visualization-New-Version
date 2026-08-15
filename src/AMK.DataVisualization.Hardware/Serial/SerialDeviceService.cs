@@ -31,6 +31,11 @@ public sealed class SerialDeviceService : IDisposable
     // Cartograph 4tx это 0x05 0x06), затем 240 байт GP_TOOL_DATA/метрологии.
     private const int LegacyServicePrefixSize = 2;
     private const int LegacyPayloadSize = LegacyServicePrefixSize + BinaryLayoutConstants.GpToolDataSize;
+    // Квитанция без данных занимает на проводе те же пять байт, что и в
+    // length-framed ветке: [CMD][05][00][CRC:2]. Для reader'а LOOP_NEXT это
+    // payload из двух байт, а CRC в обеих ветках считается по одним и тем же
+    // трём байтам, поэтому квитанция прибора проходит проверку без исключений.
+    private const int LegacyAcknowledgePayloadSize = 2;
     private const int LegacyMetrologyReadAttempts = 3;
     private const int LegacyFrameReadAttempts = 2;
     private const int LegacyPostOpenDelayMilliseconds = 150;
@@ -38,6 +43,10 @@ public sealed class SerialDeviceService : IDisposable
     private const int LegacyRetryDelayMilliseconds = 100;
     private const int LegacyFramePreReceiveDelayMilliseconds = 50;
     private const int LegacyMetrologyWritePreReceiveDelayMilliseconds = 150;
+    // Прибор отвечает на автокалибровку только после записи METROLOGY_DATA во
+    // FLASH, поэтому пауза перед приёмом та же, что у записи метрологии, а
+    // чтение идёт с управляющим таймаутом.
+    private const int LegacyAirCalibrationPreReceiveDelayMilliseconds = 150;
     private const byte LegacyReadSubCommand = 0x05;
     private const byte LegacyWriteSubCommand = 0xF5;
 
@@ -944,27 +953,89 @@ public sealed class SerialDeviceService : IDisposable
             $"[RequestAirCalibration]   port timeouts: read={ReadTimeoutMilliseconds}ms write={WriteTimeoutMilliseconds}ms");
         DeviceExchangeLog.Append("[RequestAirCalibration]   pausePolling=true; Sleep(2000)");
         Thread.Sleep(2000);
-        if (useLegacyCartographProtocol)
-        {
-            DeviceProtocolLog.Write(
-                $"LEGACY CONTROL REJECTED | command=0x{CommandAirCalibration:X2} | reason=no_source_backed_LOOP_NEXT_contract");
-            DeviceExchangeLog.Append("[RequestAirCalibration] END result=INVALID_RESPONSE");
-            return SerialOperationResult.InvalidResponse;
-        }
 
         lock (ioSync)
         {
-            SerialOperationResult result = ExchangeControlPacketCore(
-                CommandAirCalibration,
-                [],
-                out byte responseCommand,
-                out _);
-            SerialOperationResult finalResult = result == SerialOperationResult.Success && responseCommand != CommandAirCalibration
-                ? SerialOperationResult.InvalidResponse
-                : result;
+            SerialOperationResult finalResult = useLegacyCartographProtocol
+                ? RequestLegacyAirCalibrationCore()
+                : RequestFramedAirCalibrationCore();
             DeviceExchangeLog.Append(
                 $"[RequestAirCalibration] END result={finalResult} elapsed={Environment.TickCount64 - startedAt} ms");
             return finalResult;
+        }
+    }
+
+    private SerialOperationResult RequestFramedAirCalibrationCore()
+    {
+        SerialOperationResult result = ExchangeControlPacketCore(
+            CommandAirCalibration,
+            [],
+            out byte responseCommand,
+            out _);
+        return result == SerialOperationResult.Success && responseCommand != CommandAirCalibration
+            ? SerialOperationResult.InvalidResponse
+            : result;
+    }
+
+    /// <summary>
+    /// Автокалибровка нулей воздуха в ветке LOOP_NEXT (Картограф LWD 4tx).
+    /// Пакет запроса совпадает с length-framed веткой байт в байт: поле длины
+    /// транспорта A (<c>05 00</c> для пакета из пяти байт) здесь передаётся как
+    /// payload, поэтому на провод уходят те же <c>1A 05 00 53 57</c>. Прибор
+    /// пересчитывает Air_zz из своего скользящего среднего, пишет METROLOGY_DATA
+    /// во FLASH и отвечает квитанцией без данных.
+    /// </summary>
+    private SerialOperationResult RequestLegacyAirCalibrationCore()
+    {
+        SerialPort? port = serialPort;
+        if (port?.IsOpen != true)
+        {
+            return SerialOperationResult.NotConnected;
+        }
+
+        Span<byte> request = stackalloc byte[] { LegacyReadSubCommand, 0x00 };
+        TryDiscardBuffers(port, discardOutput: true);
+        DeviceProtocolLog.Write(
+            $"LEGACY AIR CALIBRATION START | expected_payload={LegacyAcknowledgePayloadSize} | " +
+            $"pre_receive_delay_ms={LegacyAirCalibrationPreReceiveDelayMilliseconds} | " +
+            $"read_timeout_ms={ControlReadTimeoutMilliseconds}");
+
+        int previousTimeout = port.ReadTimeout;
+        try
+        {
+            port.ReadTimeout = ControlReadTimeoutMilliseconds;
+            SerialOperationResult sendResult = LegacyToolSerialTransport.Send(port, CommandAirCalibration, request);
+            if (sendResult != SerialOperationResult.Success)
+            {
+                DeviceProtocolLog.Write($"LEGACY AIR CALIBRATION SEND FAILED | result={sendResult}");
+                return sendResult;
+            }
+
+            Thread.Sleep(LegacyAirCalibrationPreReceiveDelayMilliseconds);
+            SerialOperationResult receiveResult = LegacyToolSerialTransport.Receive(
+                port,
+                LegacyAcknowledgePayloadSize,
+                acceptZeroCrc: false,
+                out byte responseCommand,
+                out byte[] responsePayload);
+            DeviceProtocolLog.Write(
+                $"LEGACY AIR CALIBRATION RESULT | result={receiveResult} | response_cmd=0x{responseCommand:X2} | " +
+                $"response_payload={DeviceProtocolLog.FormatBytes(responsePayload)}");
+            if (receiveResult != SerialOperationResult.Success)
+            {
+                return receiveResult;
+            }
+
+            return responseCommand == CommandAirCalibration
+                ? SerialOperationResult.Success
+                : SerialOperationResult.InvalidResponse;
+        }
+        finally
+        {
+            if (port.IsOpen)
+            {
+                port.ReadTimeout = previousTimeout;
+            }
         }
     }
 
@@ -1056,7 +1127,7 @@ public sealed class SerialDeviceService : IDisposable
         Thread.Sleep(LegacyMetrologyWritePreReceiveDelayMilliseconds);
         SerialOperationResult receiveResult = LegacyToolSerialTransport.Receive(
             port,
-            payloadLength: LegacyServicePrefixSize,
+            payloadLength: LegacyAcknowledgePayloadSize,
             acceptZeroCrc: false,
             out byte responseCommand,
             out byte[] responsePayload);
