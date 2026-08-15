@@ -4,6 +4,8 @@ using AMK.DataVisualization.Charting.Series;
 using AMK.DataVisualization.Charting.Configuration;
 using AMK.DataVisualization.Core;
 using AMK.DataVisualization.Core.Adapters;
+using AMK.DataVisualization.Core.Binary;
+using AMK.DataVisualization.DeviceRegistry;
 using AMK.DataVisualization.IO.DataFiles;
 using AMK.DataVisualization.Hardware.Serial;
 using AMK.DataVisualization.Metrology;
@@ -16,6 +18,7 @@ using Windows.Storage.Pickers;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using WinRT.Interop;
+using System.Buffers.Binary;
 using System.Globalization;
 using System.Diagnostics;
 
@@ -41,6 +44,9 @@ public sealed partial class MainWindow : Window
     private readonly AutoUpdateService autoUpdateService = new();
     private readonly NotesModule notesModule = new();
     private readonly CancellationTokenSource autoUpdateCancellation = new();
+    private readonly DeviceRegistryConnection deviceRegistryConnection = new();
+    private readonly DeviceRegistryUploadFlow deviceRegistryUploadFlow;
+    private DeviceRegistryWindow? deviceRegistryWindow;
     private SchematicWindow? schematicWindow;
     private ConnectionSettingsWindow? connectionSettingsWindow;
     private MetrologyWindow? metrologyWindow;
@@ -81,6 +87,7 @@ public sealed partial class MainWindow : Window
 
     public MainWindow()
     {
+        deviceRegistryUploadFlow = new DeviceRegistryUploadFlow(deviceRegistryConnection);
         InitializeComponent();
         minimumWindowSize.Attach(WindowNative.GetWindowHandle(this));
 
@@ -282,7 +289,11 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            metrologyWindow ??= new MetrologyWindow(serialDeviceService, metrologySession, OnMetrologyUpdated);
+            metrologyWindow ??= new MetrologyWindow(
+                serialDeviceService,
+                metrologySession,
+                deviceRegistryUploadFlow,
+                OnMetrologyUpdated);
             windowScaleService.Attach(metrologyWindow, resizeWithScale: true);
             metrologyWindow.ShowForOwner(WindowNative.GetWindowHandle(this));
         }
@@ -1956,6 +1967,208 @@ public sealed partial class MainWindow : Window
         windowScaleSettingsStore.Save(windowScaleService.Settings);
     }
 
+    private void DeviceRegistryButton_Click(object sender, RoutedEventArgs e)
+    {
+        deviceRegistryWindow ??= new DeviceRegistryWindow(deviceRegistryConnection);
+        windowScaleService.Attach(deviceRegistryWindow, resizeWithScale: true);
+        deviceRegistryWindow.ShowForOwner(WindowNative.GetWindowHandle(this));
+    }
+
+    /// <summary>
+    /// Пункт «Загрузить в базу данных» появляется только тогда, когда есть что
+    /// загружать: открыт файл данных или идёт запись через COM-порт.
+    /// </summary>
+    private void UpdateUploadMenuAvailability()
+    {
+        bool hasFile = chartWorkspace.Graph1Repository.HasData;
+        bool isRecording = GetActiveRecordingPath().Length > 0;
+        UploadDataFileMenuItem.Visibility = hasFile || isRecording
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    private string GetActiveRecordingPath()
+    {
+        SerialStatusSnapshot status = serialDeviceService.GetStatus();
+        return string.IsNullOrWhiteSpace(status.RecordFilePath) ? string.Empty : status.RecordFilePath;
+    }
+
+    private async void UploadDataFileMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        UploadKind? kind = await AskDataFileKindAsync();
+        if (kind is null)
+        {
+            return;
+        }
+
+        string recordingPath = GetActiveRecordingPath();
+        bool useRecording = recordingPath.Length > 0;
+        string sourcePath = useRecording ? recordingPath : currentDataFilePath;
+
+        if (string.IsNullOrWhiteSpace(sourcePath) || !File.Exists(sourcePath))
+        {
+            await ShowNotesMessageAsync(
+                "Загрузка в базу",
+                "Нет файла для загрузки: откройте файл данных или включите запись с прибора.");
+            return;
+        }
+
+        byte[] content;
+        int frameCount;
+        try
+        {
+            content = ReadDataFileSnapshot(sourcePath);
+            frameCount = content.Length / BinaryLayoutConstants.GpToolDataSize;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            await ShowNotesMessageAsync("Загрузка в базу", $"Не удалось прочитать файл: {exception.Message}");
+            return;
+        }
+
+        if (frameCount == 0)
+        {
+            await ShowNotesMessageAsync("Загрузка в базу", "В файле нет ни одного полного кадра.");
+            return;
+        }
+
+        if (!TryDescribeDataFileDevice(content, out uint? serialNumber, out DeviceType deviceType, out int transmitterCount))
+        {
+            await ShowNotesMessageAsync(
+                "Загрузка в базу",
+                "Не удалось определить тип прибора по данным файла.");
+            return;
+        }
+
+        string description = useRecording
+            ? $"Запись с прибора: {Path.GetFileName(sourcePath)}, выгружено {frameCount} кадров на текущий момент. " +
+              "Кадры, принятые позже, в эту копию не войдут."
+            : $"Файл данных: {Path.GetFileName(sourcePath)}, {frameCount} кадров.";
+
+        await deviceRegistryUploadFlow.RunAsync(
+            Content.XamlRoot,
+            new UploadSource(
+                kind.Value,
+                content,
+                ".bin",
+                serialNumber,
+                deviceType,
+                transmitterCount,
+                description));
+    }
+
+    private async Task<UploadKind?> AskDataFileKindAsync()
+    {
+        RadioButton thermoprofileOption = new()
+        {
+            Content = UploadKind.Thermoprofile.ToDisplayName(),
+            GroupName = "UploadKind",
+            IsChecked = true
+        };
+        RadioButton kisOption = new()
+        {
+            Content = UploadKind.Kis.ToDisplayName(),
+            GroupName = "UploadKind"
+        };
+
+        StackPanel panel = new() { Spacing = 8, Width = 420 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Выберите раздел карточки прибора, в который загружается запись.",
+            TextWrapping = TextWrapping.Wrap
+        });
+        panel.Children.Add(thermoprofileOption);
+        panel.Children.Add(kisOption);
+
+        ContentDialog dialog = new()
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Тип загружаемого файла",
+            Content = panel,
+            PrimaryButtonText = "Далее",
+            CloseButtonText = "Отмена",
+            DefaultButton = ContentDialogButton.Primary
+        };
+
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return null;
+        }
+
+        return kisOption.IsChecked == true ? UploadKind.Kis : UploadKind.Thermoprofile;
+    }
+
+    /// <summary>
+    /// Читает файл целым числом кадров.
+    ///
+    /// Во время записи файл открыт на запись самим приложением, поэтому чтение
+    /// идёт с разделением доступа, а хвост обрезается по границе кадра: иначе в
+    /// базу мог бы уйти файл с половиной последней записи.
+    /// </summary>
+    private static byte[] ReadDataFileSnapshot(string path)
+    {
+        using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        long completeLength = stream.Length - (stream.Length % BinaryLayoutConstants.GpToolDataSize);
+        if (completeLength <= 0)
+        {
+            return [];
+        }
+
+        byte[] buffer = new byte[completeLength];
+        stream.ReadExactly(buffer);
+        return buffer;
+    }
+
+    /// <summary>
+    /// Определяет прибор для файла данных.
+    ///
+    /// Серийного номера в кадре измерений нет — он хранится только в
+    /// метрологии. Тип и число передатчиков берутся из сигнатуры первого кадра
+    /// самого выгружаемого файла, а серийный номер — из метрологии, но только
+    /// если её сигнатура совпадает с сигнатурой файла.
+    ///
+    /// Проверка совпадения обязательна: без неё открытый с диска файл одного
+    /// прибора получил бы серийный номер другого, подключённого сейчас, и лёг
+    /// бы в чужую карточку.
+    /// </summary>
+    private bool TryDescribeDataFileDevice(
+        byte[] content,
+        out uint? serialNumber,
+        out DeviceType deviceType,
+        out int transmitterCount)
+    {
+        serialNumber = null;
+        deviceType = DeviceType.Unknown;
+        transmitterCount = 0;
+
+        if (content.Length < BinaryLayoutConstants.GpToolDataSize)
+        {
+            return false;
+        }
+
+        uint fileSignature = BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(0, sizeof(uint)));
+        if (fileSignature == 0)
+        {
+            return false;
+        }
+
+        if (serialDeviceService.CurrentMetrology is MetrologyData deviceMetrology
+            && deviceMetrology.Signature == fileSignature)
+        {
+            serialNumber = deviceMetrology.Serial;
+        }
+        else if (metrologySession.TryGet(out MetrologyData sessionMetrology)
+            && sessionMetrology.Signature == fileSignature)
+        {
+            serialNumber = sessionMetrology.Serial;
+        }
+
+        ToolIdentity identity = UniversalCanonicalAdapter.BuildIdentity(fileSignature);
+        deviceType = identity.DeviceType;
+        transmitterCount = identity.TransmitterCount;
+        return deviceType != DeviceType.Unknown;
+    }
+
     private static void LogLoadedDataFile(string filePath, ToolDataRepository repository)
     {
         if (!repository.TryGetRecord(0, out var firstRecord))
@@ -2985,6 +3198,12 @@ public sealed partial class MainWindow : Window
         LoadedFileStatusTextBlock.Text = connected
             ? $"{serialDeviceService.ConnectedPort}  |  Кадров: {chartWorkspace.Graph1Repository.DataSize}"
             : chartWorkspace.GetStatusFileInformation();
+
+        // Здесь же, а не в отдельных местах: этот метод вызывается и при
+        // открытии файла, и на каждый принятый кадр, и при смене состояния
+        // связи — то есть ровно тогда, когда меняется наличие того, что можно
+        // выгрузить.
+        UpdateUploadMenuAvailability();
     }
 
     private static FileOpenPicker CreateDataFilePicker()
@@ -3043,6 +3262,8 @@ public sealed partial class MainWindow : Window
         deviceLogWindow = null;
         windowScaleWindow?.ClosePermanently();
         windowScaleWindow = null;
+        deviceRegistryWindow?.ClosePermanently();
+        deviceRegistryWindow = null;
         windowScaleService.ScaleChanged -= WindowScaleService_ScaleChanged;
         serialDeviceService.Dispose();
         autoUpdateService.Dispose();

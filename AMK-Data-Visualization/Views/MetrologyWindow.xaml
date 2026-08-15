@@ -102,7 +102,8 @@
             <Button Canvas.Left="400" Canvas.Top="486" Width="150" Height="36" MinHeight="0" Content="Открыть файл" FontWeight="Bold" Click="OpenFileButton_Click" />
             <Button Canvas.Left="560" Canvas.Top="486" Width="170" Height="36" MinHeight="0" Content="Сохранить файл" FontWeight="Bold" Click="SaveFileButton_Click" />
             <Button Canvas.Left="744" Canvas.Top="486" Width="186" Height="36" MinHeight="0" Content="Закрыть" FontWeight="Bold" Click="CloseButton_Click" />
-            <Button x:Name="AirCalibrationButton" Canvas.Left="260" Canvas.Top="534" Width="420" Height="36" MinHeight="0" Content="Автокалибровка нулей воздуха" FontWeight="Bold" Click="AirCalibrationButton_Click" />
+            <Button x:Name="AirCalibrationButton" Canvas.Left="10" Canvas.Top="534" Width="455" Height="36" MinHeight="0" Content="Автокалибровка нулей воздуха" FontWeight="Bold" Click="AirCalibrationButton_Click" />
+            <Button x:Name="UploadToDatabaseButton" Canvas.Left="475" Canvas.Top="534" Width="455" Height="36" MinHeight="0" Content="Загрузить в базу данных" FontWeight="Bold" Click="UploadToDatabaseButton_Click" />
         </Canvas>
     </Grid>
 </Window>

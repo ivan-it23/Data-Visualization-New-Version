@@ -19,6 +19,11 @@
                     <MenuFlyoutItem
                         Text="Открыть файл данных..."
                         Click="OpenFileButton_Click" />
+                    <MenuFlyoutItem
+                        x:Name="UploadDataFileMenuItem"
+                        Text="Загрузить в базу данных"
+                        Visibility="Collapsed"
+                        Click="UploadDataFileMenuItem_Click" />
                     <MenuFlyoutSeparator />
                     <MenuFlyoutItem
                         Text="Выход"
@@ -114,6 +119,17 @@
                 BorderThickness="0"
                 Content="Масштаб окна"
                 Click="WindowScaleButton_Click" />
+
+            <Button
+                MinWidth="0"
+                MinHeight="0"
+                Padding="12,0"
+                VerticalAlignment="Stretch"
+                AutomationProperties.Name="Связь с БД"
+                Background="Transparent"
+                BorderThickness="0"
+                Content="Связь с БД"
+                Click="DeviceRegistryButton_Click" />
         </StackPanel>
 
         <Grid

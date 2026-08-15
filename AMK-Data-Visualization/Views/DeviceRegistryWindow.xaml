@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="AMK.DataVisualization.App.Views.DeviceRegistryWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Связь с БД">
+
+    <!--
+        Все строки с содержимым имеют высоту Auto, и только последняя забирает
+        остаток. Со строкой «*» под текстом состояния он схлопывался в ноль,
+        когда содержимое не помещалось в окно, и сообщения были не видны.
+    -->
+    <Grid
+        x:Name="RootGrid"
+        Padding="20"
+        Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
+        RowSpacing="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <TextBlock
+            Grid.Row="0"
+            TextWrapping="Wrap"
+            Text="Токен доступа создаётся на сайте учёта приборов: «Профиль» → «Создать токен». Скопированный токен вставьте сюда — он сохранится и будет использоваться в следующих сессиях." />
+
+        <StackPanel Grid.Row="1" Spacing="4">
+            <TextBlock Text="Адрес сервера" />
+            <TextBox x:Name="ServerUrlTextBox" PlaceholderText="https://amk-horizon.ru" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="2" Spacing="4">
+            <TextBlock Text="Токен доступа" />
+            <PasswordBox x:Name="TokenPasswordBox" PasswordRevealMode="Peek" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="8">
+            <Button
+                x:Name="CheckConnectionButton"
+                Content="Проверить соединение"
+                Click="CheckConnectionButton_Click" />
+            <Button
+                x:Name="SaveButton"
+                Content="Сохранить"
+                Style="{StaticResource AccentButtonStyle}"
+                Click="SaveButton_Click" />
+            <Button
+                x:Name="ClearButton"
+                Content="Удалить токен"
+                Click="ClearButton_Click" />
+        </StackPanel>
+
+        <TextBlock
+            x:Name="StatusTextBlock"
+            Grid.Row="4"
+            TextWrapping="Wrap" />
+    </Grid>
+</Window>

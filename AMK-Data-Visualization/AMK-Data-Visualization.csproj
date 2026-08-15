@@ -74,6 +74,7 @@
     <ProjectReference Include="..\src\AMK.DataVisualization.Metrology\AMK.DataVisualization.Metrology.csproj" />
     <ProjectReference Include="..\src\AMK.DataVisualization.Charting\AMK.DataVisualization.Charting.csproj" />
     <ProjectReference Include="..\src\AMK.DataVisualization.Reporting\AMK.DataVisualization.Reporting.csproj" />
+    <ProjectReference Include="..\src\AMK.DataVisualization.DeviceRegistry\AMK.DataVisualization.DeviceRegistry.csproj" />
   </ItemGroup>
 
   <PropertyGroup Condition="'$(DisableHasPackageAndPublishMenuAddedByProject)'!='true' and '$(EnableMsixTooling)'=='true'">

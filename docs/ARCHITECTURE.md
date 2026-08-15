@@ -31,6 +31,7 @@ AMK-Data-Visualization.slnx
     ├── AMK.DataVisualization.Hardware/   COM-обмен
     ├── AMK.DataVisualization.Charting/   кривые, серии, заметки
     ├── AMK.DataVisualization.Metrology/  метрология и расчёты
+    ├── AMK.DataVisualization.DeviceRegistry/  обмен с базой учёта приборов
     └── AMK.DataVisualization.Reporting/  зарезервировано, реализации нет
 ```
 
@@ -56,6 +57,7 @@ Windows App SDK. Автоматизированных тестовых прое�
 | Hardware | `Serial/SerialDeviceService.cs`, `Serial/LegacyToolSerialTransport.cs`, `Serial/DeviceExchangeLog.cs`, `Serial/DeviceProtocolLog.cs` |
 | Charting | `Configuration/CurveSelectionService.cs`, `Configuration/SchematicConfigurationEditor.cs`, `Series/ChartDataCalculator.cs`, `Notes/NotesModule.cs` |
 | Metrology | `MetrologySession.cs`, `MetrologyCalculator.cs` |
+| DeviceRegistry | `DeviceRegistryClient.cs`, `DeviceRegistryModels.cs`, `DeviceRegistrySettingsStore.cs`, `UploadFileName.cs` |
 
 ## Вертикали данных
 
@@ -162,6 +164,37 @@ MetrologyWindow → прибор или файл метрологии → Metrol
 Число передатчиков входит в ключ кэша редактора компактной схемы: редактор
 создаётся до загрузки данных, и без этой проверки он навсегда оставался бы
 пятипередатчиковым.
+
+## Загрузка файлов в базу учёта приборов
+
+Обмен идёт по HTTP с сайтом учёта приборов, а не напрямую с его базой данных:
+учётные данные базы иначе пришлось бы положить внутрь установщика. Доступ даёт
+токен, который пользователь создаёт в своём профиле на сайте.
+
+Разделение ответственности:
+
+- `AMK.DataVisualization.DeviceRegistry` — протокол, разбор ответов, хранение
+  токена и построение имени файла. Ничего не знает об окнах;
+- `Services/DeviceRegistryConnection` — состояние связи на время работы
+  приложения и единственное место, где выясняется, настроена ли она;
+- `Services/DeviceRegistryUploadFlow` — весь сценарий загрузки: определение
+  прибора, подтверждение пользователем, отправка, разбор ответа. Живёт отдельно
+  от окон, потому что одинаково нужен окну метрологии и главному окну;
+- `Views/DeviceRegistryWindow` — ввод адреса и токена.
+
+Правила, которые нельзя нарушать:
+
+- **номер корпуса берётся только из ответа сервера.** В приборе его нет, и
+  подставленное значение отправит файл в базу под сочетанием, которого нет ни на
+  одной карточке: запись существует, но на сайте не видна;
+- **тип прибора определяется по `DeviceType` сигнатуры, а не по `ToolDataKind`.**
+  Картограф в canonical-слое помечен как LWD-совместимый и по виду данных ушёл бы
+  в чужой тип;
+- **соответствие типов хранит сервер.** Приложение отправляет код (`Autonom`,
+  `Lwd`, `Cartograph`), сервер переводит его в значение своей базы — иначе две
+  копии справочника разойдутся;
+- **токен не хранится открытым текстом.** На диск он попадает зашифрованным
+  DPAPI для текущего пользователя Windows.
 
 ## Диагностика обмена
 

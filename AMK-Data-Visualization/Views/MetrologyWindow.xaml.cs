@@ -1,6 +1,9 @@
 using System.Runtime.InteropServices;
 using AMK.DataVisualization.App.Services;
+using AMK.DataVisualization.Core;
+using AMK.DataVisualization.Core.Adapters;
 using AMK.DataVisualization.Core.Binary;
+using AMK.DataVisualization.DeviceRegistry;
 using AMK.DataVisualization.Hardware.Serial;
 using AMK.DataVisualization.Metrology;
 using Microsoft.UI.Windowing;
@@ -23,6 +26,7 @@ public sealed partial class MetrologyWindow : Window
     private readonly SerialDeviceService serialDeviceService;
     private readonly MetrologySession metrologySession;
     private readonly Action metrologyUpdated;
+    private readonly DeviceRegistryUploadFlow uploadFlow;
     private readonly TextBox[] l1TextBoxes;
     private readonly TextBox[] l2TextBoxes;
     private readonly TextBox[,] airTextBoxes;
@@ -32,13 +36,22 @@ public sealed partial class MetrologyWindow : Window
     private bool activated;
     private bool initializedForm;
 
+    /// <summary>
+    /// Метрология, находящаяся сейчас в окне, получена из зонда после
+    /// автокалибровки нулей воздуха. От этого зависит раздел карточки прибора,
+    /// в который уходит файл: «Калибровка» вместо «Метрология».
+    /// </summary>
+    private bool calibratedInSession;
+
     internal MetrologyWindow(
         SerialDeviceService serialDeviceService,
         MetrologySession metrologySession,
+        DeviceRegistryUploadFlow uploadFlow,
         Action metrologyUpdated)
     {
         this.serialDeviceService = serialDeviceService;
         this.metrologySession = metrologySession;
+        this.uploadFlow = uploadFlow;
         this.metrologyUpdated = metrologyUpdated;
         InitializeComponent();
         Activated += MetrologyWindow_Activated;
@@ -260,8 +273,13 @@ public sealed partial class MetrologyWindow : Window
         try
         {
             metrologySession.LoadFromFile(file.Path);
+            // Происхождение файла неизвестно, поэтому признак калибровки
+            // снимается: иначе содержимое чужого файла ушло бы в базу
+            // как результат калибровки этого прибора.
+            calibratedInSession = false;
             FillForm(metrologySession.Current!.Value);
             metrologyUpdated();
+            UpdateConnectionControls();
             await ShowMessageAsync("Метрология", "Метрология загружена из файла.");
         }
         catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException)
@@ -414,10 +432,21 @@ public sealed partial class MetrologyWindow : Window
             SetBusy(false);
         }
 
-        if (await ConfirmAsync("Автокалибровка завершена", "Перечитать метрологию из зонда?"))
-        {
-            await ReadDeviceAsync(showSuccessMessage: false);
-        }
+        // Перечитывание не предлагается, а выполняется: новые нули воздуха
+        // находятся в приборе, и до перечитывания в окне остаются
+        // докалибровочные значения. Признак калибровки поднимается только
+        // после успешного чтения — иначе в базу как «Калибровка» ушли бы
+        // именно старые значения.
+        bool reread = await ReadDeviceAsync(showSuccessMessage: false);
+        calibratedInSession = reread;
+        UpdateConnectionControls();
+
+        await ShowMessageAsync(
+            "Автокалибровка завершена",
+            reread
+                ? "Нули воздуха пересчитаны, метрология перечитана из зонда."
+                : "Нули воздуха пересчитаны, но перечитать метрологию не удалось. " +
+                  "Считайте её из зонда вручную — в окне остались значения до калибровки.");
     }
 
     private void GeometryReadOnlyCheckBox_Click(object sender, RoutedEventArgs e)
@@ -444,6 +473,56 @@ public sealed partial class MetrologyWindow : Window
         ReadDeviceButton.IsEnabled = !busy && serialDeviceService.IsConnected;
         WriteDeviceButton.IsEnabled = !busy && serialDeviceService.IsConnected;
         AirCalibrationButton.IsEnabled = !busy && serialDeviceService.IsConnected;
+
+        // Выгружать можно и без прибора: метрология могла быть открыта из файла.
+        UploadToDatabaseButton.IsEnabled = !busy && metrologySession.HasData;
+        UploadToDatabaseButton.Content = calibratedInSession
+            ? "Загрузить калибровку в базу"
+            : "Загрузить в базу данных";
+    }
+
+    /// <summary>
+    /// Отправляет 240 байт метрологии в карточку прибора. Раздел выбирается не
+    /// пользователем, а состоянием: после автокалибровки это «Калибровка»,
+    /// в остальных случаях — «Метрология».
+    /// </summary>
+    private async void UploadToDatabaseButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!metrologySession.TryGet(out MetrologyData data))
+        {
+            await ShowMessageAsync("Загрузка в базу", "Метрология не считана и не открыта из файла.");
+            return;
+        }
+
+        UploadKind kind = calibratedInSession ? UploadKind.Calibration : UploadKind.Metrology;
+        byte[] content = new byte[BinaryLayoutConstants.MetrologyDataSize];
+        MemoryMarshal.Write(content.AsSpan(), in data);
+
+        ToolIdentity identity = UniversalCanonicalAdapter.BuildIdentity(data.Signature);
+        string description = calibratedInSession
+            ? "Метрология из зонда после автокалибровки нулей воздуха"
+            : metrologySession.Source == MetrologySource.File
+                ? $"Файл метрологии: {Path.GetFileName(metrologySession.CurrentFilePath)}"
+                : "Метрология из зонда";
+
+        SetBusy(true);
+        try
+        {
+            await uploadFlow.RunAsync(
+                RootGrid.XamlRoot,
+                new UploadSource(
+                    kind,
+                    content,
+                    ".bin",
+                    data.Serial,
+                    identity.DeviceType,
+                    identity.TransmitterCount,
+                    description));
+        }
+        finally
+        {
+            SetBusy(false);
+        }
     }
 
     private void UpdateConnectionControls()

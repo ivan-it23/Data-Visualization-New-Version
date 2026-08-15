@@ -23,5 +23,8 @@
   <Project Path="src/AMK.DataVisualization.Reporting/AMK.DataVisualization.Reporting.csproj">
     <Platform Solution="*|x64" Project="Any CPU" />
   </Project>
+  <Project Path="src/AMK.DataVisualization.DeviceRegistry/AMK.DataVisualization.DeviceRegistry.csproj">
+    <Platform Solution="*|x64" Project="Any CPU" />
+  </Project>
 </Solution>
 
