@@ -22,7 +22,10 @@ public sealed partial class DeviceRegistryWindow : Window
     {
         this.connection = connection;
         InitializeComponent();
-        AppWindow.Resize(new SizeInt32(660, 560));
+        // Высота подобрана под фактическое содержимое: последняя строка сетки
+        // пустая и забирает остаток, поэтому лишняя высота превращалась в
+        // пустое место под строкой состояния.
+        AppWindow.Resize(new SizeInt32(660, 455));
         if (AppWindow.Presenter is OverlappedPresenter presenter)
         {
             presenter.IsMaximizable = false;

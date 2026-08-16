@@ -265,8 +265,10 @@ public static class DeviceExchangeLog
             $"Тип: {identity.DisplayName}",
             $"N Tx: {transmitterCount}",
             $"Мод: {finalModification}",
-            $"Номер: {finalNumber}",
-            $"Серийный \u2116: {serial}",
+            // Подписи совпадают с окном метрологии: значение из сигнатуры —
+            // серийный номер прибора, поле Serial структуры — номер корпуса.
+            $"Серийный №: {finalNumber}",
+            $"Корпус \u2116: {serial}",
             $"Позиция R1: {receiverPosition}"
         ];
         if (sondeDiameterMillimeters > 0)

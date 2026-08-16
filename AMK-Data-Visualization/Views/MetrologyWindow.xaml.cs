@@ -227,7 +227,7 @@ public sealed partial class MetrologyWindow : Window
         {
             if (!int.TryParse(serialText, out int serial) || serial < 0)
             {
-                error = "Серийный номер должен быть целым числом от 0 до 2147483647.";
+                error = "Корпус № должен быть целым числом от 0 до 2147483647.";
                 return false;
             }
 
@@ -238,7 +238,7 @@ public sealed partial class MetrologyWindow : Window
         string numberText = NumberTextBox.Text.Trim();
         if (numberText.Length > 0 && (!int.TryParse(numberText, out number) || number is < 0 or > 999))
         {
-            error = "Номер должен быть целым числом от 0 до 999.";
+            error = "Серийный № должен быть целым числом от 0 до 999.";
             return false;
         }
 
@@ -504,9 +504,10 @@ public sealed partial class MetrologyWindow : Window
         byte[] content = new byte[BinaryLayoutConstants.MetrologyDataSize];
         MemoryMarshal.Write(content.AsSpan(), in data);
 
-        // Серийный номер для учёта — поле «Номер», закодированное в сигнатуре.
-        // Поле «Серийный №» (MetrologyData.Serial) — номер для заказчика, в
-        // карточках приборов он не используется.
+        // Серийный номер для учёта закодирован в сигнатуре — это поле
+        // «Серийный №» окна. Поле «Корпус №» (MetrologyData.Serial) содержит
+        // номер корпуса и для поиска прибора не используется: номер корпуса
+        // карточки приходит из ответа сервера.
         ToolIdentity identity = UniversalCanonicalAdapter.BuildIdentity(data.Signature);
         string description = metrologySession.Source == MetrologySource.File
             ? $"Файл метрологии: {Path.GetFileName(metrologySession.CurrentFilePath)}"

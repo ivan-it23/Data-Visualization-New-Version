@@ -39,7 +39,10 @@ public static class UploadKindExtensions
     {
         return kind switch
         {
-            UploadKind.Thermoprofile => "Термопрофиль + Воздух",
+            // Разделитель «|», а не «+»: в этот раздел загружаются файлы двух
+            // разных испытаний — нагрева и подвеса на воздухе, — а не один файл,
+            // содержащий оба.
+            UploadKind.Thermoprofile => "Термопрофиль | Воздух",
             UploadKind.Metrology => "Метрология",
             UploadKind.Calibration => "Калибровка",
             UploadKind.Kis => "КИС",
