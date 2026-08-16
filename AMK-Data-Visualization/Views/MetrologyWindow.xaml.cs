@@ -494,15 +494,24 @@ public sealed partial class MetrologyWindow : Window
             return;
         }
 
-        UploadKind kind = calibratedInSession ? UploadKind.Calibration : UploadKind.Metrology;
+        UploadKind? selectedKind = await ResolveUploadKindAsync();
+        if (selectedKind is null)
+        {
+            return;
+        }
+
+        UploadKind kind = selectedKind.Value;
         byte[] content = new byte[BinaryLayoutConstants.MetrologyDataSize];
         MemoryMarshal.Write(content.AsSpan(), in data);
 
+        // Серийный номер для учёта — поле «Номер», закодированное в сигнатуре.
+        // Поле «Серийный №» (MetrologyData.Serial) — номер для заказчика, в
+        // карточках приборов он не используется.
         ToolIdentity identity = UniversalCanonicalAdapter.BuildIdentity(data.Signature);
-        string description = calibratedInSession
-            ? "Метрология из зонда после автокалибровки нулей воздуха"
-            : metrologySession.Source == MetrologySource.File
-                ? $"Файл метрологии: {Path.GetFileName(metrologySession.CurrentFilePath)}"
+        string description = metrologySession.Source == MetrologySource.File
+            ? $"Файл метрологии: {Path.GetFileName(metrologySession.CurrentFilePath)}"
+            : calibratedInSession
+                ? "Метрология из зонда после автокалибровки нулей воздуха"
                 : "Метрология из зонда";
 
         SetBusy(true);
@@ -514,7 +523,7 @@ public sealed partial class MetrologyWindow : Window
                     kind,
                     content,
                     ".bin",
-                    data.Serial,
+                    identity.Number,
                     identity.DeviceType,
                     identity.TransmitterCount,
                     description));
@@ -523,6 +532,65 @@ public sealed partial class MetrologyWindow : Window
         {
             SetBusy(false);
         }
+    }
+
+    /// <summary>
+    /// Определяет раздел карточки прибора, в который уйдёт метрология.
+    ///
+    /// Для метрологии из зонда раздел известен приложению: «Калибровка» —
+    /// только если автокалибровка была выполнена в этой сессии, иначе
+    /// «Метрология». Выбор здесь пользователю не предлагается: он ничего не
+    /// добавляет, а ошибиться позволяет.
+    ///
+    /// Для метрологии из файла всё наоборот. Приложение не знает, что именно
+    /// открыли — текущие параметры прибора или сохранённый результат
+    /// калибровки, — и знает это только пользователь.
+    /// </summary>
+    private async Task<UploadKind?> ResolveUploadKindAsync()
+    {
+        if (metrologySession.Source != MetrologySource.File)
+        {
+            return calibratedInSession ? UploadKind.Calibration : UploadKind.Metrology;
+        }
+
+        RadioButton metrologyOption = new()
+        {
+            Content = UploadKind.Metrology.ToDisplayName(),
+            GroupName = "MetrologyUploadKind",
+            IsChecked = true
+        };
+        RadioButton calibrationOption = new()
+        {
+            Content = UploadKind.Calibration.ToDisplayName(),
+            GroupName = "MetrologyUploadKind"
+        };
+
+        StackPanel panel = new() { Spacing = 8, Width = 420 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = $"Открыт файл {Path.GetFileName(metrologySession.CurrentFilePath)}. " +
+                   "Выберите раздел карточки прибора, в который его загрузить.",
+            TextWrapping = TextWrapping.Wrap
+        });
+        panel.Children.Add(metrologyOption);
+        panel.Children.Add(calibrationOption);
+
+        ContentDialog dialog = new()
+        {
+            XamlRoot = RootGrid.XamlRoot,
+            Title = "Тип загружаемой метрологии",
+            Content = panel,
+            PrimaryButtonText = "Далее",
+            CloseButtonText = "Отмена",
+            DefaultButton = ContentDialogButton.Primary
+        };
+
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return null;
+        }
+
+        return calibrationOption.IsChecked == true ? UploadKind.Calibration : UploadKind.Metrology;
     }
 
     private void UpdateConnectionControls()

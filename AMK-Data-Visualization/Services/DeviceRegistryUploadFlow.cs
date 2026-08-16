@@ -12,8 +12,9 @@ namespace AMK.DataVisualization.App.Services;
 /// <param name="Content">Содержимое файла ровно в том виде, в каком оно попало бы на диск.</param>
 /// <param name="Extension">Расширение предлагаемого имени файла.</param>
 /// <param name="SerialNumber">
-/// Серийный номер прибора. Пусто для файла данных, открытого без прибора и без
-/// метрологии: в кадре измерений серийного номера нет, есть только сигнатура.
+/// Серийный номер прибора — поле «Номер» метрологии, оно же `serial_number`
+/// карточки в базе. Кодируется в сигнатуре, поэтому известен и для файла
+/// данных, открытого без прибора.
 /// </param>
 /// <param name="DeviceType">Тип прибора из сигнатуры.</param>
 /// <param name="TransmitterCount">Число передатчиков из сигнатуры.</param>
@@ -22,7 +23,7 @@ internal sealed record UploadSource(
     UploadKind Kind,
     byte[] Content,
     string Extension,
-    uint? SerialNumber,
+    int? SerialNumber,
     DeviceType DeviceType,
     int TransmitterCount,
     string Description);
@@ -140,7 +141,7 @@ internal sealed class DeviceRegistryUploadFlow
         DeviceRegistryClient client,
         UploadSource source)
     {
-        if (source.SerialNumber is uint serial)
+        if (source.SerialNumber is int serial)
         {
             DeviceRegistryResult<RegistryDevice> resolved = await client.ResolveDeviceAsync(
                 serial,
@@ -160,17 +161,37 @@ internal sealed class DeviceRegistryUploadFlow
                 RegistryDevice? chosen = await ChooseDeviceAsync(
                     xamlRoot,
                     resolved.Devices,
-                    resolved.Message);
-                return chosen is null
-                    ? new DeviceResolution(null, string.Empty, [])
-                    : new DeviceResolution(chosen, string.Empty, []);
+                    resolved.Message,
+                    string.Empty);
+                return new DeviceResolution(chosen, string.Empty, []);
+            }
+
+            if (resolved.Code == DeviceRegistryCodes.DeviceNotFound)
+            {
+                return await OfferSameTypeDevicesAsync(xamlRoot, client, source, serial);
             }
 
             return new DeviceResolution(null, resolved.Message, []);
         }
 
-        // Серийного номера нет: в кадре измерений он не хранится. По сигнатуре
-        // известны тип и число передатчиков — по ним и предлагается выбор.
+        return await OfferSameTypeDevicesAsync(xamlRoot, client, source, serialNumber: null);
+    }
+
+    /// <summary>
+    /// Прибора с таким номером в базе нет — показываем все приборы того же типа
+    /// и с тем же числом передатчиков.
+    ///
+    /// Чаще всего это означает, что карточку прибора просто не завели или
+    /// завели с другим номером, поэтому запрет загрузки здесь был бы тупиком:
+    /// пользователь видит реальный список и либо выбирает нужный прибор, либо
+    /// идёт создавать карточку по ссылке.
+    /// </summary>
+    private async Task<DeviceResolution> OfferSameTypeDevicesAsync(
+        XamlRoot xamlRoot,
+        DeviceRegistryClient client,
+        UploadSource source,
+        int? serialNumber)
+    {
         DeviceRegistryResult<IReadOnlyList<RegistryDevice>> search = await client.SearchDevicesAsync(
             source.DeviceType,
             source.TransmitterCount,
@@ -181,26 +202,41 @@ internal sealed class DeviceRegistryUploadFlow
             return new DeviceResolution(null, search.Message, []);
         }
 
+        string typeName = DeviceTypeCodes.ToDisplayName(source.DeviceType);
+        string missing = serialNumber is int number
+            ? $"Прибор с серийным номером {number} отсутствует в базе данных. "
+            : "Серийный номер прибора определить не удалось. ";
+
         if (search.Value.Count == 0)
         {
             return new DeviceResolution(
                 null,
-                "В базе нет приборов, подходящих под сигнатуру этого файла. " +
-                "Зарегистрируйте прибор на сайте или подключите его к приложению.",
+                missing +
+                $"Приборов типа {typeName} с числом передатчиков {source.TransmitterCount} " +
+                "в базе тоже нет. Создайте карточку прибора на сайте учёта приборов.",
                 []);
         }
+
+        string explanation =
+            missing +
+            "Возможно, была проблема с созданием карточки прибора в базе. " +
+            $"Ниже представлены все существующие приборы типа {typeName} " +
+            $"с количеством передатчиков {source.TransmitterCount}. " +
+            "Если в списке нет подходящего прибора — создайте карточку прибора на сайте:";
 
         RegistryDevice? selected = await ChooseDeviceAsync(
             xamlRoot,
             search.Value,
-            "Серийный номер в файле данных не хранится. Выберите прибор, которому принадлежит запись.");
+            explanation,
+            connection.Settings.ServerUrl);
         return new DeviceResolution(selected, string.Empty, []);
     }
 
     private static async Task<RegistryDevice?> ChooseDeviceAsync(
         XamlRoot xamlRoot,
         IReadOnlyList<RegistryDevice> devices,
-        string explanation)
+        string explanation,
+        string siteUrl)
     {
         ComboBox selector = new()
         {
@@ -209,8 +245,19 @@ internal sealed class DeviceRegistryUploadFlow
             SelectedIndex = 0
         };
 
-        StackPanel panel = new() { Spacing = 12, Width = 460 };
+        StackPanel panel = new() { Spacing = 12, Width = 480 };
         panel.Children.Add(new TextBlock { Text = explanation, TextWrapping = TextWrapping.Wrap });
+
+        if (siteUrl.Length > 0 && Uri.TryCreate(siteUrl, UriKind.Absolute, out Uri? siteUri))
+        {
+            panel.Children.Add(new HyperlinkButton
+            {
+                Content = siteUrl,
+                NavigateUri = siteUri,
+                Padding = new Thickness(0)
+            });
+        }
+
         panel.Children.Add(selector);
 
         ContentDialog dialog = new()

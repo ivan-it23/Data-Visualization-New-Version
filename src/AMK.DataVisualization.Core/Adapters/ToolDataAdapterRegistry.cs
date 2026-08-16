@@ -164,8 +164,9 @@ public sealed class UniversalCanonicalAdapter : IToolDataAdapter
         DeviceType deviceType = DetermineDeviceType(toolCode);
         int transmitterCount = DetermineTransmitterCount(toolCode);
         int modification = DetermineModification(toolCode);
+        int number = ToolDataAdapterRegistry.DecodeNumber(signature);
         ToolDataKind kind = DetermineKindFromToolCode(toolCode);
-        return new ToolIdentity(signature, toolCode, deviceType, transmitterCount, modification, kind, BuildDisplayName(toolCode));
+        return new ToolIdentity(signature, toolCode, deviceType, transmitterCount, modification, number, kind, BuildDisplayName(toolCode));
     }
 
     public static string BuildDisplayName(uint toolCode)
@@ -232,6 +233,16 @@ public sealed class ToolDataAdapterRegistry
     {
         uint low20 = (signature << 12) >> 12;
         return low20 / 1000u;
+    }
+
+    /// <summary>
+    /// Номер прибора из младших разрядов сигнатуры — поле «Номер» окна
+    /// метрологии и одновременно `serial_number` карточки прибора в базе учёта.
+    /// </summary>
+    public static int DecodeNumber(uint signature)
+    {
+        uint low20 = (signature << 12) >> 12;
+        return (int)(low20 % 1000u);
     }
 
     public static ToolDataKind DetermineToolDataKind(uint signature)

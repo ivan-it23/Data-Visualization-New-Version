@@ -65,12 +65,19 @@ public sealed record ToolRecordMetadata(ToolDataKind Kind, ToolCapabilities Capa
     public static ToolRecordMetadata Empty { get; } = new(ToolDataKind.Unknown, ToolCapabilities.Empty);
 }
 
+/// <param name="Number">
+/// Номер прибора из сигнатуры — тот же, что показывает поле «Номер» окна
+/// метрологии. Именно он служит серийным номером для внутреннего учёта и
+/// совпадает с полем `serial_number` карточки прибора в базе. Поле «Серийный №»
+/// метрологии — номер для заказчика и в учёте не используется.
+/// </param>
 public readonly record struct ToolIdentity(
     uint Signature,
     uint ToolCode,
     DeviceType DeviceType,
     int TransmitterCount,
     int Modification,
+    int Number,
     ToolDataKind Kind,
     string DisplayName)
 {

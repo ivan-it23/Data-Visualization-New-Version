@@ -4,7 +4,6 @@ using AMK.DataVisualization.Charting.Series;
 using AMK.DataVisualization.Charting.Configuration;
 using AMK.DataVisualization.Core;
 using AMK.DataVisualization.Core.Adapters;
-using AMK.DataVisualization.Core.Binary;
 using AMK.DataVisualization.DeviceRegistry;
 using AMK.DataVisualization.IO.DataFiles;
 using AMK.DataVisualization.Hardware.Serial;
@@ -2013,12 +2012,24 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        // Файл выгружается ровно тем, чем он является на диске: физический кадр
+        // .DEV — 251 байт со служебным заголовком, а не 240, как у .bin и .biv.
+        FileFormat sourceFormat = ToolDataFileReader.DetectFileFormat(sourcePath);
+        if (sourceFormat == FileFormat.Unknown)
+        {
+            await ShowNotesMessageAsync(
+                "Загрузка в базу",
+                "Неподдерживаемый формат файла. Загружаются .bin, .biv и .DEV.");
+            return;
+        }
+
+        int physicalFrameSize = ToolDataFileReader.GetPhysicalFrameSize(sourceFormat);
         byte[] content;
         int frameCount;
         try
         {
-            content = ReadDataFileSnapshot(sourcePath);
-            frameCount = content.Length / BinaryLayoutConstants.GpToolDataSize;
+            content = ReadDataFileSnapshot(sourcePath, physicalFrameSize);
+            frameCount = content.Length / physicalFrameSize;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -2032,11 +2043,16 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (!TryDescribeDataFileDevice(content, out uint? serialNumber, out DeviceType deviceType, out int transmitterCount))
+        if (!TryDescribeDataFileDevice(
+                content,
+                sourceFormat,
+                out int? serialNumber,
+                out DeviceType deviceType,
+                out int transmitterCount))
         {
             await ShowNotesMessageAsync(
                 "Загрузка в базу",
-                "Не удалось определить тип прибора по данным файла.");
+                "Не удалось определить тип прибора по сигнатуре файла.");
             return;
         }
 
@@ -2050,7 +2066,7 @@ public sealed partial class MainWindow : Window
             new UploadSource(
                 kind.Value,
                 content,
-                ".bin",
+                Path.GetExtension(sourcePath),
                 serialNumber,
                 deviceType,
                 transmitterCount,
@@ -2099,16 +2115,16 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Читает файл целым числом кадров.
+    /// Читает файл целым числом физических кадров.
     ///
     /// Во время записи файл открыт на запись самим приложением, поэтому чтение
     /// идёт с разделением доступа, а хвост обрезается по границе кадра: иначе в
     /// базу мог бы уйти файл с половиной последней записи.
     /// </summary>
-    private static byte[] ReadDataFileSnapshot(string path)
+    private static byte[] ReadDataFileSnapshot(string path, int physicalFrameSize)
     {
         using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        long completeLength = stream.Length - (stream.Length % BinaryLayoutConstants.GpToolDataSize);
+        long completeLength = stream.Length - (stream.Length % physicalFrameSize);
         if (completeLength <= 0)
         {
             return [];
@@ -2120,20 +2136,17 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Определяет прибор для файла данных.
+    /// Определяет прибор по сигнатуре первого кадра выгружаемого файла.
     ///
-    /// Серийного номера в кадре измерений нет — он хранится только в
-    /// метрологии. Тип и число передатчиков берутся из сигнатуры первого кадра
-    /// самого выгружаемого файла, а серийный номер — из метрологии, но только
-    /// если её сигнатура совпадает с сигнатурой файла.
-    ///
-    /// Проверка совпадения обязательна: без неё открытый с диска файл одного
-    /// прибора получил бы серийный номер другого, подключённого сейчас, и лёг
-    /// бы в чужую карточку.
+    /// Сигнатура содержит и тип с числом передатчиков, и номер прибора, поэтому
+    /// метрология для этого не нужна: файл описывает себя сам. Смещение
+    /// сигнатуры зависит от формата — у `.DEV` перед данными идёт служебный
+    /// заголовок в 11 байт.
     /// </summary>
-    private bool TryDescribeDataFileDevice(
+    private static bool TryDescribeDataFileDevice(
         byte[] content,
-        out uint? serialNumber,
+        FileFormat format,
+        out int? serialNumber,
         out DeviceType deviceType,
         out int transmitterCount)
     {
@@ -2141,31 +2154,23 @@ public sealed partial class MainWindow : Window
         deviceType = DeviceType.Unknown;
         transmitterCount = 0;
 
-        if (content.Length < BinaryLayoutConstants.GpToolDataSize)
+        int signatureOffset = ToolDataFileReader.GetSignatureOffset(format);
+        if (content.Length < signatureOffset + sizeof(uint))
         {
             return false;
         }
 
-        uint fileSignature = BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(0, sizeof(uint)));
+        uint fileSignature = BinaryPrimitives.ReadUInt32LittleEndian(
+            content.AsSpan(signatureOffset, sizeof(uint)));
         if (fileSignature == 0)
         {
             return false;
         }
 
-        if (serialDeviceService.CurrentMetrology is MetrologyData deviceMetrology
-            && deviceMetrology.Signature == fileSignature)
-        {
-            serialNumber = deviceMetrology.Serial;
-        }
-        else if (metrologySession.TryGet(out MetrologyData sessionMetrology)
-            && sessionMetrology.Signature == fileSignature)
-        {
-            serialNumber = sessionMetrology.Serial;
-        }
-
         ToolIdentity identity = UniversalCanonicalAdapter.BuildIdentity(fileSignature);
         deviceType = identity.DeviceType;
         transmitterCount = identity.TransmitterCount;
+        serialNumber = identity.Number;
         return deviceType != DeviceType.Unknown;
     }
 

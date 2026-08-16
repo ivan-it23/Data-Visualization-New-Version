@@ -191,4 +191,16 @@ public static class DeviceTypeCodes
             _ => string.Empty
         };
     }
+
+    /// <summary>Название типа так, как он назван в карточках приборов.</summary>
+    public static string ToDisplayName(DeviceType deviceType)
+    {
+        return deviceType switch
+        {
+            DeviceType.Autonom => "Автономный",
+            DeviceType.Lwd => "LWD",
+            DeviceType.Cartograph => "Картограф",
+            _ => "неизвестного типа"
+        };
+    }
 }

@@ -89,11 +89,11 @@ public sealed class DeviceRegistryClient : IDisposable
     }
 
     /// <summary>
-    /// Определяет прибор по серийному номеру. Номер корпуса в приборе не
-    /// хранится и берётся только из ответа сервера.
+    /// Определяет прибор по серийному номеру (поле «Номер» метрологии). Номер
+    /// корпуса в приборе не хранится и берётся только из ответа сервера.
     /// </summary>
     public async Task<DeviceRegistryResult<RegistryDevice>> ResolveDeviceAsync(
-        uint serialNumber,
+        int serialNumber,
         DeviceType deviceType,
         int transmitterCount,
         CancellationToken cancellationToken)
