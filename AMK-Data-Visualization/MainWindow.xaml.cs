@@ -1003,30 +1003,36 @@ public sealed partial class MainWindow : Window
 
     private MenuFlyout BuildPresetFlyout(int graphNumber)
     {
+        // Пресеты разделены по природе измеряемой величины: фаза и амплитуда.
+        // УЭС попадает в фазовый раздел, потому что прибор считает его из
+        // разности фаз (rho_ph_smt), а «УЭС по затуханию» — в амплитудный: там
+        // обратная задача решается по затуханию.
         MenuFlyout flyout = new();
-        AddPresetMenuItem(flyout, graphNumber, "Амплитуды R1", PresetType.AllAmplitudesR1, null);
-        AddPresetMenuItem(flyout, graphNumber, "Амплитуды R2", PresetType.AllAmplitudesR2, null);
-        AddPresetMenuItem(flyout, graphNumber, "Отношение амплитуд", PresetType.AmplitudeRatios, null);
+        AddPresetGroupHeader(flyout, "Фазовые измерения");
         AddPresetMenuItem(flyout, graphNumber, "Разность фаз", PresetType.PhaseDifferences, null);
-        AddPresetMenuItem(flyout, graphNumber, "Температура", PresetType.Temperature, null);
-        flyout.Items.Add(new MenuFlyoutSeparator());
-        AddPresetMenuItem(flyout, graphNumber, "Амплитуды молчащих", PresetType.SilentAmplitudes, null);
         AddPresetMenuItem(flyout, graphNumber, "Разность фаз молчащих", PresetType.SilentPhaseDifference, null);
-        flyout.Items.Add(new MenuFlyoutSeparator());
-        AddPresetMenuItem(flyout, graphNumber, "УЭС (на приборе)", PresetType.RhoSmt, SmtComputationMode.FromSonde);
-        AddPresetMenuItem(flyout, graphNumber, "УЭС (на компьютере)", PresetType.RhoSmt, SmtComputationMode.FromComputer);
         AddPresetMenuItem(flyout, graphNumber, "Симм. фазы (на приборе)", PresetType.PhaseSmt, SmtComputationMode.FromSonde);
         AddPresetMenuItem(flyout, graphNumber, "Симм. фазы (на компьютере)", PresetType.PhaseSmt, SmtComputationMode.FromComputer);
+        AddPresetMenuItem(flyout, graphNumber, "УЭС (на приборе)", PresetType.RhoSmt, SmtComputationMode.FromSonde);
+        AddPresetMenuItem(flyout, graphNumber, "УЭС (на компьютере)", PresetType.RhoSmt, SmtComputationMode.FromComputer);
 
-        // Амплитудные виды данных есть только у приборов новой прошивки. Пункты
-        // показываются всегда, чтобы состав меню не менялся под руками, но
-        // гасятся, когда источник их не отдаёт.
-        MenuFlyoutSeparator extendedSeparator = new();
-        flyout.Items.Add(extendedSeparator);
-        AddPresetMenuItem(flyout, graphNumber, "УЭС по затуханию (на приборе)", PresetType.RhoAttSmt, SmtComputationMode.FromSonde);
-        AddPresetMenuItem(flyout, graphNumber, "УЭС по затуханию (на компьютере)", PresetType.RhoAttSmt, SmtComputationMode.FromComputer);
+        // Затухание и амплитудное УЭС есть только у приборов новой прошивки.
+        // Пункты показываются всегда, чтобы состав меню не менялся под руками,
+        // но гасятся, когда источник их не отдаёт.
+        AddPresetGroupHeader(flyout, "Амплитудные измерения");
+        AddPresetMenuItem(flyout, graphNumber, "Амплитуды R1", PresetType.AllAmplitudesR1, null);
+        AddPresetMenuItem(flyout, graphNumber, "Амплитуды R2", PresetType.AllAmplitudesR2, null);
+        AddPresetMenuItem(flyout, graphNumber, "Амплитуды молчащих", PresetType.SilentAmplitudes, null);
+        AddPresetMenuItem(flyout, graphNumber, "Отношение амплитуд", PresetType.AmplitudeRatios, null);
         AddPresetMenuItem(flyout, graphNumber, "Затухание (на приборе)", PresetType.AttDbSmt, SmtComputationMode.FromSonde);
         AddPresetMenuItem(flyout, graphNumber, "Затухание (на компьютере)", PresetType.AttDbSmt, SmtComputationMode.FromComputer);
+        AddPresetMenuItem(flyout, graphNumber, "УЭС по затуханию (на приборе)", PresetType.RhoAttSmt, SmtComputationMode.FromSonde);
+        AddPresetMenuItem(flyout, graphNumber, "УЭС по затуханию (на компьютере)", PresetType.RhoAttSmt, SmtComputationMode.FromComputer);
+
+        // Температура не относится ни к фазовым, ни к амплитудным измерениям,
+        // поэтому стоит отдельно и в разделы не входит.
+        flyout.Items.Add(new MenuFlyoutSeparator());
+        AddPresetMenuItem(flyout, graphNumber, "Температура", PresetType.Temperature, null);
 
         flyout.Opening += (_, _) =>
         {
@@ -1048,6 +1054,35 @@ public sealed partial class MainWindow : Window
             }
         };
         return flyout;
+    }
+
+    /// <summary>
+    /// Добавляет заголовок раздела в меню пресетов.
+    /// </summary>
+    /// <remarks>
+    /// У <c>MenuFlyout</c> нет собственного типа заголовка, а список
+    /// <c>Items</c> принимает только наследников <c>MenuFlyoutItemBase</c>.
+    /// Поэтому заголовок — это пункт без обработчика и без тега, отключённый
+    /// навсегда: он не нажимается, не получает фокус с клавиатуры и не
+    /// затрагивается общим обходом в <c>Opening</c>, который включает и гасит
+    /// пункты по их тегу.
+    ///
+    /// Перед всеми разделами, кроме первого, ставится разделитель.
+    /// </remarks>
+    private static void AddPresetGroupHeader(MenuFlyout flyout, string title)
+    {
+        if (flyout.Items.Count > 0)
+        {
+            flyout.Items.Add(new MenuFlyoutSeparator());
+        }
+
+        flyout.Items.Add(new MenuFlyoutItem
+        {
+            Text = title,
+            IsEnabled = false,
+            FontSize = 12,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
+        });
     }
 
     private void AddPresetMenuItem(MenuFlyout flyout, int graphNumber, string label, PresetType preset, SmtComputationMode? mode)
