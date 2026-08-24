@@ -1,4 +1,4 @@
-using AMK.DataVisualization.App.Controls;
+﻿using AMK.DataVisualization.App.Controls;
 using AMK.DataVisualization.Charting.Notes;
 using AMK.DataVisualization.Charting.Series;
 using AMK.DataVisualization.Charting.Configuration;
@@ -1018,15 +1018,33 @@ public sealed partial class MainWindow : Window
         AddPresetMenuItem(flyout, graphNumber, "Симм. фазы (на приборе)", PresetType.PhaseSmt, SmtComputationMode.FromSonde);
         AddPresetMenuItem(flyout, graphNumber, "Симм. фазы (на компьютере)", PresetType.PhaseSmt, SmtComputationMode.FromComputer);
 
+        // Амплитудные виды данных есть только у приборов новой прошивки. Пункты
+        // показываются всегда, чтобы состав меню не менялся под руками, но
+        // гасятся, когда источник их не отдаёт.
+        MenuFlyoutSeparator extendedSeparator = new();
+        flyout.Items.Add(extendedSeparator);
+        AddPresetMenuItem(flyout, graphNumber, "УЭС по затуханию (на приборе)", PresetType.RhoAttSmt, SmtComputationMode.FromSonde);
+        AddPresetMenuItem(flyout, graphNumber, "УЭС по затуханию (на компьютере)", PresetType.RhoAttSmt, SmtComputationMode.FromComputer);
+        AddPresetMenuItem(flyout, graphNumber, "Затухание (на приборе)", PresetType.AttDbSmt, SmtComputationMode.FromSonde);
+        AddPresetMenuItem(flyout, graphNumber, "Затухание (на компьютере)", PresetType.AttDbSmt, SmtComputationMode.FromComputer);
+
         flyout.Opening += (_, _) =>
         {
+            bool extendedFirmware = chartWorkspace.IsExtendedFirmwareSourceForGraph(graphNumber);
             foreach (MenuFlyoutItemBase item in flyout.Items)
             {
-                if (item is MenuFlyoutItem menuItem && menuItem.Tag is PresetMenuTag tag
-                    && tag.Mode == SmtComputationMode.FromComputer)
+                if (item is not MenuFlyoutItem menuItem || menuItem.Tag is not PresetMenuTag tag)
                 {
-                    menuItem.IsEnabled = metrologySession.HasData;
+                    continue;
                 }
+
+                bool enabled = tag.Mode != SmtComputationMode.FromComputer || metrologySession.HasData;
+                if (tag.Preset is PresetType.RhoAttSmt or PresetType.AttDbSmt)
+                {
+                    enabled = enabled && extendedFirmware;
+                }
+
+                menuItem.IsEnabled = enabled;
             }
         };
         return flyout;
@@ -1053,7 +1071,8 @@ public sealed partial class MainWindow : Window
 
         EnsureInlineEditor(graphNumber);
         SchematicConfigurationEditor editor = inlineSchematicEditors[graphNumber]!;
-        if (mode is SmtComputationMode requestedMode && preset is PresetType.RhoSmt or PresetType.PhaseSmt)
+        if (mode is SmtComputationMode requestedMode
+            && preset is PresetType.RhoSmt or PresetType.PhaseSmt or PresetType.RhoAttSmt or PresetType.AttDbSmt)
         {
             bool accepted = editor.TrySetSmtMode(preset, requestedMode, metrologySession.HasData, out string warning);
             if (!accepted && warning.Length > 0)
@@ -2012,8 +2031,9 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        // Файл выгружается ровно тем, чем он является на диске: физический кадр
-        // .DEV — 251 байт со служебным заголовком, а не 240, как у .bin и .biv.
+        // Файл выгружается ровно тем, чем он является на диске. Размер записи
+        // складывается из кадра прибора — 240 байт у старой прошивки, 320 у
+        // новой — и служебного заголовка `.DEV`.
         FileFormat sourceFormat = ToolDataFileReader.DetectFileFormat(sourcePath);
         if (sourceFormat == FileFormat.Unknown)
         {
@@ -2023,7 +2043,15 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        int physicalFrameSize = ToolDataFileReader.GetPhysicalFrameSize(sourceFormat);
+        if (!ToolDataFileReader.TryReadFileSignature(sourcePath, sourceFormat, out uint sourceSignature))
+        {
+            await ShowNotesMessageAsync("Загрузка в базу", "Не удалось прочитать сигнатуру файла.");
+            return;
+        }
+
+        int physicalFrameSize = ToolDataFileReader.GetPhysicalFrameSize(
+            sourceFormat,
+            ToolDataAdapterRegistry.DecodeFrameSize(sourceSignature));
         byte[] content;
         int frameCount;
         try
@@ -2184,14 +2212,9 @@ public sealed partial class MainWindow : Window
         DeviceExchangeLog.BeginFileSession(filePath);
         DeviceExchangeLog.SetRawDataAvailable(false);
         DeviceExchangeLog.Append($"Файл загружен: {filePath}");
-        uint low20 = (firstRecord.Signature << 12) >> 12;
-        int modification = (int)((low20 % 10000u) / 1000u);
-        int number = (int)(low20 % 1000u);
         DeviceExchangeLog.AppendDeviceIdentity(
             firstRecord.Signature,
-            0,
-            modification: modification,
-            number: number,
+            serial: 0,
             rxPosition: 0,
             sondeDiameterMillimeters: 0);
     }

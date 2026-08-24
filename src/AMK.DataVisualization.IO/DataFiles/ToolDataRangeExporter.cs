@@ -54,7 +54,16 @@ public static class ToolDataRangeExporter
                 return false;
             }
 
-            int physicalFrameSize = ToolDataFileReader.GetPhysicalFrameSize(sourceFormat);
+            // Шаг записи берётся из проверки самого файла: у нового прибора
+            // кадр 320 байт, и посчитанный по константе шаг разрезал бы файл
+            // не по границам записей.
+            DataFileValidationResult validation = ToolDataFileReader.ValidateDataFile(sourceFileName);
+            if (!validation.IsValid)
+            {
+                return false;
+            }
+
+            int physicalFrameSize = validation.PhysicalFrameSize;
 
             // Only complete frames are copied. A source whose recording stopped
             // mid-record is accepted here for the same reason the reader accepts it,
@@ -99,7 +108,12 @@ public static class ToolDataRangeExporter
 
     private static bool WriteCanonicalDataRange(FileStream stream, ToolDataRepository repository, int startIndex, int endIndex)
     {
-        byte[] buffer = new byte[BinaryLayoutConstants.GpToolDataSize];
+        // Кадр в памяти всегда 320 байт, но на диск уходит ровно столько, сколько
+        // отдал прибор: у источника старой прошивки хвост canonical-структуры
+        // заполнен нулями приложением, и записывать его означало бы выдавать
+        // собственные нули за данные прибора.
+        int frameSize = repository.FrameSize;
+        byte[] buffer = new byte[BinaryLayoutConstants.CanonicalFrameSize];
         for (int index = startIndex; index <= endIndex; index++)
         {
             if (!repository.TryGetRecord(index, out GpToolData record))
@@ -107,16 +121,16 @@ public static class ToolDataRangeExporter
                 return false;
             }
 
-            WriteCanonicalRecord(stream, record, buffer);
+            WriteSourceSizedRecord(stream, record, buffer, frameSize);
         }
 
         return true;
     }
 
-    private static void WriteCanonicalRecord(FileStream stream, GpToolData record, byte[] buffer)
+    private static void WriteSourceSizedRecord(FileStream stream, GpToolData record, byte[] buffer, int frameSize)
     {
         MemoryMarshal.Write(buffer.AsSpan(), in record);
-        stream.Write(buffer, 0, buffer.Length);
+        stream.Write(buffer, 0, frameSize);
     }
 
     private static bool ReadExactly(FileStream stream, byte[] buffer)

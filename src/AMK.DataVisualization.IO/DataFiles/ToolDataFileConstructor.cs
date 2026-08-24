@@ -1,7 +1,8 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using AMK.DataVisualization.Core;
+using AMK.DataVisualization.Core.Adapters;
 using AMK.DataVisualization.Core.Binary;
 
 namespace AMK.DataVisualization.IO.DataFiles;
@@ -196,11 +197,22 @@ public static class ToolDataFileConstructor
         }
 
         DataFileValidationResult validation = ToolDataFileReader.ValidateDataFile(targetFilePath);
-        if (!validation.IsValid || validation.Format != FileFormat.Bin
-            || validation.PhysicalFrameSize != BinaryLayoutConstants.GpToolDataSize)
+        int appendedFrameSize = ToolDataAdapterRegistry.DecodeFrameSize(appendedSignature);
+        if (!validation.IsValid || validation.Format != FileFormat.Bin)
         {
             throw new InvalidDataException(
-                "Добавление поддерживается только для канонических .bin файлов по 240 байт на кадр.");
+                "Добавление поддерживается только для канонических .bin файлов.");
+        }
+
+        // Файлы двух поколений прошивки смешивать нельзя: у них разный размер
+        // записи, и в собранном файле границы кадров разъедутся. Сигнатуры
+        // сверяются ниже, но размер проверяем отдельно — сообщение об ошибке
+        // должно называть настоящую причину.
+        if (validation.FrameSize != appendedFrameSize)
+        {
+            throw new InvalidDataException(
+                $"Целевой файл записан кадрами по {validation.FrameSize} байт, "
+                + $"а добавляемые данные — по {appendedFrameSize}. Такие файлы не объединяются.");
         }
 
         DataLoadResult targetData = ToolDataFileReader.LoadDataFromFile(targetFilePath);
@@ -448,13 +460,17 @@ public static class ToolDataFileConstructor
 
         try
         {
+            // Все записи собранного файла имеют одну сигнатуру (проверено
+            // выше), а значит и один размер кадра. Пишем ровно его: 240 байт
+            // для старой прошивки, 320 для новой.
+            int frameSize = ToolDataAdapterRegistry.DecodeFrameSize(records[0].Signature);
             using (FileStream stream = new(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
-                byte[] buffer = new byte[BinaryLayoutConstants.GpToolDataSize];
+                byte[] buffer = new byte[BinaryLayoutConstants.CanonicalFrameSize];
                 foreach (GpToolData record in records)
                 {
                     MemoryMarshal.Write(buffer.AsSpan(), in record);
-                    stream.Write(buffer);
+                    stream.Write(buffer.AsSpan(0, frameSize));
                 }
 
                 stream.Flush(true);

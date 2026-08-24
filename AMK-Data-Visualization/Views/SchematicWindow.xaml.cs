@@ -20,7 +20,20 @@ namespace AMK.DataVisualization.App.Views;
 public sealed partial class SchematicWindow : Window
 {
     private const int WindowWidth = 820;
-    private const int WindowHeight = 569;
+
+    // Окно нерастягиваемое, поэтому его высота — это сумма рядов правой
+    // колонки, и добавление ряда требует пересчёта. Ряды: заголовок «Быстрые
+    // пресеты» (~20), сетка пресетов (2 кнопки по 32 + зазор), блоки «УЭС» и
+    // «Симм. фазы» (~113), блоки «УЭС по затуханию» и «Затухание» (~113),
+    // кнопки молчащих каналов (32), четыре зазора по 6. Ниже — ряд «Применить»
+    // и «Отмена» (32), над колонкой — схема прибора и выбор частоты с осью X.
+    //
+    // Значение с запасом: при 569 обрезался весь ряд амплитудных величин, при
+    // 675 не помещался последний ряд кнопок.
+    //
+    // Верхний предел задаёт масштаб окон: WindowScaleService увеличивает
+    // базовый размер до 125 %, то есть до 1025x900 физических пикселей.
+    private const int WindowHeight = 720;
     private const int WindowOwnerIndex = -8;
     private const int WindowExtendedStyleIndex = -20;
     private const int ClassIconIndex = -14;
@@ -242,6 +255,24 @@ public sealed partial class SchematicWindow : Window
         PhaseFromSondeCheckBox.IsChecked = phaseActive && editor.Selection.PhaseSmtMode == SmtComputationMode.FromSonde;
         PhaseFromComputerCheckBox.IsChecked = phaseActive && editor.Selection.PhaseSmtMode == SmtComputationMode.FromComputer;
         PhaseFromComputerCheckBox.IsEnabled = metrologySession.HasData;
+
+        // Амплитудные виды данных отдаёт только прибор новой прошивки. Панель
+        // остаётся на месте, чтобы состав окна не менялся под руками, но её
+        // флажки недоступны и она приглушена.
+        bool extendedFirmware = chartWorkspace.IsExtendedFirmwareSourceForGraph(targetGraphNumber);
+        ExtendedSmtPanel.Opacity = extendedFirmware ? 1.0 : 0.5;
+
+        bool rhoAttActive = extendedFirmware && editor.Selection.DataFilter == DataTypeFilter.RhoAttSmtOnly;
+        RhoAttFromSondeCheckBox.IsChecked = rhoAttActive && editor.Selection.RhoAttSmtMode == SmtComputationMode.FromSonde;
+        RhoAttFromComputerCheckBox.IsChecked = rhoAttActive && editor.Selection.RhoAttSmtMode == SmtComputationMode.FromComputer;
+        RhoAttFromSondeCheckBox.IsEnabled = extendedFirmware;
+        RhoAttFromComputerCheckBox.IsEnabled = extendedFirmware && metrologySession.HasData;
+
+        bool attDbActive = extendedFirmware && editor.Selection.DataFilter == DataTypeFilter.AttDbSmtOnly;
+        AttDbFromSondeCheckBox.IsChecked = attDbActive && editor.Selection.AttDbSmtMode == SmtComputationMode.FromSonde;
+        AttDbFromComputerCheckBox.IsChecked = attDbActive && editor.Selection.AttDbSmtMode == SmtComputationMode.FromComputer;
+        AttDbFromSondeCheckBox.IsEnabled = extendedFirmware;
+        AttDbFromComputerCheckBox.IsEnabled = extendedFirmware && metrologySession.HasData;
     }
 
     private void RefreshCurveList()

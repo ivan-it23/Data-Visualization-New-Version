@@ -10,8 +10,15 @@ public static class ToolDataFileReader
     private const string UnsupportedFormatMessage = "Неподдерживаемый формат файла";
     private const string OpenErrorMessage = "Не удалось открыть файл данных";
     private const string ShortFileMessage = "Файл слишком короткий или не содержит корректную сигнатуру";
-    private const string UnsupportedSignatureMessage = "Файл содержит неподдерживаемую сигнатуру или формат. Поддерживаются Автономный, LWD и Картограф с четырьмя передатчиками в режиме LWD 4tx с canonical GP_TOOL_DATA по 240 байт на кадр.";
-    private const string InvalidSizeMessage = "Файл не содержит ни одного полного кадра. Ожидается не менее 240 байт (или 251 для .DEV).";
+    private const string UnsupportedSignatureMessage = "Файл содержит неподдерживаемую сигнатуру или формат. Поддерживаются Автономный, LWD и Картограф с четырьмя передатчиками в режиме LWD 4tx: кадр 240 байт у старой прошивки и 320 байт у новой.";
+    private const string InvalidSizeMessage = "Файл не содержит ни одного полного кадра.";
+    private const string AmbiguousLayoutMessage = "Размер кадра файла не удалось определить: сигнатура первого кадра не подтверждается ни на 240, ни на 320 байтах шага.";
+
+    /// <summary>
+    /// Сколько записей проверяется при подтверждении шага. Достаточно, чтобы
+    /// отсечь случайное совпадение, и не заставляет читать весь файл.
+    /// </summary>
+    private const int LayoutProbeFrameCount = 4;
 
     public static FileFormat DetectFileFormat(string fileName)
     {
@@ -24,11 +31,15 @@ public static class ToolDataFileReader
         };
     }
 
-    public static int GetPhysicalFrameSize(FileFormat format)
+    /// <summary>
+    /// Размер физической записи: кадр измерений плюс служебный заголовок
+    /// `.DEV`. Размер самого кадра задаёт прибор, а не расширение файла.
+    /// </summary>
+    public static int GetPhysicalFrameSize(FileFormat format, int frameSize)
     {
         return format == FileFormat.Dev
-            ? BinaryLayoutConstants.DevPhysicalFrameSize
-            : BinaryLayoutConstants.GpToolDataSize;
+            ? BinaryLayoutConstants.DevPhysicalFrameSize(frameSize)
+            : frameSize;
     }
 
     public static int GetSignatureOffset(FileFormat format)
@@ -67,11 +78,18 @@ public static class ToolDataFileReader
             return DataFileValidationResult.Invalid(UnsupportedSignatureMessage, format);
         }
 
-        int physicalFrameSize = GetPhysicalFrameSize(format);
+        if (!TryResolveFrameSize(fileName, format, signature, fileSize, out int frameSize))
+        {
+            return DataFileValidationResult.Invalid(AmbiguousLayoutMessage, format);
+        }
+
+        int physicalFrameSize = GetPhysicalFrameSize(format, frameSize);
         int frameCount = checked((int)(fileSize / physicalFrameSize));
         if (frameCount == 0)
         {
-            return DataFileValidationResult.Invalid(InvalidSizeMessage, format);
+            return DataFileValidationResult.Invalid(
+                $"{InvalidSizeMessage} Ожидается не менее {physicalFrameSize} байт.",
+                format);
         }
 
         // A trailing partial frame is tolerated instead of failing the whole file.
@@ -90,7 +108,8 @@ public static class ToolDataFileReader
             physicalFrameSize,
             fileSize,
             frameCount,
-            trailingByteCount);
+            trailingByteCount,
+            frameSize);
     }
 
     public static bool TryValidateDataFile(string fileName, out DataFileValidationResult result)
@@ -111,7 +130,7 @@ public static class ToolDataFileReader
         List<ToolRecordMetadata> metadata = new(validation.FrameCount);
 
         using FileStream stream = File.OpenRead(fileName);
-        byte[] rawFrame = new byte[BinaryLayoutConstants.GpToolDataSize];
+        byte[] rawFrame = new byte[validation.FrameSize];
         int skippedFrameCount = 0;
         for (int index = 0; index < validation.FrameCount; index++)
         {
@@ -147,7 +166,8 @@ public static class ToolDataFileReader
             validation.Format,
             validation.PhysicalFrameSize,
             validation.TrailingByteCount,
-            skippedFrameCount);
+            skippedFrameCount,
+            validation.FrameSize);
     }
 
     public static bool TryLoadDataFromFile(string fileName, out DataLoadResult? result, out string? errorMessage)
@@ -188,6 +208,95 @@ public static class ToolDataFileReader
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Определяет размер кадра в записях файла.
+    /// </summary>
+    /// <remarks>
+    /// Первым кандидатом идёт размер из сигнатуры — это ответ прибора, и в
+    /// подавляющем большинстве случаев он и подтверждается. Но сигнатуры
+    /// старых приборов несут мусор в старших битах, а признак новой прошивки
+    /// как раз в старших разрядах, поэтому одной сигнатуре доверять нельзя:
+    /// выбранный размер обязан подтвердиться на самом файле — на шаге кандидата
+    /// в начале каждой записи должна лежать та же сигнатура.
+    ///
+    /// Файл, состоящий ровно из одного кадра, подтвердить нечем; тогда
+    /// работает размер из сигнатуры, если он совпадает с длиной файла.
+    /// </remarks>
+    private static bool TryResolveFrameSize(
+        string fileName,
+        FileFormat format,
+        uint signature,
+        long fileSize,
+        out int frameSize)
+    {
+        frameSize = 0;
+        int signatureFrameSize = ToolDataAdapterRegistry.DecodeFrameSize(signature);
+
+        try
+        {
+            using FileStream stream = File.OpenRead(fileName);
+            if (TryConfirmFrameSize(stream, format, signature, fileSize, signatureFrameSize))
+            {
+                frameSize = signatureFrameSize;
+                return true;
+            }
+
+            foreach (int candidate in ToolSignature.KnownFrameSizes)
+            {
+                if (candidate != signatureFrameSize
+                    && TryConfirmFrameSize(stream, format, signature, fileSize, candidate))
+                {
+                    frameSize = candidate;
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+
+        return false;
+    }
+
+    private static bool TryConfirmFrameSize(
+        FileStream stream,
+        FileFormat format,
+        uint signature,
+        long fileSize,
+        int candidateFrameSize)
+    {
+        int physicalFrameSize = GetPhysicalFrameSize(format, candidateFrameSize);
+        long availableFrames = fileSize / physicalFrameSize;
+        if (availableFrames == 0)
+        {
+            return false;
+        }
+
+        if (availableFrames == 1)
+        {
+            // Подтверждать нечем: принимаем только размер, названный самим
+            // прибором, и только если файл действительно содержит один кадр
+            // такого размера.
+            return candidateFrameSize == ToolDataAdapterRegistry.DecodeFrameSize(signature);
+        }
+
+        int signatureOffset = GetSignatureOffset(format);
+        int probeCount = (int)Math.Min(availableFrames, LayoutProbeFrameCount);
+        Span<byte> buffer = stackalloc byte[sizeof(uint)];
+        for (int index = 1; index < probeCount; index++)
+        {
+            stream.Position = (index * (long)physicalFrameSize) + signatureOffset;
+            if (stream.ReadAtLeast(buffer, buffer.Length, throwOnEndOfStream: false) != buffer.Length
+                || BinaryPrimitives.ReadUInt32LittleEndian(buffer) != signature)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool ReadParsedFrameAt(

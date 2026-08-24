@@ -18,8 +18,17 @@ public interface IToolDataAdapter
 
     bool SupportsFileFormat(FileFormat format);
 
-    int RawFrameSize { get; }
+    /// <summary>
+    /// Физический размер кадра, который отдаёт прибор с этой сигнатурой.
+    /// </summary>
+    int GetRawFrameSize(uint signature);
 
+    /// <summary>
+    /// Приводит кадр к canonical-структуре. Длина <paramref name="rawFrame"/>
+    /// обязана совпадать с размером, который даёт сигнатура этого же кадра:
+    /// расхождение означает рассинхронизацию с источником и разбором не
+    /// лечится.
+    /// </summary>
     bool TryParseRawFrame(ReadOnlySpan<byte> rawFrame, out ParsedToolFrame frame);
 }
 
@@ -34,11 +43,14 @@ public sealed class UniversalCanonicalAdapter : IToolDataAdapter
 
     public ToolCapabilities Capabilities => ToolCapabilities.Empty;
 
-    public int RawFrameSize => BinaryLayoutConstants.GpToolDataSize;
+    public int GetRawFrameSize(uint signature)
+    {
+        return ToolSignature.DecodeFrameSize(signature);
+    }
 
     public bool CanHandleSignature(uint signature)
     {
-        return IsSupportedToolCode(ToolDataAdapterRegistry.DecodeToolCode(signature));
+        return ToolSignature.TryDecode(signature, out _);
     }
 
     public bool SupportsFileFormat(FileFormat format)
@@ -49,21 +61,33 @@ public sealed class UniversalCanonicalAdapter : IToolDataAdapter
     public bool TryParseRawFrame(ReadOnlySpan<byte> rawFrame, out ParsedToolFrame frame)
     {
         frame = default;
-        if (rawFrame.Length != BinaryLayoutConstants.GpToolDataSize)
+        if (rawFrame.Length < sizeof(uint))
         {
             return false;
         }
 
-        GpToolData canonicalData = MemoryMarshal.Read<GpToolData>(rawFrame);
-        if (!CanHandleSignature(canonicalData.Signature))
+        uint signature = MemoryMarshal.Read<uint>(rawFrame[..sizeof(uint)]);
+        if (!ToolSignature.TryDecode(signature, out ToolSignatureInfo info))
         {
             return false;
         }
 
-        uint toolCode = ToolDataAdapterRegistry.DecodeToolCode(canonicalData.Signature);
-        ToolDataKind kind = DetermineKindFromToolCode(toolCode);
-        ToolCapabilities capabilities = BuildCapabilities(toolCode);
-        frame = new ParsedToolFrame(kind, capabilities, canonicalData);
+        // Длина кадра — не подсказка, а часть контракта: сигнатура говорит,
+        // сколько байт обязан был отдать источник. Кадр другой длины означает,
+        // что чтение сдвинулось, и разбирать его нельзя.
+        if (rawFrame.Length != info.FrameSize)
+        {
+            return false;
+        }
+
+        // Кадр старой прошивки ложится в первые 240 байт canonical-структуры,
+        // хвост остаётся нулевым: общая часть в новой прошивке не сдвинулась.
+        GpToolData canonicalData = default;
+        Span<byte> canonicalBytes = MemoryMarshal.AsBytes(new Span<GpToolData>(ref canonicalData));
+        rawFrame.CopyTo(canonicalBytes);
+
+        ToolCapabilities capabilities = BuildCapabilities(info);
+        frame = new ParsedToolFrame(capabilities.Kind, capabilities, canonicalData);
         return true;
     }
 
@@ -127,12 +151,23 @@ public sealed class UniversalCanonicalAdapter : IToolDataAdapter
 
     public static ToolCapabilities BuildCapabilities(uint toolCode)
     {
-        int transmitterCount = DetermineTransmitterCount(toolCode);
-        ToolDataKind kind = DetermineKindFromToolCode(toolCode);
+        return BuildCapabilities(new ToolSignatureInfo(
+            0,
+            FirmwareGeneration.Legacy,
+            BinaryLayoutConstants.LegacyFrameSize,
+            toolCode,
+            0));
+    }
+
+    public static ToolCapabilities BuildCapabilities(ToolSignatureInfo info)
+    {
+        int transmitterCount = DetermineTransmitterCount(info.ToolCode);
+        ToolDataKind kind = DetermineKindFromToolCode(info.ToolCode);
+        bool extended = info.Generation == FirmwareGeneration.Extended;
         return new ToolCapabilities(
             kind,
             transmitterCount,
-            DetermineAmplitudeScale(toolCode),
+            DetermineAmplitudeScale(info.ToolCode),
             transmitterCount >= BinaryLayoutConstants.MaxTransmitterCount,
             HasSeparatePhaseRx: true,
             HasDeltaPhase: true,
@@ -145,7 +180,11 @@ public sealed class UniversalCanonicalAdapter : IToolDataAdapter
             SupportsBivContainer: true,
             SupportsDevContainer: true,
             SupportsComPolling: true,
-            SupportsSilentData: true);
+            SupportsSilentData: true,
+            FrameSize: info.FrameSize,
+            HasSondeRhoAttSmt: extended,
+            HasSondeAttDbSmt: extended,
+            HasAirAttenuation: extended);
     }
 
     public static float DetermineAmplitudeScale(uint toolCode)
@@ -160,13 +199,21 @@ public sealed class UniversalCanonicalAdapter : IToolDataAdapter
 
     public static ToolIdentity BuildIdentity(uint signature)
     {
-        uint toolCode = ToolDataAdapterRegistry.DecodeToolCode(signature);
-        DeviceType deviceType = DetermineDeviceType(toolCode);
-        int transmitterCount = DetermineTransmitterCount(toolCode);
-        int modification = DetermineModification(toolCode);
-        int number = ToolDataAdapterRegistry.DecodeNumber(signature);
-        ToolDataKind kind = DetermineKindFromToolCode(toolCode);
-        return new ToolIdentity(signature, toolCode, deviceType, transmitterCount, modification, number, kind, BuildDisplayName(toolCode));
+        ToolSignatureInfo info = ToolSignature.Decode(signature);
+        DeviceType deviceType = DetermineDeviceType(info.ToolCode);
+        int transmitterCount = DetermineTransmitterCount(info.ToolCode);
+        int modification = DetermineModification(info.ToolCode);
+        ToolDataKind kind = DetermineKindFromToolCode(info.ToolCode);
+        return new ToolIdentity(
+            signature,
+            info.ToolCode,
+            deviceType,
+            transmitterCount,
+            modification,
+            info.Number,
+            kind,
+            BuildDisplayName(info.ToolCode),
+            info.FrameSize);
     }
 
     public static string BuildDisplayName(uint toolCode)
@@ -229,10 +276,17 @@ public sealed class ToolDataAdapterRegistry
         return FindAdapterBySignature(signature) is not null;
     }
 
+    /// <summary>
+    /// Физический размер кадра источника с такой сигнатурой.
+    /// </summary>
+    public static int DecodeFrameSize(uint signature)
+    {
+        return ToolSignature.DecodeFrameSize(signature);
+    }
+
     public static uint DecodeToolCode(uint signature)
     {
-        uint low20 = (signature << 12) >> 12;
-        return low20 / 1000u;
+        return ToolSignature.DecodeToolCode(signature);
     }
 
     /// <summary>
@@ -242,8 +296,7 @@ public sealed class ToolDataAdapterRegistry
     /// </summary>
     public static int DecodeNumber(uint signature)
     {
-        uint low20 = (signature << 12) >> 12;
-        return (int)(low20 % 1000u);
+        return ToolSignature.DecodeNumber(signature);
     }
 
     public static ToolDataKind DetermineToolDataKind(uint signature)

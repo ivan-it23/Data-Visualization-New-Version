@@ -154,6 +154,7 @@ public static class ChartDataCalculator
         List<float> output = curve.DataType switch
         {
             DataType.RhoSmt => CalculateFilteredRhoSmtData(records, metadata, curve, minX, maxX, minY, maxY, metrology),
+            DataType.RhoAttSmt => CalculateFilteredRhoAttSmtData(records, metadata, curve, minX, maxX, minY, maxY, metrology),
             DataType.Temperature => CalculateFilteredTemperatureData(records, metadata, minX, maxX, minY, maxY),
             _ => CalculateAlignedSingleCurveData(records, metadata, curve, minX, maxX, minY, maxY, metrology)
         };
@@ -211,6 +212,8 @@ public static class ChartDataCalculator
             case DataType.AmplitudeRx2:
             case DataType.PhaseSmt:
             case DataType.RhoSmt:
+            case DataType.AttDbSmt:
+            case DataType.RhoAttSmt:
                 CalculateActiveTransmitterData(records, metadata, request, window, frequencyIndex, output);
                 break;
 
@@ -241,6 +244,11 @@ public static class ChartDataCalculator
         if (curve.DataType == DataType.PhaseSmt && curve.SmtMode == SmtComputationMode.FromComputer)
         {
             return CalculateComputerPhaseSmtData(records, metadata, curve, minX, maxX, minY, maxY, metrology);
+        }
+
+        if (curve.DataType == DataType.AttDbSmt && curve.SmtMode == SmtComputationMode.FromComputer)
+        {
+            return CalculateComputerAttDbSmtData(records, metadata, curve, minX, maxX, minY, maxY, metrology);
         }
 
         if (curve.DataType is DataType.SilentAmplitudeRx1 or DataType.SilentAmplitudeRx2 or DataType.SilentPhaseDifference)
@@ -325,6 +333,113 @@ public static class ChartDataCalculator
             {
                 output.Add(value);
             }
+        }
+
+        return output;
+    }
+
+    /// <summary>
+    /// Амплитудное УЭС: расчёт приложением, если метрология прочитана, иначе
+    /// значение, пришедшее от прибора. Устроено так же, как ветка фазового УЭС.
+    /// </summary>
+    private static List<float> CalculateFilteredRhoAttSmtData(
+        IReadOnlyList<GpToolData> records,
+        IReadOnlyList<ToolRecordMetadata> metadata,
+        CurveDefinition curve,
+        double minX,
+        double maxX,
+        double minY,
+        double maxY,
+        MetrologyData? metrology)
+    {
+        DataIndexWindow window = GetDataIndexRange(records.Count, minX, maxX);
+        if (window.StartIndex >= window.EndIndex || curve.ElementIndex < 0)
+        {
+            return [];
+        }
+
+        int frequencyIndex = curve.Frequency == FrequencyBand.Freq400KHz ? 0 : 1;
+        List<float> output = new(window.Count);
+        for (int recordIndex = window.StartIndex; recordIndex < window.EndIndex; recordIndex++)
+        {
+            MeasurementView measurement = CreateMeasurementView(records, metadata, recordIndex);
+            ToolDataAccessView view = measurement.CreateAccessView();
+            bool hasValue = false;
+            float value = 0.0f;
+            if (curve.SmtMode == SmtComputationMode.FromComputer
+                && metrology is { } activeMetrology)
+            {
+                hasValue = MetrologyCalculator.TryCalculateRhoAttSmt(
+                    activeMetrology,
+                    measurement,
+                    frequencyIndex,
+                    curve.ElementIndex,
+                    out value);
+            }
+
+            if (!hasValue)
+            {
+                hasValue = view.TryGetRhoAttSmt(frequencyIndex, curve.ElementIndex, out value);
+            }
+
+            if (!hasValue)
+            {
+                continue;
+            }
+
+            if (value >= minY && value <= maxY)
+            {
+                output.Add(value);
+            }
+        }
+
+        return output;
+    }
+
+    /// <summary>
+    /// Симметризованное затухание в расчёте приложения, с откатом на значение
+    /// прибора.
+    /// </summary>
+    private static List<float> CalculateComputerAttDbSmtData(
+        IReadOnlyList<GpToolData> records,
+        IReadOnlyList<ToolRecordMetadata> metadata,
+        CurveDefinition curve,
+        double minX,
+        double maxX,
+        double minY,
+        double maxY,
+        MetrologyData? metrology)
+    {
+        DataIndexWindow window = GetDataIndexRange(records.Count, minX, maxX);
+        if (window.StartIndex >= window.EndIndex || curve.ElementIndex < 0)
+        {
+            return [];
+        }
+
+        int frequencyIndex = curve.Frequency == FrequencyBand.Freq400KHz ? 0 : 1;
+        List<float> output = new(window.Count);
+        for (int recordIndex = window.StartIndex; recordIndex < window.EndIndex; recordIndex++)
+        {
+            MeasurementView measurement = CreateMeasurementView(records, metadata, recordIndex);
+            ToolDataAccessView view = measurement.CreateAccessView();
+            bool hasValue = false;
+            float value = 0.0f;
+            if (metrology is { } activeMetrology)
+            {
+                hasValue = MetrologyCalculator.TryCalculateAttDbSmt(
+                    activeMetrology,
+                    measurement,
+                    frequencyIndex,
+                    curve.ElementIndex,
+                    out value);
+            }
+
+            if (!hasValue)
+            {
+                hasValue = view.TryGetAttDbSmt(frequencyIndex, curve.ElementIndex, out value);
+            }
+
+            AppendAlignedFilteredPlotValue(output, hasValue, value, minY, maxY);
         }
 
         return output;
@@ -560,6 +675,12 @@ public static class ChartDataCalculator
 
             case DataType.RhoSmt:
                 return view.TryGetRhoSmt(frequencyIndex, transmitterIndex, out value);
+
+            case DataType.AttDbSmt:
+                return view.TryGetAttDbSmt(frequencyIndex, transmitterIndex, out value);
+
+            case DataType.RhoAttSmt:
+                return view.TryGetRhoAttSmt(frequencyIndex, transmitterIndex, out value);
 
             default:
                 return false;

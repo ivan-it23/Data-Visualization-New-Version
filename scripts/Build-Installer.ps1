@@ -95,6 +95,7 @@ $requiredPublishedFiles = @(
     'Views\MetrologyWindow.xbf'
     'Views\NotesJournalWindow.xbf'
     'Views\DeviceLogWindow.xbf'
+    'Views\DeviceRegistryWindow.xbf'
     'Views\SchematicWindow.xbf'
     'Views\WindowScaleWindow.xbf'
     'Microsoft.ui.xaml.dll'

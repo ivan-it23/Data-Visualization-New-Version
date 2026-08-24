@@ -237,8 +237,6 @@ public static class DeviceExchangeLog
     public static void AppendDeviceIdentity(
         uint signature,
         uint serial,
-        int modification = -1,
-        int number = -1,
         uint rxPosition = 0,
         uint sondeDiameterMillimeters = 0)
     {
@@ -247,29 +245,28 @@ public static class DeviceExchangeLog
             return;
         }
 
+        // Всё, что кодирует сигнатура, разбирает единственный декодер
+        // ToolSignature. Раньше здесь дублировалось маскирование младших
+        // 20 бит, и на сигнатуре новой прошивки, где размер кадра лежит в
+        // старших разрядах, это давало чужие число передатчиков, модификацию
+        // и номер.
         ToolIdentity identity = UniversalCanonicalAdapter.BuildIdentity(signature);
-        uint low20 = (signature << 12) >> 12;
-        int decodedTransmitterCount = (int)((low20 % 100000u) / 10000u);
-        int transmitterCount = decodedTransmitterCount > 0
-            ? decodedTransmitterCount
-            : identity.TransmitterCount;
-        int finalModification = modification >= 0
-            ? modification
-            : (int)((low20 % 10000u) / 1000u);
-        int finalNumber = number >= 0 ? number : (int)(low20 % 1000u);
+        string firmware = identity.IsExtendedFirmware ? "новая" : "старая";
         string receiverPosition = rxPosition == 1 ? "R1→T2" : "R1→T1";
 
         List<string> identityLines =
         [
             "========== Идентификация зонда ==========",
             $"Тип: {identity.DisplayName}",
-            $"N Tx: {transmitterCount}",
-            $"Мод: {finalModification}",
+            $"N Tx: {identity.TransmitterCount}",
+            $"Мод: {identity.Modification}",
             // Подписи совпадают с окном метрологии: значение из сигнатуры —
             // серийный номер прибора, поле Serial структуры — номер корпуса.
-            $"Серийный №: {finalNumber}",
+            $"Серийный №: {identity.Number}",
             $"Корпус \u2116: {serial}",
-            $"Позиция R1: {receiverPosition}"
+            $"Позиция R1: {receiverPosition}",
+            $"Прошивка: {firmware}, кадр {identity.FrameSize} Б",
+            $"Сигнатура: 0x{signature:X8}"
         ];
         if (sondeDiameterMillimeters > 0)
         {

@@ -1,4 +1,4 @@
-using AMK.DataVisualization.Charting.Series;
+﻿using AMK.DataVisualization.Charting.Series;
 
 namespace AMK.DataVisualization.Charting.Configuration;
 
@@ -124,6 +124,14 @@ public sealed class SchematicConfigurationEditor
                 Selection.DataFilter = DataTypeFilter.PhaseSmtOnly;
                 CurrentPresetDisplayName = BuildSmtDisplayName("Симм. фазы", Selection.PhaseSmtMode);
                 break;
+            case PresetType.RhoAttSmt:
+                Selection.DataFilter = DataTypeFilter.RhoAttSmtOnly;
+                CurrentPresetDisplayName = BuildSmtDisplayName("УЭС по затуханию", Selection.RhoAttSmtMode);
+                break;
+            case PresetType.AttDbSmt:
+                Selection.DataFilter = DataTypeFilter.AttDbSmtOnly;
+                CurrentPresetDisplayName = BuildSmtDisplayName("Затухание", Selection.AttDbSmtMode);
+                break;
             case PresetType.SilentAmplitudes:
                 Array.Fill(Selection.SilentTransmitters, true);
                 Selection.DataFilter = DataTypeFilter.AmplitudeOnly;
@@ -152,17 +160,22 @@ public sealed class SchematicConfigurationEditor
             mode = SmtComputationMode.FromSonde;
         }
 
-        if (preset == PresetType.RhoSmt)
+        switch (preset)
         {
-            Selection.RhoSmtMode = mode;
-        }
-        else if (preset == PresetType.PhaseSmt)
-        {
-            Selection.PhaseSmtMode = mode;
-        }
-        else
-        {
-            return false;
+            case PresetType.RhoSmt:
+                Selection.RhoSmtMode = mode;
+                break;
+            case PresetType.PhaseSmt:
+                Selection.PhaseSmtMode = mode;
+                break;
+            case PresetType.RhoAttSmt:
+                Selection.RhoAttSmtMode = mode;
+                break;
+            case PresetType.AttDbSmt:
+                Selection.AttDbSmtMode = mode;
+                break;
+            default:
+                return false;
         }
 
         ApplyPreset(preset);
@@ -315,6 +328,8 @@ public sealed class SchematicConfigurationEditor
             {
                 PresetType.RhoSmt => BuildSmtDisplayName("УЭС", Selection.RhoSmtMode),
                 PresetType.PhaseSmt => BuildSmtDisplayName("Симм. фазы", Selection.PhaseSmtMode),
+                PresetType.RhoAttSmt => BuildSmtDisplayName("УЭС по затуханию", Selection.RhoAttSmtMode),
+                PresetType.AttDbSmt => BuildSmtDisplayName("Затухание", Selection.AttDbSmtMode),
                 _ => CurrentPresetDisplayName
             }
         };
@@ -322,14 +337,14 @@ public sealed class SchematicConfigurationEditor
         foreach (CurveDefinition source in AvailableCurves)
         {
             CurveDefinition curve = source.Copy();
-            if (curve.DataType == DataType.RhoSmt)
+            curve.SmtMode = curve.DataType switch
             {
-                curve.SmtMode = Selection.RhoSmtMode;
-            }
-            else if (curve.DataType == DataType.PhaseSmt)
-            {
-                curve.SmtMode = Selection.PhaseSmtMode;
-            }
+                DataType.RhoSmt => Selection.RhoSmtMode,
+                DataType.PhaseSmt => Selection.PhaseSmtMode,
+                DataType.RhoAttSmt => Selection.RhoAttSmtMode,
+                DataType.AttDbSmt => Selection.AttDbSmtMode,
+                _ => curve.SmtMode
+            };
 
             configuration.Curves.Add(curve);
         }

@@ -42,6 +42,14 @@ public sealed class ToolDataRepository
     /// </summary>
     public int LoadedSkippedFrameCount { get; private set; }
 
+    /// <summary>
+    /// Физический размер кадра источника: 240 байт у старой прошивки, 320 у
+    /// новой. Кадры в памяти всегда приведены к 320 байтам, но на диск уходит
+    /// ровно столько, сколько отдал прибор, — иначе файл перестанет быть
+    /// копией того, что было записано.
+    /// </summary>
+    public int FrameSize { get; private set; } = BinaryLayoutConstants.LegacyFrameSize;
+
     public void LoadDataFromFile(string fileName)
     {
         ApplyLoadedData(ToolDataFileReader.LoadDataFromFile(fileName), fileName);
@@ -75,6 +83,7 @@ public sealed class ToolDataRepository
         loadedFileFormat = loadedData.Format;
         LoadedTrailingByteCount = loadedData.TrailingByteCount;
         LoadedSkippedFrameCount = loadedData.SkippedFrameCount;
+        FrameSize = loadedData.FrameSize;
         dataVersion++;
         InvalidateDerivedCaches();
     }
@@ -88,6 +97,7 @@ public sealed class ToolDataRepository
         loadedFileFormat = FileFormat.Unknown;
         LoadedTrailingByteCount = 0;
         LoadedSkippedFrameCount = 0;
+        FrameSize = BinaryLayoutConstants.LegacyFrameSize;
         dataVersion++;
         InvalidateDerivedCaches();
     }
@@ -246,30 +256,34 @@ public sealed class ToolDataRepository
     {
         records.Add(parsedFrame.CanonicalData);
         recordMetadata.Add(new ToolRecordMetadata(parsedFrame.Kind, parsedFrame.Capabilities));
+        TrackFrameSize(parsedFrame.Capabilities);
     }
 
     private void AppendCanonicalRecord(GpToolData record)
     {
+        ToolRecordMetadata metadata = BuildCanonicalMetadata(record);
         records.Add(record);
-        recordMetadata.Add(BuildCanonicalMetadata(record));
+        recordMetadata.Add(metadata);
+        TrackFrameSize(metadata.Capabilities);
+    }
+
+    /// <summary>
+    /// Размер кадра задаёт первая попавшая в хранилище запись: источник у
+    /// хранилища всегда один, а смена источника его очищает.
+    /// </summary>
+    private void TrackFrameSize(ToolCapabilities capabilities)
+    {
+        if (records.Count == 1 && capabilities.FrameSize > 0)
+        {
+            FrameSize = capabilities.FrameSize;
+        }
     }
 
     private static ToolRecordMetadata BuildCanonicalMetadata(GpToolData record)
     {
-        IToolDataAdapter? adapter = ToolDataAdapterRegistry.Default.FindAdapterBySignature(record.Signature);
-        ToolRecordMetadata metadata = adapter is not null
-            ? new ToolRecordMetadata(adapter.Kind, adapter.Capabilities)
-            : ToolRecordMetadata.Empty;
-
-        if (metadata.Kind != ToolDataKind.Unknown)
-        {
-            return metadata;
-        }
-
-        uint toolCode = ToolDataAdapterRegistry.DecodeToolCode(record.Signature);
-        ToolDataKind kind = UniversalCanonicalAdapter.DetermineKindFromToolCode(toolCode);
-        ToolCapabilities capabilities = UniversalCanonicalAdapter.BuildCapabilities(toolCode);
-        return new ToolRecordMetadata(kind, capabilities);
+        ToolSignatureInfo info = ToolSignature.Decode(record.Signature);
+        ToolCapabilities capabilities = UniversalCanonicalAdapter.BuildCapabilities(info);
+        return new ToolRecordMetadata(capabilities.Kind, capabilities);
     }
 
     private void InvalidateDerivedCaches()

@@ -1,3 +1,4 @@
+﻿using System.Globalization;
 using System.Runtime.InteropServices;
 using AMK.DataVisualization.App.Services;
 using AMK.DataVisualization.Core;
@@ -17,9 +18,9 @@ namespace AMK.DataVisualization.App.Views;
 
 public sealed partial class MetrologyWindow : Window
 {
-    private const int WindowWidth = 980;
+    private const int WindowWidth = 1220;
     private const int WindowHeight = 642;
-    private const double RequiredContentWidth = 964.0;
+    private const double RequiredContentWidth = 1204.0;
     private const double RequiredContentHeight = 604.0;
     private const uint NoMove = 0x0002;
     private const uint NoZOrder = 0x0004;
@@ -31,6 +32,7 @@ public sealed partial class MetrologyWindow : Window
     private readonly TextBox[] l2TextBoxes;
     private readonly TextBox[,] airTextBoxes;
     private readonly TextBox[,] minimumTextBoxes;
+    private readonly TextBox[,] airAttenuationTextBoxes;
     private IntPtr currentOwnerHandle;
     private bool allowPermanentClose;
     private bool activated;
@@ -42,6 +44,12 @@ public sealed partial class MetrologyWindow : Window
     /// в который уходит файл: «Калибровка» вместо «Метрология».
     /// </summary>
     private bool calibratedInSession;
+
+    /// <summary>
+    /// Поколение прошивки, под которое сейчас настроены поля окна. Нужно,
+    /// чтобы не перезаписывать введённое пользователем при каждом показе окна.
+    /// </summary>
+    private bool appliedExtendedFirmware;
 
     internal MetrologyWindow(
         SerialDeviceService serialDeviceService,
@@ -67,6 +75,11 @@ public sealed partial class MetrologyWindow : Window
         {
             { MinF1T1TextBox, MinF1T2TextBox, MinF1T3TextBox, MinF1T4TextBox, MinF1T5TextBox },
             { MinF2T1TextBox, MinF2T2TextBox, MinF2T3TextBox, MinF2T4TextBox, MinF2T5TextBox }
+        };
+        airAttenuationTextBoxes = new[,]
+        {
+            { AirAttF1T1TextBox, AirAttF1T2TextBox, AirAttF1T3TextBox, AirAttF1T4TextBox, AirAttF1T5TextBox },
+            { AirAttF2T1TextBox, AirAttF2T2TextBox, AirAttF2T3TextBox, AirAttF2T4TextBox, AirAttF2T5TextBox }
         };
 
         GeometryReadOnlyCheckBox.IsChecked = true;
@@ -149,6 +162,63 @@ public sealed partial class MetrologyWindow : Window
         UpdateConnectionControls();
     }
 
+    /// <summary>
+    /// Выбирает сигнатуру, по которой окно показывает идентификацию зонда и
+    /// поколение прошивки.
+    /// </summary>
+    /// <param name="metrologySignature">Сигнатура из самой структуры метрологии.</param>
+    /// <param name="fromDevice">
+    /// Идентификация взята не из метрологии, а из того, что отдаёт прибор.
+    /// </param>
+    /// <remarks>
+    /// Обычно источник один — сигнатура метрологии, и она же описывает
+    /// раскладку самой структуры. Но у прибора с неразмеченной
+    /// энергонезависимой памятью на её месте мусор, и его расшифровка выдавала
+    /// тип, число передатчиков и номер, которых у прибора нет: при
+    /// подключённом пятипередатчиковом приборе окно показывало «Автономный
+    /// 4 Tx», а поля новой прошивки прятались.
+    ///
+    /// Поэтому: сигнатура метрологии принимается, только если она разбирается
+    /// в поддерживаемый прибор; иначе берётся то, что приложение знает о самом
+    /// приборе — прежде всего сигнатура принятых кадров. Пользователь видит
+    /// настоящий прибор, а запись метрологии заносит в него уже правильную
+    /// сигнатуру.
+    /// </remarks>
+    private uint ResolveIdentitySignature(uint metrologySignature, out bool fromDevice)
+    {
+        fromDevice = false;
+        if (ToolSignature.TryDecode(metrologySignature, out _))
+        {
+            return metrologySignature;
+        }
+
+        if (serialDeviceService.ResolvedDeviceSignature is uint deviceSignature)
+        {
+            fromDevice = true;
+            return deviceSignature;
+        }
+
+        return metrologySignature;
+    }
+
+    /// <summary>
+    /// Готовит воздушную поправку затухания к показу в поле.
+    /// </summary>
+    /// <remarks>
+    /// В приборе с неразмеченной энергонезависимой памятью на этом месте лежат
+    /// байты <c>0xFF</c>, а четыре таких байта как <c>float</c> дают NaN. По
+    /// умолчанию он выводится как «не число» и выглядит отказом приложения,
+    /// хотя означает ровно одно: поправка в приборе не задана. Пустое поле
+    /// говорит то же самое и совпадает с остальными полями окна, где пустое
+    /// значение означает «оставить как есть».
+    /// </remarks>
+    private static string FormatAirAttenuation(float value)
+    {
+        return float.IsFinite(value)
+            ? value.ToString("0.######", CultureInfo.CurrentCulture)
+            : string.Empty;
+    }
+
     private void FillForm(MetrologyData data)
     {
         for (int transmitter = 0; transmitter < BinaryLayoutConstants.MaxTransmitterCount; transmitter++)
@@ -167,7 +237,8 @@ public sealed partial class MetrologyWindow : Window
         SerialTextBox.Text = data.Serial.ToString();
         RxPositionComboBox.SelectedIndex = data.RxPosition == 1 ? 1 : 0;
 
-        MetrologySignatureInfo signature = MetrologySignature.Decode(data.Signature);
+        uint identitySignature = ResolveIdentitySignature(data.Signature, out bool identityFromDevice);
+        MetrologySignatureInfo signature = MetrologySignature.Decode(identitySignature);
         TypeComboBox.SelectedIndex = signature.TypeClass switch
         {
             2 => 1,
@@ -184,6 +255,61 @@ public sealed partial class MetrologyWindow : Window
         NumberTextBox.Text = signature.Number.ToString();
         SignatureBinaryTextBox.Text = MetrologySignature.ToBinaryString(data.Signature);
         SignaturePaletteTextBox.Text = signature.Palette.ToString();
+
+        RefreshFirmwareDependentControls(data, force: true);
+    }
+
+    /// <summary>
+    /// Приводит поля, зависящие от поколения прошивки, к текущему состоянию.
+    /// </summary>
+    /// <remarks>
+    /// Воздушные поправки затухания появились только в новой прошивке: у
+    /// старой на их месте служебная область, смысл которой приложению
+    /// неизвестен. Показывать там числа означало бы выдавать чужие байты за
+    /// калибровку, поэтому поля гасятся и остаются пустыми.
+    ///
+    /// Метод вызывается и при открытии окна: если метрология прибора не
+    /// размечена, поколение известно только по его кадрам, а первый кадр может
+    /// прийти уже после чтения метрологии. Значения перезаписываются лишь при
+    /// смене поколения — иначе несохранённая правка пользователя пропадала бы
+    /// при каждом показе окна.
+    /// </remarks>
+    private void RefreshFirmwareDependentControls(MetrologyData data, bool force)
+    {
+        MetrologySignatureInfo signature = MetrologySignature.Decode(
+            ResolveIdentitySignature(data.Signature, out bool identityFromDevice));
+        bool extendedFirmware = signature.Generation == FirmwareGeneration.Extended;
+        string firmwareName = extendedFirmware ? "новая" : "старая";
+        FirmwareGenerationTextBox.Text = identityFromDevice
+            ? $"{firmwareName}, кадр {signature.FrameSize} Б *"
+            : $"{firmwareName}, кадр {signature.FrameSize} Б";
+        ToolTipService.SetToolTip(
+            FirmwareGenerationTextBox,
+            identityFromDevice
+                ? "Метрология в приборе не размечена: её сигнатура не опознаёт прибор. "
+                  + "Тип, число передатчиков, модификация и серийный номер показаны по кадрам прибора "
+                  + "и будут записаны в него кнопкой «Записать в зонд»."
+                : "Поколение прошивки определено по сигнатуре метрологии.");
+
+        if (!force && appliedExtendedFirmware == extendedFirmware)
+        {
+            return;
+        }
+
+        appliedExtendedFirmware = extendedFirmware;
+        AirAttF1Header.Opacity = extendedFirmware ? 1.0 : 0.5;
+        AirAttF2Header.Opacity = extendedFirmware ? 1.0 : 0.5;
+        for (int transmitter = 0; transmitter < BinaryLayoutConstants.MaxTransmitterCount; transmitter++)
+        {
+            for (int frequency = 0; frequency < BinaryLayoutConstants.FrequencyCount; frequency++)
+            {
+                TextBox box = airAttenuationTextBoxes[frequency, transmitter];
+                box.IsEnabled = extendedFirmware;
+                box.Text = extendedFirmware
+                    ? FormatAirAttenuation(data.GetAirAttDb(frequency, transmitter))
+                    : string.Empty;
+            }
+        }
     }
 
     private bool TryReadForm(out MetrologyData data, out string error)
@@ -211,6 +337,41 @@ public sealed partial class MetrologyWindow : Window
 
                 data.SetAirZz(frequency, transmitter, air);
                 data.SetAirZzAmplitude(frequency, transmitter, minimum);
+            }
+        }
+
+        // Поправки затухания пишутся только приборам новой прошивки. У старой
+        // по этим смещениям служебная область: запись туда испортила бы
+        // содержимое, смысл которого приложению неизвестен.
+        if (MetrologySignature.Decode(ResolveIdentitySignature(data.Signature, out _)).Generation
+            == FirmwareGeneration.Extended)
+        {
+            for (int transmitter = 0; transmitter < BinaryLayoutConstants.MaxTransmitterCount; transmitter++)
+            {
+                for (int frequency = 0; frequency < BinaryLayoutConstants.FrequencyCount; frequency++)
+                {
+                    // В прибор не уходит нечисловое значение. Незаданная
+                    // поправка из неразмеченной памяти прибора — это NaN, и
+                    // записанный обратно он сделал бы бортовой расчёт
+                    // затухания нечисловым. Ноль означает «поправки нет» и
+                    // является единственным осмысленным значением по умолчанию.
+                    float stored = data.GetAirAttDb(frequency, transmitter);
+                    float fallback = float.IsFinite(stored) ? stored : 0.0f;
+                    if (!TryReadFloat(
+                            airAttenuationTextBoxes[frequency, transmitter],
+                            $"Поправка затухания F{frequency + 1} T{transmitter + 1}",
+                            fallback,
+                            out float airAttenuation,
+                            out error))
+                    {
+                        return false;
+                    }
+
+                    data.SetAirAttDb(
+                        frequency,
+                        transmitter,
+                        float.IsFinite(airAttenuation) ? airAttenuation : 0.0f);
+                }
             }
         }
 
@@ -247,12 +408,18 @@ public sealed partial class MetrologyWindow : Window
             ? TransmitterCountComboBox.SelectedIndex + 3
             : BinaryLayoutConstants.MaxTransmitterCount;
         int modification = ModificationComboBox.SelectedIndex >= 0 ? ModificationComboBox.SelectedIndex + 1 : 1;
+
+        // Сигнатура пересобирается на той же основе, что показана в окне.
+        // Если метрология прибора не размечена, основой служит сигнатура его
+        // кадров: иначе запись сохранила бы в приборе мусор из старших
+        // разрядов вместе с правильными полями.
+        uint signatureBase = ResolveIdentitySignature(data.Signature, out _);
         data.Signature = MetrologySignature.Build(
             typeClass,
             transmitterCount,
             modification,
             number,
-            data.Signature);
+            signatureBase);
         data.RxPosition = RxPositionComboBox.SelectedIndex == 1 ? 1u : 0u;
         return true;
     }
@@ -463,11 +630,6 @@ public sealed partial class MetrologyWindow : Window
         }
     }
 
-    private void CloseButton_Click(object sender, RoutedEventArgs e)
-    {
-        AppWindow.Hide();
-    }
-
     private void SetBusy(bool busy)
     {
         ReadDeviceButton.IsEnabled = !busy && serialDeviceService.IsConnected;
@@ -597,6 +759,10 @@ public sealed partial class MetrologyWindow : Window
     private void UpdateConnectionControls()
     {
         SetBusy(false);
+        if (metrologySession.TryGet(out MetrologyData current))
+        {
+            RefreshFirmwareDependentControls(current, force: false);
+        }
     }
 
     private async Task ShowMessageAsync(string title, string content)
@@ -672,6 +838,35 @@ public sealed partial class MetrologyWindow : Window
         }
 
         error = $"{fieldName} должен быть целым числом от -32768 до 32767.";
+        return false;
+    }
+
+    private static bool TryReadFloat(
+        TextBox textBox,
+        string fieldName,
+        float currentValue,
+        out float value,
+        out string error)
+    {
+        string text = textBox.Text.Trim();
+        if (text.Length == 0)
+        {
+            value = currentValue;
+            error = string.Empty;
+            return true;
+        }
+
+        // Запятая и точка принимаются одинаково: поле заполняют вручную, и
+        // раскладка разделителя не должна стоить пользователю записи в прибор.
+        if (float.TryParse(text, NumberStyles.Float, CultureInfo.CurrentCulture, out value)
+            || float.TryParse(text.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+        {
+            error = string.Empty;
+            return true;
+        }
+
+        value = currentValue;
+        error = $"{fieldName} должен быть числом.";
         return false;
     }
 

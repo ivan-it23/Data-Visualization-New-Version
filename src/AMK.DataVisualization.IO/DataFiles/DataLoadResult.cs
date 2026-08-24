@@ -11,7 +11,8 @@ public sealed record DataFileValidationResult(
     int PhysicalFrameSize,
     long FileSize,
     int FrameCount,
-    int TrailingByteCount = 0)
+    int TrailingByteCount = 0,
+    int FrameSize = BinaryLayoutConstants.LegacyFrameSize)
 {
     /// <summary>
     /// Bytes after the last complete frame. A device RAM dump can stop in the
@@ -33,7 +34,8 @@ public sealed record DataLoadResult(
     FileFormat Format,
     int PhysicalFrameSize,
     int TrailingByteCount = 0,
-    int SkippedFrameCount = 0)
+    int SkippedFrameCount = 0,
+    int FrameSize = BinaryLayoutConstants.LegacyFrameSize)
 {
     public bool HasData => Records.Count > 0;
 

@@ -89,6 +89,38 @@ public readonly struct ToolDataAccessView
         return true;
     }
 
+    /// <summary>
+    /// Амплитудное УЭС, рассчитанное прибором. Есть только у новой прошивки:
+    /// у кадра старого прибора это место занято нулями.
+    /// </summary>
+    public bool TryGetRhoAttSmt(int frequencyIndex, int transmitterIndex, out float value)
+    {
+        value = 0;
+        if (!CanReadChannel(frequencyIndex, transmitterIndex) || !Capabilities.HasSondeRhoAttSmt)
+        {
+            return false;
+        }
+
+        value = record.GetRhoAttSmt(frequencyIndex, transmitterIndex);
+        return true;
+    }
+
+    /// <summary>
+    /// Симметризованное затухание в децибелах, рассчитанное прибором. Есть
+    /// только у новой прошивки.
+    /// </summary>
+    public bool TryGetAttDbSmt(int frequencyIndex, int transmitterIndex, out float value)
+    {
+        value = 0;
+        if (!CanReadChannel(frequencyIndex, transmitterIndex) || !Capabilities.HasSondeAttDbSmt)
+        {
+            return false;
+        }
+
+        value = record.GetAttDbSmt(frequencyIndex, transmitterIndex);
+        return true;
+    }
+
     public bool TryGetSilentAmplitudeRx1(int frequencyIndex, out float value)
     {
         value = 0;

@@ -1,4 +1,4 @@
-using AMK.DataVisualization.Charting.Series;
+﻿using AMK.DataVisualization.Charting.Series;
 
 namespace AMK.DataVisualization.Charting.Configuration;
 
@@ -77,6 +77,12 @@ public sealed class CurveSelectionService
                     break;
                 case DataTypeFilter.PhaseSmtOnly:
                     AddSmtCurves(curves, selection, DataType.PhaseSmt, selection.PhaseSmtMode);
+                    break;
+                case DataTypeFilter.RhoAttSmtOnly:
+                    AddSmtCurves(curves, selection, DataType.RhoAttSmt, selection.RhoAttSmtMode);
+                    break;
+                case DataTypeFilter.AttDbSmtOnly:
+                    AddSmtCurves(curves, selection, DataType.AttDbSmt, selection.AttDbSmtMode);
                     break;
             }
         }
@@ -249,6 +255,8 @@ public sealed class CurveSelectionService
         bool hasRhoSmt = false;
         bool hasPhaseSmt = false;
         bool hasTemperature = false;
+        bool hasRhoAttSmt = false;
+        bool hasAttDbSmt = false;
 
         foreach (CurveDefinition curve in curves)
         {
@@ -277,10 +285,38 @@ public sealed class CurveSelectionService
                 case DataType.RhoSmt:
                     hasRhoSmt = true;
                     break;
+                case DataType.RhoAttSmt:
+                    hasRhoAttSmt = true;
+                    break;
+                case DataType.AttDbSmt:
+                    hasAttDbSmt = true;
+                    break;
                 case DataType.Temperature:
                     hasTemperature = true;
                     break;
             }
+        }
+
+        // Виды данных новой прошивки не смешиваются с остальными: набор с ними
+        // распознаётся либо как «только амплитудные УЭС», либо как «только
+        // затухания», либо как произвольный.
+        if (hasRhoAttSmt || hasAttDbSmt)
+        {
+            bool hasLegacyKinds = hasAmplitudes
+                || hasPhases
+                || hasRatios
+                || hasDifferences
+                || hasSilentAmplitudes
+                || hasSilentDifferences
+                || hasRhoSmt
+                || hasPhaseSmt
+                || hasTemperature;
+            if (hasLegacyKinds || (hasRhoAttSmt && hasAttDbSmt))
+            {
+                return DataTypeFilter.All;
+            }
+
+            return hasRhoAttSmt ? DataTypeFilter.RhoAttSmtOnly : DataTypeFilter.AttDbSmtOnly;
         }
 
         if (hasRhoSmt && !hasPhaseSmt && !hasDifferences && !hasRatios && !hasAmplitudes && !hasPhases && !hasSilentAmplitudes && !hasTemperature)
@@ -454,9 +490,13 @@ public sealed class CurveSelectionService
     {
         for (int transmitter = 0; transmitter < selection.AvailableTransmitterCount; transmitter++)
         {
-            CurveDefinition curve = type == DataType.RhoSmt
-                ? CreateRhoSmtCurve(transmitter, selection.Frequency)
-                : CreatePhaseSmtCurve(transmitter, selection.Frequency);
+            CurveDefinition curve = type switch
+            {
+                DataType.RhoSmt => CreateRhoSmtCurve(transmitter, selection.Frequency),
+                DataType.RhoAttSmt => CreateRhoAttSmtCurve(transmitter, selection.Frequency),
+                DataType.AttDbSmt => CreateAttDbSmtCurve(transmitter, selection.Frequency),
+                _ => CreatePhaseSmtCurve(transmitter, selection.Frequency)
+            };
             curve.SmtMode = mode;
             curve.YAxisGroup = 0;
             curve.Color = AssignSmartColor(curves, transmitter, curve.YAxisGroup);
@@ -488,6 +528,16 @@ public sealed class CurveSelectionService
     private static CurveDefinition CreatePhaseSmtCurve(int transmitter, FrequencyBand frequency)
     {
         return CreateCurve(transmitter, DataType.PhaseSmt, frequency, -1, "mdeg", 0);
+    }
+
+    private static CurveDefinition CreateRhoAttSmtCurve(int transmitter, FrequencyBand frequency)
+    {
+        return CreateCurve(transmitter, DataType.RhoAttSmt, frequency, -1, "Ohm*m", 0);
+    }
+
+    private static CurveDefinition CreateAttDbSmtCurve(int transmitter, FrequencyBand frequency)
+    {
+        return CreateCurve(transmitter, DataType.AttDbSmt, frequency, -1, "dB", 0);
     }
 
     private static CurveDefinition CreateSilentAmplitudeCurve(int receiver, FrequencyBand frequency)
@@ -592,6 +642,8 @@ public sealed class CurveSelectionService
             DataType.AmplitudeRatio => "Отношение амплитуд",
             DataType.PhaseDifference or DataType.SilentPhaseDifference => "Разность фаз",
             DataType.RhoSmt => "УЭС",
+            DataType.RhoAttSmt => "УЭС по затуханию",
+            DataType.AttDbSmt => "Затухание",
             DataType.Temperature => "Температура",
             _ => string.Empty
         };

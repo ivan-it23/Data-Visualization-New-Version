@@ -1,4 +1,4 @@
-using System.Buffers.Binary;
+﻿using System.Buffers.Binary;
 using System.IO.Ports;
 using System.Runtime.InteropServices;
 using AMK.DataVisualization.Core;
@@ -10,6 +10,14 @@ namespace AMK.DataVisualization.Hardware.Serial;
 public sealed class SerialDeviceService : IDisposable
 {
     private const byte CommandData = 0x11;
+
+    /// <summary>
+    /// Запись метрологии в новой прошивке. У старой этого обработчика нет: там
+    /// запись идёт тем же кодом 0x13, что и чтение, и различается только
+    /// длиной payload.
+    /// </summary>
+    private const byte CommandMetrologyWrite = 0x12;
+
     private const byte CommandMetrology = 0x13;
     private const byte CommandSignature = 0x16;
     private const byte CommandSelectedKey = 0x17;
@@ -30,7 +38,11 @@ public sealed class SerialDeviceService : IDisposable
     // LOOP_NEXT принимает 242 байта payload: два служебных байта (на реальном
     // Cartograph 4tx это 0x05 0x06), затем 240 байт GP_TOOL_DATA/метрологии.
     private const int LegacyServicePrefixSize = 2;
-    private const int LegacyPayloadSize = LegacyServicePrefixSize + BinaryLayoutConstants.GpToolDataSize;
+    // Ветка Картографа в режиме LWD 4tx подтверждена на физическом приборе и
+    // остаётся на кадре 240 байт. Перейдёт ли этот режим после перепрошивки на
+    // 320 байт и сохранится ли для него транспорт фиксированной длины —
+    // открытый вопрос, ответ на который даст прошивка.
+    private const int LegacyPayloadSize = LegacyServicePrefixSize + BinaryLayoutConstants.LegacyFrameSize;
     // Квитанция без данных занимает на проводе те же пять байт, что и в
     // length-framed ветке: [CMD][05][00][CRC:2]. Для reader'а LOOP_NEXT это
     // payload из двух байт, а CRC в обеих ветках считается по одним и тем же
@@ -56,6 +68,7 @@ public sealed class SerialDeviceService : IDisposable
     private CancellationTokenSource? pollingCancellation;
     private Task? pollingTask;
     private FileStream? recordStream;
+    private uint? lastFrameSignature;
     private string desiredPortName = string.Empty;
     private int desiredBaudRate = DefaultBaudRate;
     private int pollIntervalMilliseconds = 2000;
@@ -108,6 +121,55 @@ public sealed class SerialDeviceService : IDisposable
     public int PollIntervalMilliseconds => Volatile.Read(ref pollIntervalMilliseconds);
 
     public uint? DeviceSignature { get; private set; }
+
+    /// <summary>
+    /// Сигнатура, по которой приложение опознаёт подключённый прибор.
+    /// </summary>
+    /// <remarks>
+    /// Источников три, и они не равноценны:
+    ///
+    /// 1. <b>сигнатура принятого кадра</b> — проверяется на каждом кадре и
+    ///    подтверждена фактической длиной ответа, поэтому идёт первой;
+    /// 2. ответ на <c>0x16</c> — читается один раз и ничем не подтверждается;
+    /// 3. сигнатура прочитанной метрологии — лежит в энергонезависимой памяти
+    ///    и у неразмеченного прибора содержит мусор (у прибора с чистой
+    ///    EEPROM это `0xFFFFFFFF` и подобные значения).
+    ///
+    /// Источник принимается только если он разбирается в поддерживаемый
+    /// прибор. Иначе приложение показывало бы расшифровку мусора как факт:
+    /// именно так неразмеченная метрология превращалась в «Автономный 4 Tx»
+    /// при подключённом пятипередатчиковом приборе.
+    ///
+    /// Возвращает <c>null</c>, когда ни один источник прибор не опознаёт.
+    /// </remarks>
+    public uint? ResolvedDeviceSignature
+    {
+        get
+        {
+            foreach (uint? candidate in new[] { lastFrameSignature, DeviceSignature, CurrentMetrology?.Signature })
+            {
+                if (candidate is uint signature && ToolSignature.TryDecode(signature, out _))
+                {
+                    return signature;
+                }
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Прибор работает под новой прошивкой. Пока прибор не опознан, считается
+    /// старым: это ветка, проверенная на приборах в эксплуатации.
+    /// </summary>
+    public bool IsExtendedFirmwareDevice
+    {
+        get
+        {
+            return ResolvedDeviceSignature is uint signature
+                && ToolSignature.DecodeGeneration(signature) == FirmwareGeneration.Extended;
+        }
+    }
 
     public DeviceMetrologySummary? Metrology { get; private set; }
 
@@ -271,6 +333,7 @@ public sealed class SerialDeviceService : IDisposable
             }
         }).ConfigureAwait(false);
         DeviceSignature = null;
+        lastFrameSignature = null;
         Metrology = null;
         CurrentMetrology = null;
         useLegacyCartographProtocol = false;
@@ -427,6 +490,7 @@ public sealed class SerialDeviceService : IDisposable
                 if (resetSession)
                 {
                     DeviceSignature = null;
+                    lastFrameSignature = null;
                     Metrology = null;
                     CurrentMetrology = null;
                     useLegacyCartographProtocol = false;
@@ -501,6 +565,11 @@ public sealed class SerialDeviceService : IDisposable
             if (result == SerialOperationResult.Success)
             {
                 consecutiveFailures = 0;
+                // Сигнатура принятого кадра — самое надёжное, что есть у
+                // приложения о подключённом приборе: она проверяется на каждом
+                // кадре и подтверждена фактической длиной ответа.
+                lastFrameSignature = frame.CanonicalData.Signature;
+                TryLogDeviceIdentity();
                 long acceptedPackets = Interlocked.Increment(ref packetsReceived);
                 Interlocked.Exchange(ref lastFrameNumber, acceptedPackets);
                 WriteRecordCore(frame.CanonicalData);
@@ -568,13 +637,25 @@ public sealed class SerialDeviceService : IDisposable
                 return result;
             }
 
-            if (responseCommand != CommandData || payload.Length != BinaryLayoutConstants.GpToolDataSize)
+            // Запрос кадра у обоих поколений прошивки одинаков; отличается
+            // длина ответа — 240 байт у старой и 320 у новой. Принимаем обе и
+            // сверяем с размером, который называет сигнатура самого кадра:
+            // расхождение означает, что чтение сдвинулось, и разбирать такой
+            // кадр нельзя.
+            if (responseCommand != CommandData || !ToolSignature.IsKnownFrameSize((uint)payload.Length))
             {
+                DeviceProtocolLog.Write(
+                    $"[Data] REJECTED | reason=payload_size | response_cmd=0x{responseCommand:X2} | size={payload.Length}");
                 return SerialOperationResult.InvalidResponse;
             }
 
             if (!ToolDataAdapterRegistry.Default.TryParseRawFrame(payload, out frame))
             {
+                uint receivedSignature = BinaryPrimitives.ReadUInt32LittleEndian(payload);
+                int expectedFrameSize = ToolDataAdapterRegistry.DecodeFrameSize(receivedSignature);
+                DeviceProtocolLog.Write(
+                    $"[Data] REJECTED | signature=0x{receivedSignature:X8} | received={payload.Length} B | "
+                    + $"expected={expectedFrameSize} B");
                 return SerialOperationResult.InvalidSignature;
             }
 
@@ -635,7 +716,7 @@ public sealed class SerialDeviceService : IDisposable
                 $"service={Convert.ToHexString(payload.AsSpan(0, LegacyServicePrefixSize))}");
             ReadOnlySpan<byte> canonicalPayload = payload.AsSpan(
                 LegacyServicePrefixSize,
-                BinaryLayoutConstants.GpToolDataSize);
+                BinaryLayoutConstants.LegacyFrameSize);
             if (!ToolDataAdapterRegistry.Default.TryParseRawFrame(canonicalPayload, out frame))
             {
                 uint receivedSignature = BinaryPrimitives.ReadUInt32LittleEndian(canonicalPayload);
@@ -843,8 +924,19 @@ public sealed class SerialDeviceService : IDisposable
             }
             else
             {
+                // Новая прошивка развела чтение и запись метрологии по разным
+                // кодам: чтение осталось 0x13, запись переехала на 0x12.
+                // Старая прошивка обработчика 0x12 не имеет, поэтому команда
+                // выбирается по поколению прибора, а не пробуется вслепую.
+                byte writeCommand = IsExtendedFirmwareDevice
+                    ? CommandMetrologyWrite
+                    : CommandMetrology;
+                DeviceExchangeLog.Append(
+                    $"[WriteMetrology]   command=0x{writeCommand:X2} " +
+                    $"({(IsExtendedFirmwareDevice ? "новая прошивка" : "старая прошивка")})");
+
                 SerialOperationResult result = ExchangeControlPacketCore(
-                    CommandMetrology,
+                    writeCommand,
                     bytes,
                     out byte responseCommand,
                     out byte[] responsePayload);
@@ -855,11 +947,16 @@ public sealed class SerialDeviceService : IDisposable
                     return result;
                 }
 
+                // Квитанцию обе ветки отдают с кодом 0x13: старая — как эхо
+                // своей же команды записи, новая — так устроен её обработчик
+                // 0x12. Полезной нагрузки в квитанции нет, но старая прошивка
+                // умеет вернуть считанное обратно состояние целиком.
                 if (responseCommand != CommandMetrology
                     || responsePayload.Length is not (0 or 1 or BinaryLayoutConstants.MetrologyDataSize))
                 {
                     DeviceExchangeLog.Append(
-                        $"[WriteMetrology]   RX payload size={responsePayload.Length} (expected 0/1/240)");
+                        $"[WriteMetrology]   RX cmd=0x{responseCommand:X2} payload size={responsePayload.Length} " +
+                        $"(ожидалось cmd=0x{CommandMetrology:X2}, payload 0/1/240)");
                     DeviceExchangeLog.Append("[WriteMetrology] END result=INVALID_RESPONSE");
                     return SerialOperationResult.InvalidResponse;
                 }
@@ -1273,20 +1370,44 @@ public sealed class SerialDeviceService : IDisposable
         CurrentMetrology = data;
         Metrology = new DeviceMetrologySummary(data.Signature, data.Serial, data.SondeDiameterMm);
         DeviceExchangeLog.Append($"Метрология: получено sig=0x{data.Signature:X8}, serial={data.Serial}");
-        if (!loggedDeviceIdentityToExchangeLog)
+        if (!ToolSignature.TryDecode(data.Signature, out _))
         {
-            uint low20 = (data.Signature << 12) >> 12;
-            int modification = (int)((low20 % 10000u) / 1000u);
-            int number = (int)(low20 % 1000u);
-            DeviceExchangeLog.AppendDeviceIdentity(
-                data.Signature,
-                data.Serial,
-                modification,
-                number,
-                data.RxPosition,
-                data.SondeDiameterMm);
-            loggedDeviceIdentityToExchangeLog = true;
+            // Прибор с неразмеченной энергонезависимой памятью отдаёт мусор
+            // вместо метрологии. Это рабочая ситуация, но пользователь должен
+            // знать, почему поля окна метрологии не совпадают с прибором.
+            DeviceExchangeLog.Append(
+                $"Метрология: сигнатура 0x{data.Signature:X8} не опознаёт прибор — "
+                + "метрология в приборе не размечена. Идентификация взята из кадров.");
         }
+
+        TryLogDeviceIdentity();
+    }
+
+    /// <summary>
+    /// Выводит блок идентификации в журнал обмена — один раз за сессию и
+    /// только когда прибор действительно опознан.
+    /// </summary>
+    /// <remarks>
+    /// Раньше блок выводился по сигнатуре метрологии сразу после её чтения. У
+    /// прибора с неразмеченной энергонезависимой памятью там мусор, и в журнал
+    /// уходила его расшифровка — тип, число передатчиков и номер, которых у
+    /// прибора нет. Теперь блок ждёт сигнатуру, которая разбирается в
+    /// поддерживаемый прибор; обычно это первый принятый кадр.
+    /// </remarks>
+    private void TryLogDeviceIdentity()
+    {
+        if (loggedDeviceIdentityToExchangeLog || ResolvedDeviceSignature is not uint signature)
+        {
+            return;
+        }
+
+        MetrologyData? metrology = CurrentMetrology;
+        DeviceExchangeLog.AppendDeviceIdentity(
+            signature,
+            metrology?.Serial ?? 0u,
+            metrology?.RxPosition ?? 0u,
+            metrology?.SondeDiameterMm ?? 0u);
+        loggedDeviceIdentityToExchangeLog = true;
     }
 
     private SerialOperationResult ExchangePacketCore(
@@ -1369,10 +1490,15 @@ public sealed class SerialDeviceService : IDisposable
         {
             try
             {
-                recordStream ??= OpenRecordStreamCore();
-                Span<byte> buffer = stackalloc byte[BinaryLayoutConstants.GpToolDataSize];
+                // В файл уходит ровно то, что отдал прибор: 240 байт от старой
+                // прошивки, 320 от новой. Хвост canonical-структуры у кадра
+                // старого прибора заполнило приложение, и записывать его
+                // означало бы выдавать собственные нули за данные прибора.
+                int frameSize = ToolDataAdapterRegistry.DecodeFrameSize(canonicalData.Signature);
+                recordStream ??= OpenRecordStreamCore(frameSize);
+                Span<byte> buffer = stackalloc byte[BinaryLayoutConstants.CanonicalFrameSize];
                 MemoryMarshal.Write(buffer, in canonicalData);
-                recordStream.Write(buffer);
+                recordStream.Write(buffer[..frameSize]);
                 recordStream.Flush();
                 Interlocked.Increment(ref recordedFrames);
             }
@@ -1384,14 +1510,18 @@ public sealed class SerialDeviceService : IDisposable
         }
     }
 
-    private FileStream OpenRecordStreamCore()
+    private FileStream OpenRecordStreamCore(int frameSize)
     {
         if (!string.IsNullOrWhiteSpace(appendFilePath))
         {
+            // Дозапись допустима только в файл того же поколения прошивки:
+            // кратность размеру кадра прибора — единственная проверка, которая
+            // это ловит до того, как в файле разъедутся границы записей.
             FileInfo existing = new(appendFilePath);
-            if (!existing.Exists || existing.Length % BinaryLayoutConstants.GpToolDataSize != 0)
+            if (!existing.Exists || existing.Length % frameSize != 0)
             {
-                throw new IOException("Файл дозаписи отсутствует или имеет неверный размер.");
+                throw new IOException(
+                    $"Файл дозаписи отсутствует или его размер не кратен {frameSize} байтам кадра прибора.");
             }
 
             recordFilePath = existing.FullName;

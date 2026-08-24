@@ -1,4 +1,4 @@
-using AMK.DataVisualization.Charting.Series;
+﻿using AMK.DataVisualization.Charting.Series;
 
 namespace AMK.DataVisualization.Charting.Configuration;
 
@@ -11,7 +11,13 @@ public enum DataTypeFilter
     DifferenceOnly,
     TemperatureOnly,
     RhoSmtOnly,
-    PhaseSmtOnly
+    PhaseSmtOnly,
+
+    /// <summary>Симметризованные затухания, только новая прошивка.</summary>
+    AttDbSmtOnly,
+
+    /// <summary>Амплитудные УЭС, только новая прошивка.</summary>
+    RhoAttSmtOnly
 }
 
 public sealed class SchematicSelection
@@ -43,6 +49,12 @@ public sealed class SchematicSelection
     public SmtComputationMode RhoSmtMode { get; set; } = SmtComputationMode.FromSonde;
 
     public SmtComputationMode PhaseSmtMode { get; set; } = SmtComputationMode.FromSonde;
+
+    /// <summary>Режим расчёта амплитудного УЭС.</summary>
+    public SmtComputationMode RhoAttSmtMode { get; set; } = SmtComputationMode.FromSonde;
+
+    /// <summary>Режим расчёта симметризованного затухания.</summary>
+    public SmtComputationMode AttDbSmtMode { get; set; } = SmtComputationMode.FromSonde;
 
     public int SelectedReceiverCount => Receivers.Count(selected => selected);
 
@@ -94,6 +106,8 @@ public sealed class SchematicSelection
         DataFilter = DataTypeFilter.All;
         RhoSmtMode = SmtComputationMode.FromSonde;
         PhaseSmtMode = SmtComputationMode.FromSonde;
+        RhoAttSmtMode = SmtComputationMode.FromSonde;
+        AttDbSmtMode = SmtComputationMode.FromSonde;
     }
 
     public SchematicSelection Copy()
@@ -103,7 +117,9 @@ public sealed class SchematicSelection
             Frequency = Frequency,
             DataFilter = DataFilter,
             RhoSmtMode = RhoSmtMode,
-            PhaseSmtMode = PhaseSmtMode
+            PhaseSmtMode = PhaseSmtMode,
+            RhoAttSmtMode = RhoAttSmtMode,
+            AttDbSmtMode = AttDbSmtMode
         };
         Transmitters.CopyTo(copy.Transmitters, 0);
         Receivers.CopyTo(copy.Receivers, 0);

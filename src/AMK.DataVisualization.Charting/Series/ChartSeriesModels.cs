@@ -15,7 +15,19 @@ public enum DataType
     SilentAmplitudeRx1,
     SilentAmplitudeRx2,
     SilentPhaseDifference,
-    Temperature
+    Temperature,
+
+    /// <summary>
+    /// Симметризованное затухание в децибелах. Доступно только для приборов
+    /// новой прошивки.
+    /// </summary>
+    AttDbSmt,
+
+    /// <summary>
+    /// Амплитудное УЭС — обратная задача по затуханию. Доступно только для
+    /// приборов новой прошивки.
+    /// </summary>
+    RhoAttSmt
 }
 
 public enum FrequencyBand
@@ -64,6 +76,13 @@ public enum PresetType
     Temperature,
     RhoSmt,
     PhaseSmt,
+
+    /// <summary>Симметризованные затухания, только новая прошивка.</summary>
+    AttDbSmt,
+
+    /// <summary>Амплитудные УЭС, только новая прошивка.</summary>
+    RhoAttSmt,
+
     Custom
 }
 

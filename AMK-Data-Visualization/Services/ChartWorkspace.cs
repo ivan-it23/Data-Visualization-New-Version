@@ -108,6 +108,18 @@ internal sealed class ChartWorkspace
     }
 
     /// <summary>
+    /// Источник графика записан прибором с новой прошивкой. Единственное место,
+    /// где это выясняется: и меню пресетов, и окно схемы обязаны спрашивать
+    /// здесь, а не читать метаданные самостоятельно.
+    /// </summary>
+    public bool IsExtendedFirmwareSourceForGraph(int graphNumber)
+    {
+        ToolDataRepository repository = GetRepositoryForGraph(graphNumber);
+        return repository.TryGetRecordMetadata(0, out ToolRecordMetadata metadata)
+            && metadata.Capabilities.IsExtendedFirmware;
+    }
+
+    /// <summary>
     /// Drops curves the loaded source cannot provide and reports whether anything
     /// was removed. A configuration built for a 5Tx tool survives a switch to a
     /// four-transmitter source, and its T5 curves would otherwise keep appearing
@@ -125,6 +137,17 @@ internal sealed class ChartWorkspace
         int removedCount = configuration.Curves.RemoveAll(curve =>
             curve.SourceElement == ElementType.Transmitter
             && (curve.ElementIndex < 0 || curve.ElementIndex >= availableTransmitterCount));
+
+        // Конфигурация, построенная для прибора новой прошивки, могла пережить
+        // переход на источник старой: её амплитудные кривые данных не имеют и
+        // должны исчезнуть до того, как их прочитают легенда и список
+        // видимости.
+        if (!IsExtendedFirmwareSourceForGraph(graphNumber))
+        {
+            removedCount += configuration.Curves.RemoveAll(
+                curve => curve.DataType is DataType.RhoAttSmt or DataType.AttDbSmt);
+        }
+
         if (removedCount == 0)
         {
             return false;

@@ -7,10 +7,49 @@ public static class BinaryLayoutConstants
     public const int FrequencyCount = 2;
     public const int MaxTransmitterCount = 5;
     public const int ChannelCount = FrequencyCount * MaxTransmitterCount;
-    public const int GpToolDataSize = 240;
+
+    /// <summary>
+    /// Кадр измерений старой прошивки. Формат приборов в эксплуатации;
+    /// не меняется.
+    /// </summary>
+    public const int LegacyFrameSize = 240;
+
+    /// <summary>
+    /// Кадр измерений новой прошивки: те же 240 байт, за которыми идут
+    /// амплитудные УЭС и симметризованные затухания.
+    /// </summary>
+    public const int ExtendedFrameSize = 320;
+
+    /// <summary>
+    /// Размер <see cref="GpToolData"/> — структуры, к которой приводятся кадры
+    /// обоих поколений. Всегда расширенный: кадр старой прошивки занимает
+    /// первые 240 байт, хвост остаётся нулевым.
+    /// </summary>
+    public const int CanonicalFrameSize = ExtendedFrameSize;
+
+    /// <summary>
+    /// Метрология одинакова для обоих поколений — ровно 240 байт. Новая
+    /// прошивка перекроила служебную область, но не размер.
+    /// </summary>
     public const int MetrologyDataSize = 240;
+
+    /// <summary>
+    /// Смещение, по которому кончается часть метрологии, общая для обоих
+    /// поколений прошивки. Дальше у старой прошивки идёт служебная область,
+    /// у новой — воздушные поправки затухания.
+    /// </summary>
+    public const int MetrologyCommonSize = 84;
+
     public const int DevHeaderSize = 11;
-    public const int DevPhysicalFrameSize = DevHeaderSize + GpToolDataSize;
+
+    /// <summary>
+    /// Размер физической записи `.DEV`: служебный заголовок плюс кадр
+    /// измерений источника.
+    /// </summary>
+    public static int DevPhysicalFrameSize(int frameSize)
+    {
+        return DevHeaderSize + frameSize;
+    }
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -28,6 +67,16 @@ public unsafe struct GpToolData
     private fixed float zeroAmplitudeRx2[BinaryLayoutConstants.FrequencyCount];
     private fixed float deltaPhase[BinaryLayoutConstants.ChannelCount];
     private fixed float zeroDeltaPhase[BinaryLayoutConstants.FrequencyCount];
+
+    // Здесь кончается кадр старой прошивки. Поля ниже приходят только от
+    // приборов с новой прошивкой; у кадра, прочитанного из 240-байтового
+    // источника, они нулевые, и доступ к ним закрыт возможностями источника.
+
+    /// <summary>Амплитудные УЭС, рассчитанные на контроллере прибора.</summary>
+    private fixed float rhoAttSmt[BinaryLayoutConstants.ChannelCount];
+
+    /// <summary>Симметризованные затухания в децибелах, расчёт на контроллере.</summary>
+    private fixed float attDbSmt[BinaryLayoutConstants.ChannelCount];
 
     public readonly float GetRhoSmt(int frequencyIndex, int transmitterIndex)
     {
@@ -173,6 +222,42 @@ public unsafe struct GpToolData
         }
     }
 
+    public readonly float GetRhoAttSmt(int frequencyIndex, int transmitterIndex)
+    {
+        ValidateChannelIndex(frequencyIndex, transmitterIndex);
+        fixed (float* values = rhoAttSmt)
+        {
+            return values[ChannelIndex(frequencyIndex, transmitterIndex)];
+        }
+    }
+
+    public void SetRhoAttSmt(int frequencyIndex, int transmitterIndex, float value)
+    {
+        ValidateChannelIndex(frequencyIndex, transmitterIndex);
+        fixed (float* values = rhoAttSmt)
+        {
+            values[ChannelIndex(frequencyIndex, transmitterIndex)] = value;
+        }
+    }
+
+    public readonly float GetAttDbSmt(int frequencyIndex, int transmitterIndex)
+    {
+        ValidateChannelIndex(frequencyIndex, transmitterIndex);
+        fixed (float* values = attDbSmt)
+        {
+            return values[ChannelIndex(frequencyIndex, transmitterIndex)];
+        }
+    }
+
+    public void SetAttDbSmt(int frequencyIndex, int transmitterIndex, float value)
+    {
+        ValidateChannelIndex(frequencyIndex, transmitterIndex);
+        fixed (float* values = attDbSmt)
+        {
+            values[ChannelIndex(frequencyIndex, transmitterIndex)] = value;
+        }
+    }
+
     public static int ChannelIndex(int frequencyIndex, int transmitterIndex)
     {
         ValidateChannelIndex(frequencyIndex, transmitterIndex);
@@ -210,7 +295,18 @@ public unsafe struct MetrologyData
     public uint SondeDiameterMm;
     public uint WorkType;
     public uint RxPosition;
-    private fixed ushort service[78];
+
+    // Здесь кончается часть, общая для обоих поколений прошивки.
+    //
+    // Старая прошивка держит дальше служебную область ushort[78]. Новая
+    // отдала её первые 40 байт под воздушные поправки затухания, оставив
+    // ushort[58]; общий размер структуры не изменился и остался 240 байт.
+    //
+    // Читать и писать airAttDb допустимо только у приборов новой прошивки:
+    // для старого прибора это его служебная область, и запись туда испортит
+    // содержимое, смысл которого приложению неизвестен.
+    private fixed float airAttDb[BinaryLayoutConstants.ChannelCount];
+    private fixed ushort service[58];
 
     public readonly ushort GetL1(int transmitterIndex)
     {
@@ -302,6 +398,29 @@ public unsafe struct MetrologyData
         }
     }
 
+    /// <summary>
+    /// Воздушная поправка затухания в децибелах. Присутствует только в
+    /// метрологии новой прошивки; вызывающий обязан проверить это по
+    /// возможностям источника.
+    /// </summary>
+    public readonly float GetAirAttDb(int frequencyIndex, int transmitterIndex)
+    {
+        GpToolData.ValidateChannelIndex(frequencyIndex, transmitterIndex);
+        fixed (float* values = airAttDb)
+        {
+            return values[GpToolData.ChannelIndex(frequencyIndex, transmitterIndex)];
+        }
+    }
+
+    public void SetAirAttDb(int frequencyIndex, int transmitterIndex, float value)
+    {
+        GpToolData.ValidateChannelIndex(frequencyIndex, transmitterIndex);
+        fixed (float* values = airAttDb)
+        {
+            values[GpToolData.ChannelIndex(frequencyIndex, transmitterIndex)] = value;
+        }
+    }
+
     private static void ValidateTransmitterIndex(int transmitterIndex)
     {
         if (transmitterIndex < 0 || transmitterIndex >= BinaryLayoutConstants.MaxTransmitterCount)
@@ -317,11 +436,76 @@ public static class BinaryLayoutVerifier
 
     public static unsafe int MetrologyDataSize => sizeof(MetrologyData);
 
+    /// <summary>
+    /// Все байты установлены в единицы: первый ненулевой байт структуры после
+    /// такой записи и есть смещение поля.
+    /// </summary>
+    private static readonly float FieldProbe = BitConverter.UInt32BitsToSingle(0xFFFFFFFFu);
+
+    /// <summary>
+    /// Смещение, с которого в <see cref="GpToolData"/> начинаются поля новой
+    /// прошивки. Приведение 240-байтового кадра к canonical опирается на то,
+    /// что общая часть не сдвинулась ни на байт, поэтому смещение проверяется
+    /// на старте вместе с размерами.
+    /// </summary>
+    public static unsafe int ExtendedFieldsOffset
+    {
+        get
+        {
+            GpToolData probe = default;
+            probe.SetRhoAttSmt(0, 0, FieldProbe);
+            byte* origin = (byte*)&probe;
+            for (int offset = 0; offset < sizeof(GpToolData); offset++)
+            {
+                if (origin[offset] != 0)
+                {
+                    return offset;
+                }
+            }
+
+            return -1;
+        }
+    }
+
+    /// <summary>
+    /// Смещение воздушных поправок затухания в метрологии новой прошивки.
+    /// </summary>
+    public static unsafe int AirAttDbOffset
+    {
+        get
+        {
+            MetrologyData probe = default;
+            probe.SetAirAttDb(0, 0, FieldProbe);
+            byte* origin = (byte*)&probe;
+            for (int offset = 0; offset < sizeof(MetrologyData); offset++)
+            {
+                if (origin[offset] != 0)
+                {
+                    return offset;
+                }
+            }
+
+            return -1;
+        }
+    }
+
     public static void ThrowIfInvalid()
     {
-        if (GpToolDataSize != BinaryLayoutConstants.GpToolDataSize)
+        if (GpToolDataSize != BinaryLayoutConstants.CanonicalFrameSize)
         {
-            throw new InvalidOperationException($"GpToolData size must be {BinaryLayoutConstants.GpToolDataSize} bytes, actual {GpToolDataSize}.");
+            throw new InvalidOperationException($"GpToolData size must be {BinaryLayoutConstants.CanonicalFrameSize} bytes, actual {GpToolDataSize}.");
+        }
+
+        if (ExtendedFieldsOffset != BinaryLayoutConstants.LegacyFrameSize)
+        {
+            throw new InvalidOperationException(
+                $"GpToolData extended fields must start at {BinaryLayoutConstants.LegacyFrameSize} bytes, actual {ExtendedFieldsOffset}.");
+        }
+
+        if (AirAttDbOffset != BinaryLayoutConstants.MetrologyCommonSize)
+        {
+            throw new InvalidOperationException(
+                $"MetrologyData air attenuation must start at {BinaryLayoutConstants.MetrologyCommonSize} bytes, actual {AirAttDbOffset}.");
         }
 
         if (MetrologyDataSize != BinaryLayoutConstants.MetrologyDataSize)
