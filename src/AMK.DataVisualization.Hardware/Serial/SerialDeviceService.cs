@@ -585,7 +585,9 @@ public sealed class SerialDeviceService : IDisposable
                     $"{frame.CanonicalData.Temperature:F1}°C");
                 if (DeviceExchangeLog.ShowRawData)
                 {
-                    DeviceLogPayloadFormatter.Append(frame, acceptedPackets);
+                    // Принятые байты идут в журнал вместе с разбором: по ним
+                    // сверяются смещения полей и фактический размер кадра.
+                    DeviceLogPayloadFormatter.Append(frame, acceptedPackets, rawPayload);
                 }
             }
             else

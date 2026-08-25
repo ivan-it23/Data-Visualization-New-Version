@@ -258,6 +258,23 @@ public unsafe struct GpToolData
         }
     }
 
+    /// <summary>
+    /// Байт состояния для одной частоты: бит передатчика взведён, если прибор
+    /// считает канал рабочим.
+    /// </summary>
+    /// <remarks>
+    /// Раскладка поля <c>condition</c>: биты 8…12 — 400 кГц T1…T5, биты 0…4 —
+    /// 2000 кГц. Она часть двоичного контракта, поэтому живёт здесь, рядом со
+    /// структурой, а не повторяется в расчётах и в журнале обмена.
+    /// </remarks>
+    public static byte GetConditionByte(uint condition, int frequencyIndex)
+    {
+        ValidateFrequencyIndex(frequencyIndex);
+        return frequencyIndex == 0
+            ? (byte)((condition >> 8) & 0xFFu)
+            : (byte)(condition & 0xFFu);
+    }
+
     public static int ChannelIndex(int frequencyIndex, int transmitterIndex)
     {
         ValidateChannelIndex(frequencyIndex, transmitterIndex);

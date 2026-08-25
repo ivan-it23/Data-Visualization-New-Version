@@ -215,10 +215,7 @@ public static class MetrologyCalculator
 
     public static byte ExtractConditionByte(uint rawCondition, int frequencyIndex)
     {
-        GpToolData.ValidateFrequencyIndex(frequencyIndex);
-        return frequencyIndex == 0
-            ? (byte)((rawCondition >> 8) & 0xFFu)
-            : (byte)(rawCondition & 0xFFu);
+        return GpToolData.GetConditionByte(rawCondition, frequencyIndex);
     }
 
     public static float SignalPhase(MetrologyData metrology, int frequencyIndex, int transmitterIndex, float rho)
