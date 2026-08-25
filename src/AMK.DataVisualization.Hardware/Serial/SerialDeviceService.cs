@@ -949,19 +949,33 @@ public sealed class SerialDeviceService : IDisposable
                     return result;
                 }
 
-                // Квитанцию обе ветки отдают с кодом 0x13: старая — как эхо
-                // своей же команды записи, новая — так устроен её обработчик
-                // 0x12. Полезной нагрузки в квитанции нет, но старая прошивка
-                // умеет вернуть считанное обратно состояние целиком.
-                if (responseCommand != CommandMetrology
-                    || responsePayload.Length is not (0 or 1 or BinaryLayoutConstants.MetrologyDataSize))
+                // Старая прошивка подтверждает запись кодом 0x13 и может
+                // вернуть пустую, однобайтовую либо полную 240-байтовую
+                // квитанцию. Новая 320-байтовая прошивка отвечает эхом своей
+                // команды записи 0x12 без полезной нагрузки. В новой ветке
+                // сохраняем совместимость с ранее ожидавшейся квитанцией 0x13,
+                // но не принимаем произвольный корректно оформленный пакет.
+                bool isLegacyAcknowledgement = responseCommand == CommandMetrology
+                    && responsePayload.Length is (0 or 1 or BinaryLayoutConstants.MetrologyDataSize);
+                bool isExtendedAcknowledgement = responseCommand == CommandMetrologyWrite
+                    && responsePayload.Length == 0;
+                bool isValidAcknowledgement = IsExtendedFirmwareDevice
+                    ? isExtendedAcknowledgement || isLegacyAcknowledgement
+                    : isLegacyAcknowledgement;
+                if (!isValidAcknowledgement)
                 {
+                    string expectedResponse = IsExtendedFirmwareDevice
+                        ? "cmd=0x12, payload=0; совместимо: cmd=0x13, payload=0/1/240"
+                        : "cmd=0x13, payload=0/1/240";
                     DeviceExchangeLog.Append(
                         $"[WriteMetrology]   RX cmd=0x{responseCommand:X2} payload size={responsePayload.Length} " +
-                        $"(ожидалось cmd=0x{CommandMetrology:X2}, payload 0/1/240)");
+                        $"(ожидалось {expectedResponse})");
                     DeviceExchangeLog.Append("[WriteMetrology] END result=INVALID_RESPONSE");
                     return SerialOperationResult.InvalidResponse;
                 }
+
+                DeviceExchangeLog.Append(
+                    $"[WriteMetrology]   ACK accepted: cmd=0x{responseCommand:X2} payload size={responsePayload.Length}");
 
                 if (responsePayload.Length == BinaryLayoutConstants.MetrologyDataSize)
                 {
