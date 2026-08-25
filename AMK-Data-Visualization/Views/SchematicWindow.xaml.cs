@@ -32,7 +32,7 @@ public sealed partial class SchematicWindow : Window
     // 675 не помещался последний ряд кнопок.
     //
     // Верхний предел задаёт масштаб окон: WindowScaleService увеличивает
-    // базовый размер до 125 %, то есть до 1025x900 физических пикселей.
+    // базовый размер до 115 %, то есть до 943x828 физических пикселей.
     private const int WindowHeight = 720;
     private const int WindowOwnerIndex = -8;
     private const int WindowExtendedStyleIndex = -20;

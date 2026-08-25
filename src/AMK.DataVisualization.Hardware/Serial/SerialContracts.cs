@@ -1,4 +1,4 @@
-using System.Text.Json.Serialization;
+﻿using System.Text.Json.Serialization;
 using AMK.DataVisualization.Core.Adapters;
 using AMK.DataVisualization.Core.Binary;
 
@@ -83,13 +83,22 @@ public sealed class SerialConnectionSettings
 
     public bool RecordingEnabled { get; set; } = true;
 
+    // Дозапись в конкретный файл — выбор на одну сессию, как и интервал
+    // опроса. На диск он не попадает: иначе следующий запуск молча
+    // продолжил бы дописывать вчерашний файл вместо создания нового, и
+    // пользователь узнавал бы об этом уже по содержимому файла.
+    // Внутри сессии выбор нужен и окну подключения, и главному окну,
+    // поэтому его держит SerialConnectionSettingsStore.
+    [JsonIgnore]
     public bool AppendToExistingFile { get; set; }
 
+    [JsonIgnore]
     public bool ShowFullExistingFile { get; set; }
 
     public string RecordFolder { get; set; } = SerialRecordingFolder.DefaultPath;
 
     public int RecordFolderSettingsVersion { get; set; }
 
+    [JsonIgnore]
     public string ExistingRecordFile { get; set; } = string.Empty;
 }

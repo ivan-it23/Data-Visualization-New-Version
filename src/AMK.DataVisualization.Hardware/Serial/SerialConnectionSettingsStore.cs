@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 
 namespace AMK.DataVisualization.Hardware.Serial;
 
@@ -7,6 +7,15 @@ public sealed class SerialConnectionSettingsStore
     private const int CurrentRecordFolderSettingsVersion = 1;
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private readonly string settingsPath;
+
+    // Выбор дозаписи живёт здесь, а не в файле настроек: на диске он
+    // заставил бы следующий запуск дописывать файл прошлой сессии, а внутри
+    // сессии он всё же нужен обоим окнам — окно подключения его сохраняет,
+    // главное окно перечитывает перед подключением. Экземпляр хранилища в
+    // приложении один, поэтому этих полей достаточно.
+    private bool appendToExistingFile;
+    private bool showFullExistingFile;
+    private string existingRecordFile = string.Empty;
 
     public SerialConnectionSettingsStore()
     {
@@ -37,6 +46,7 @@ public sealed class SerialConnectionSettingsStore
         }
 
         Prepare(settings);
+        ApplySessionRecordingChoice(settings);
         return settings;
     }
 
@@ -48,8 +58,28 @@ public sealed class SerialConnectionSettingsStore
             Directory.CreateDirectory(directory);
         }
 
+        CaptureSessionRecordingChoice(settings);
         Prepare(settings);
         File.WriteAllText(settingsPath, JsonSerializer.Serialize(settings, JsonOptions));
+    }
+
+    /// <summary>Запоминает выбор дозаписи на время работы приложения.</summary>
+    private void CaptureSessionRecordingChoice(SerialConnectionSettings settings)
+    {
+        appendToExistingFile = settings.AppendToExistingFile;
+        showFullExistingFile = settings.ShowFullExistingFile;
+        existingRecordFile = settings.ExistingRecordFile ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Возвращает выбор дозаписи, сделанный в этой сессии. При первом
+    /// чтении после запуска поля пустые, поэтому запись идёт в новый файл.
+    /// </summary>
+    private void ApplySessionRecordingChoice(SerialConnectionSettings settings)
+    {
+        settings.AppendToExistingFile = appendToExistingFile;
+        settings.ShowFullExistingFile = showFullExistingFile;
+        settings.ExistingRecordFile = existingRecordFile;
     }
 
     private static void Prepare(SerialConnectionSettings settings)

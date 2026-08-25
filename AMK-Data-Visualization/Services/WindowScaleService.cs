@@ -17,8 +17,13 @@ namespace AMK.DataVisualization.App.Services;
 internal sealed class WindowScaleService
 {
     public const double DefaultScale = 1.0;
-    public const double MinimumScale = 0.75;
-    public const double MaximumScale = 1.25;
+
+    // Пределы подобраны по тому, как окна ведут себя на деле: при 125 % часть
+    // элементов не помещалась на экран, при 75 % становилась слишком мелкой.
+    // Сохранённый ранее выбор не теряется: NormalizeScaleChoice приводит его к
+    // ближайшему доступному, то есть 125 % становится 115 %, а 75 % — 85 %.
+    public const double MinimumScale = 0.85;
+    public const double MaximumScale = 1.15;
 
     private const double ScaleEpsilon = 1e-9;
 

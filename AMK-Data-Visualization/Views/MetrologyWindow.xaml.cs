@@ -18,12 +18,9 @@ namespace AMK.DataVisualization.App.Views;
 
 public sealed partial class MetrologyWindow : Window
 {
-    private const int WindowWidth = 1220;
-    private const int WindowHeight = 642;
-    private const double RequiredContentWidth = 1204.0;
-    private const double RequiredContentHeight = 604.0;
-    private const uint NoMove = 0x0002;
-    private const uint NoZOrder = 0x0004;
+    /// <summary>DPI, в котором аппаратно-независимый пиксель равен физическому.</summary>
+    private const uint ReferenceDpi = 96;
+
     private readonly SerialDeviceService serialDeviceService;
     private readonly MetrologySession metrologySession;
     private readonly Action metrologyUpdated;
@@ -105,7 +102,10 @@ public sealed partial class MetrologyWindow : Window
         ModificationComboBox.SelectedIndex = 0;
         RxPositionComboBox.SelectedIndex = 0;
 
-        AppWindow.Resize(new SizeInt32(WindowWidth, WindowHeight));
+        // Размер задаётся один раз здесь, как у остальных окон приложения.
+        // Дальше им распоряжается WindowScaleService: он запоминает размер окна
+        // при подключении и умножает на выбранный пользователем масштаб.
+        ResizeClientToContent();
         if (AppWindow.Presenter is OverlappedPresenter presenter)
         {
             presenter.IsResizable = false;
@@ -139,16 +139,10 @@ public sealed partial class MetrologyWindow : Window
             AppWindow.Show();
         }
 
-        ResizeForCurrentScale(windowHandle);
-
         SecondaryWindowIntegration.RestoreIfMinimized(windowHandle);
 
         SecondaryWindowIntegration.CenterOverOwner(windowHandle, ownerHandle);
-        DispatcherQueue.TryEnqueue(() =>
-        {
-            ResizeForCurrentScale(windowHandle);
-            SecondaryWindowIntegration.CenterOverOwner(windowHandle, ownerHandle);
-        });
+        DispatcherQueue.TryEnqueue(() => SecondaryWindowIntegration.CenterOverOwner(windowHandle, ownerHandle));
     }
 
     public void ClosePermanently()
@@ -888,82 +882,44 @@ public sealed partial class MetrologyWindow : Window
             return;
         }
 
-        // XAML применяет окончательный размер после Activate. Даём завершиться
-        // этому проходу, затем закрепляем клиентскую область и центрирование.
+        // XAML заканчивает раскладку уже после Activate, поэтому центрирование
+        // повторяется, когда окончательный размер известен.
         await Task.Delay(150);
-        DispatcherQueue.TryEnqueue(() =>
-        {
-            IntPtr windowHandle = WindowNative.GetWindowHandle(this);
-            ResizeForCurrentScale(windowHandle);
-            SecondaryWindowIntegration.CenterOverOwner(windowHandle, currentOwnerHandle);
-        });
+        DispatcherQueue.TryEnqueue(() => SecondaryWindowIntegration.CenterOverOwner(
+            WindowNative.GetWindowHandle(this),
+            currentOwnerHandle));
     }
 
-    private void ResizeForCurrentScale(IntPtr windowHandle)
+    /// <summary>
+    /// Делает клиентскую область окна равной его содержимому.
+    /// </summary>
+    /// <remarks>
+    /// Канва имеет фиксированный размер и сжиматься не умеет, поэтому окно
+    /// обязано быть ровно по ней: всё, что не поместилось, просто уходит за
+    /// границу окна.
+    ///
+    /// Тонкость в единицах. Разметка задана в аппаратно-независимых пикселях,
+    /// а <c>ResizeClient</c> принимает физические, поэтому требуемый размер
+    /// переводится по DPI монитора. Без перевода на дисплее со 125 % окно
+    /// выходило на пятую часть меньше содержимого, и за его границей
+    /// оказывались колонки воздушных поправок затухания и оба ряда кнопок.
+    ///
+    /// Расчёт идёт только от размеров канвы и не смотрит на текущий размер
+    /// окна. Прежняя версия брала максимум из требуемого и фактического и
+    /// вызывалась при каждом показе, поэтому расхождение накапливалось.
+    /// </remarks>
+    private void ResizeClientToContent()
     {
-        uint dpi = windowHandle != IntPtr.Zero ? GetDpiForWindow(windowHandle) : 96u;
-        double scale = dpi > 0u ? dpi / 96.0 : 1.0;
-        double widthDeficit = RootGrid.ActualWidth > 0.0
-            ? Math.Max(0.0, RequiredContentWidth - RootGrid.ActualWidth)
-            : 0.0;
-        double heightDeficit = RootGrid.ActualHeight > 0.0
-            ? Math.Max(0.0, RequiredContentHeight - RootGrid.ActualHeight)
-            : 0.0;
-        int requestedWidth = Math.Max(
-            (int)Math.Ceiling(WindowWidth * scale),
-            AppWindow.Size.Width + (int)Math.Ceiling(widthDeficit * scale));
-        int requestedHeight = Math.Max(
-            (int)Math.Ceiling(WindowHeight * scale),
-            AppWindow.Size.Height + (int)Math.Ceiling(heightDeficit * scale));
-        AppWindow.Resize(new SizeInt32(requestedWidth, requestedHeight));
-
-        // После Activate WinUI может повторно применить размер от XAML-содержимого.
-        // Закрепляем минимум именно по физической клиентской области, включая DPI.
-        if (!GetWindowRect(windowHandle, out Rect windowRect)
-            || !GetClientRect(windowHandle, out Rect clientRect))
-        {
-            return;
-        }
-
-        int clientWidth = clientRect.Right - clientRect.Left;
-        int clientHeight = clientRect.Bottom - clientRect.Top;
-        int requiredClientWidth = (int)Math.Ceiling(RequiredContentWidth * scale);
-        int requiredClientHeight = (int)Math.Ceiling(RequiredContentHeight * scale);
-        int outerWidth = windowRect.Right - windowRect.Left;
-        int outerHeight = windowRect.Bottom - windowRect.Top;
-        int correctedWidth = Math.Max(requestedWidth, outerWidth + Math.Max(0, requiredClientWidth - clientWidth));
-        int correctedHeight = Math.Max(requestedHeight, outerHeight + Math.Max(0, requiredClientHeight - clientHeight));
-        SetWindowPos(
-            windowHandle,
-            IntPtr.Zero,
-            0,
-            0,
-            correctedWidth,
-            correctedHeight,
-            NoMove | NoZOrder);
+        double contentWidth = ContentCanvas.Width + ContentCanvas.Margin.Left + ContentCanvas.Margin.Right;
+        double contentHeight = ContentCanvas.Height + ContentCanvas.Margin.Top + ContentCanvas.Margin.Bottom;
+        IntPtr windowHandle = WindowNative.GetWindowHandle(this);
+        uint dpi = windowHandle != IntPtr.Zero ? GetDpiForWindow(windowHandle) : ReferenceDpi;
+        double dpiScale = dpi > 0u ? dpi / (double)ReferenceDpi : 1.0;
+        AppWindow.ResizeClient(new SizeInt32(
+            (int)Math.Ceiling(contentWidth * dpiScale),
+            (int)Math.Ceiling(contentHeight * dpiScale)));
     }
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetWindowRect(IntPtr windowHandle, out Rect rect);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetClientRect(IntPtr windowHandle, out Rect rect);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetWindowPos(IntPtr windowHandle, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
 
     [DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(IntPtr windowHandle);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct Rect
-    {
-        public int Left;
-        public int Top;
-        public int Right;
-        public int Bottom;
-    }
 }

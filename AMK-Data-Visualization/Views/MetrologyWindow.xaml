@@ -6,7 +6,7 @@
     Title="МЕТРОЛОГИЯ">
 
     <Grid x:Name="RootGrid" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
-        <Canvas Width="1180" Height="580" Margin="12">
+        <Canvas x:Name="ContentCanvas" Width="1180" Height="580" Margin="12">
             <!-- Геометрия зонда: порядок полей соответствует эталонному окну. -->
             <Border Canvas.Left="10" Canvas.Top="8" Width="320" Height="375" BorderBrush="{ThemeResource TextControlBorderBrush}" BorderThickness="1" CornerRadius="2" />
             <Border Canvas.Left="22" Canvas.Top="1" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
