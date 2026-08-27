@@ -8,8 +8,8 @@ using WinRT.Interop;
 namespace AMK.DataVisualization.App.Views;
 
 /// <summary>
-/// Lets the user choose the original application scale or one adjacent larger or
-/// smaller preset.
+/// Lets the user choose the reference application scale or one adjacent larger
+/// or smaller preset. System DPI compensation is applied by WindowScaleService.
 /// </summary>
 public sealed partial class WindowScaleWindow : Window
 {

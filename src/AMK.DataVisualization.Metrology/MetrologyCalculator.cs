@@ -19,7 +19,12 @@ public static class MetrologyCalculator
     private const float MaximumAttenuationRho = 1000.0f;
     private const float InfiniteAttenuationRho = 1200.0f;
     private const float AttenuationEpsilon = 5e-6f;
-    private const float AttenuationInfiniteEpsilon = 5e-6f;
+
+    // Прошивка (`RO_ATT`, `epsilon_INF = 0.00000005`) объявляет «бесконечность»
+    // на 5e-8, а не на точности самой амплитуды. Уравнивание двух порогов
+    // обрывало поиск на первом же шаге золотого сечения и возвращало 1200 там,
+    // где прибор доводил расчёт до конечного УЭС.
+    private const float AttenuationInfiniteEpsilon = 5e-8f;
 
     private const int MaximumIterations = 256;
     private static readonly float[] AlternatingSigns = [1.0f, -1.0f, 1.0f, -1.0f, 1.0f];
@@ -389,8 +394,8 @@ public static class MetrologyCalculator
                 [.5f, .75f, 0, -.25f, 0],
                 [0, 1.25f, 0, -.75f, .5f],
                 [0, .75f, 0, -.25f, .5f],
-                [0, .25f, 0, .25f, .05f],
-                [0, -.25f, 0, .75f, .05f]),
+                [0, .25f, 0, .25f, .5f],
+                [0, -.25f, 0, .75f, .5f]),
             0b00010111 => Matrix(
                 [.75f, .5f, -.25f, 0, 0],
                 [.25f, .5f, .25f, 0, 0],

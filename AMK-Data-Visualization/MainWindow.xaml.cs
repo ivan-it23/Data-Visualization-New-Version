@@ -293,7 +293,10 @@ public sealed partial class MainWindow : Window
                 metrologySession,
                 deviceRegistryUploadFlow,
                 OnMetrologyUpdated);
-            windowScaleService.Attach(metrologyWindow, resizeWithScale: true);
+            windowScaleService.Attach(
+                metrologyWindow,
+                resizeWithScale: true,
+                baseSizeTracksSystemDpi: true);
             metrologyWindow.ShowForOwner(WindowNative.GetWindowHandle(this));
         }
         catch (Exception exception)

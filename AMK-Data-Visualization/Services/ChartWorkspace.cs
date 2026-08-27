@@ -100,10 +100,9 @@ internal sealed class ChartWorkspace
     /// </summary>
     public int GetAvailableTransmitterCountForGraph(int graphNumber)
     {
-        ToolDataRepository repository = GetRepositoryForGraph(graphNumber);
-        return repository.TryGetRecordMetadata(0, out ToolRecordMetadata metadata)
-            && metadata.Capabilities.TransmitterCount > 0
-            ? metadata.Capabilities.TransmitterCount
+        return TryGetSourceCapabilitiesForGraph(graphNumber, out ToolCapabilities capabilities)
+            && capabilities.TransmitterCount > 0
+            ? capabilities.TransmitterCount
             : SchematicSelection.UiTransmitterCount;
     }
 
@@ -112,11 +111,41 @@ internal sealed class ChartWorkspace
     /// где это выясняется: и меню пресетов, и окно схемы обязаны спрашивать
     /// здесь, а не читать метаданные самостоятельно.
     /// </summary>
+    /// <remarks>
+    /// Пустой график отвечает «нет»: пока источника не существует, включать
+    /// пункты меню, которых у половины парка приборов нет, нельзя. Для удаления
+    /// кривых этого ответа недостаточно — см.
+    /// <see cref="TryGetSourceCapabilitiesForGraph"/>.
+    /// </remarks>
     public bool IsExtendedFirmwareSourceForGraph(int graphNumber)
     {
+        return TryGetSourceCapabilitiesForGraph(graphNumber, out ToolCapabilities capabilities)
+            && capabilities.IsExtendedFirmware;
+    }
+
+    /// <summary>
+    /// Возможности источника, загруженного в график. Возвращает <c>false</c>,
+    /// когда источника ещё нет, и тогда о приборе не известно ничего.
+    /// </summary>
+    /// <remarks>
+    /// Отличать «источник старой прошивки» от «источника пока нет» обязательно.
+    /// Пустое хранилище — штатное состояние: оно наступает между нажатием
+    /// «Включить» и первым принятым кадром, потому что сессия опроса начинается
+    /// с очистки хранилища. Если считать это состояние старой прошивкой,
+    /// подготовка сессии удалит из уже применённой конфигурации все амплитудные
+    /// кривые, и пришедшие следом кадры новой прошивки рисовать будет нечего.
+    /// </remarks>
+    private bool TryGetSourceCapabilitiesForGraph(int graphNumber, out ToolCapabilities capabilities)
+    {
         ToolDataRepository repository = GetRepositoryForGraph(graphNumber);
-        return repository.TryGetRecordMetadata(0, out ToolRecordMetadata metadata)
-            && metadata.Capabilities.IsExtendedFirmware;
+        if (repository.TryGetRecordMetadata(0, out ToolRecordMetadata metadata))
+        {
+            capabilities = metadata.Capabilities;
+            return true;
+        }
+
+        capabilities = ToolCapabilities.Empty;
+        return false;
     }
 
     /// <summary>
@@ -142,7 +171,13 @@ internal sealed class ChartWorkspace
         // переход на источник старой: её амплитудные кривые данных не имеют и
         // должны исчезнуть до того, как их прочитают легенда и список
         // видимости.
-        if (!IsExtendedFirmwareSourceForGraph(graphNumber))
+        //
+        // Удаляем только тогда, когда источник есть и он назвал себя старым.
+        // Пустое хранилище о приборе не говорит ничего, а удаление необратимо:
+        // кривую, выброшенную из применённой конфигурации, обратно вернёт
+        // только повторный выбор пресета пользователем.
+        if (TryGetSourceCapabilitiesForGraph(graphNumber, out ToolCapabilities capabilities)
+            && !capabilities.IsExtendedFirmware)
         {
             removedCount += configuration.Curves.RemoveAll(
                 curve => curve.DataType is DataType.RhoAttSmt or DataType.AttDbSmt);

@@ -67,9 +67,12 @@ public static class ToolDataFileReader
             return DataFileValidationResult.Invalid(ShortFileMessage, format);
         }
 
-        if (!TryReadFileSignature(fileName, format, out uint signature))
+        if (!TryReadFileSignature(fileName, format, out uint signature, out string? accessError))
         {
-            return DataFileValidationResult.Invalid(ShortFileMessage, format);
+            // Отказ доступа и короткий файл — разные причины, и подменять одну
+            // другой нельзя: пользователь получал «файл слишком короткий» на
+            // совершенно исправном файле и искал повреждение там, где его нет.
+            return DataFileValidationResult.Invalid(accessError ?? ShortFileMessage, format);
         }
 
         IToolDataAdapter? adapter = ToolDataAdapterRegistry.Default.FindAdapterBySignature(signature);
@@ -129,7 +132,7 @@ public static class ToolDataFileReader
         List<GpToolData> records = new(validation.FrameCount);
         List<ToolRecordMetadata> metadata = new(validation.FrameCount);
 
-        using FileStream stream = File.OpenRead(fileName);
+        using FileStream stream = OpenForSharedRead(fileName);
         byte[] rawFrame = new byte[validation.FrameSize];
         int skippedFrameCount = 0;
         for (int index = 0; index < validation.FrameCount; index++)
@@ -188,13 +191,23 @@ public static class ToolDataFileReader
 
     public static bool TryReadFileSignature(string fileName, FileFormat format, out uint signature)
     {
+        return TryReadFileSignature(fileName, format, out signature, out _);
+    }
+
+    private static bool TryReadFileSignature(
+        string fileName,
+        FileFormat format,
+        out uint signature,
+        out string? accessError)
+    {
         signature = 0;
+        accessError = null;
         int signatureOffset = GetSignatureOffset(format);
         byte[] buffer = new byte[sizeof(uint)];
 
         try
         {
-            using FileStream stream = File.OpenRead(fileName);
+            using FileStream stream = OpenForSharedRead(fileName);
             if (stream.Length < signatureOffset + buffer.Length)
             {
                 return false;
@@ -206,8 +219,30 @@ public static class ToolDataFileReader
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            accessError = $"{OpenErrorMessage}: {ex.Message}";
             return false;
         }
+    }
+
+    /// <summary>
+    /// Открывает файл данных на чтение, не мешая тому, кто уже пишет в него.
+    /// </summary>
+    /// <remarks>
+    /// <c>File.OpenRead</c> запрашивает <c>FileShare.Read</c>, а этот режим
+    /// запрещает чужую запись. Файл, в который прямо сейчас идёт запись живых
+    /// кадров, открыт на запись самим приложением, поэтому такое открытие
+    /// срывается нарушением совместного доступа — и это штатный сценарий:
+    /// пользователь открывает файл текущей сессии, чтобы посмотреть записанное.
+    /// Тем же <c>FileShare.ReadWrite</c> уже читается файл при выгрузке в базу
+    /// учёта приборов из-под активной записи.
+    ///
+    /// Незавершённая запись последнего кадра в открытом файле опасности не
+    /// представляет: неполный хвост пропускается тем же правилом, что и у
+    /// оборванного дампа памяти прибора.
+    /// </remarks>
+    private static FileStream OpenForSharedRead(string fileName)
+    {
+        return new FileStream(fileName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
     }
 
     /// <summary>
@@ -236,7 +271,7 @@ public static class ToolDataFileReader
 
         try
         {
-            using FileStream stream = File.OpenRead(fileName);
+            using FileStream stream = OpenForSharedRead(fileName);
             if (TryConfirmFrameSize(stream, format, signature, fileSize, signatureFrameSize))
             {
                 frameSize = signatureFrameSize;
