@@ -22,7 +22,11 @@ public sealed partial class WindowScaleWindow : Window
     {
         this.scaleService = scaleService;
         InitializeComponent();
-        AppWindow.Resize(new SizeInt32(400, 300));
+        // Высота рассчитана по фактическому размеру содержимого: три переключателя
+        // примерно по 43 аппаратно-независимых пикселя, промежутки, кнопка закрытия
+        // и отступы дают около 230. Прежние 300 физических точек оставляли под
+        // переключатели меньше, чем им нужно, и крайние значения обрезались.
+        AppWindow.Resize(new SizeInt32(380, 370));
         if (AppWindow.Presenter is OverlappedPresenter presenter)
         {
             presenter.IsMaximizable = false;

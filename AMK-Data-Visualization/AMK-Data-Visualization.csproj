@@ -24,10 +24,10 @@
     <Company>ООО НПФ &quot;АМК ГОРИЗОНТ&quot;</Company>
     <Authors>ООО НПФ &quot;АМК ГОРИЗОНТ&quot;</Authors>
     <Copyright>Copyright © 2026 ООО НПФ &quot;АМК ГОРИЗОНТ&quot;</Copyright>
-    <Version>0.2.3</Version>
-    <AssemblyVersion>0.2.3.0</AssemblyVersion>
-    <FileVersion>0.2.3.0</FileVersion>
-    <InformationalVersion>0.2.3</InformationalVersion>
+    <Version>0.2.6</Version>
+    <AssemblyVersion>0.2.6.0</AssemblyVersion>
+    <FileVersion>0.2.6.0</FileVersion>
+    <InformationalVersion>0.2.6</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 

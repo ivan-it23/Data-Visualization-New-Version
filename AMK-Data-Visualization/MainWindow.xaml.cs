@@ -95,7 +95,7 @@ public sealed partial class MainWindow : Window
         // maximized, so only its content scales - the frame is left alone.
         windowScaleService.Initialize(windowScaleSettingsStore.Load());
         windowScaleService.ScaleChanged += WindowScaleService_ScaleChanged;
-        windowScaleService.Attach(this, resizeWithScale: false);
+        windowScaleService.Attach(this, resizeWithScale: false, fitContentToWindow: true);
         string iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "DataVisualization.ico");
         if (File.Exists(iconPath))
         {
@@ -332,6 +332,7 @@ public sealed partial class MainWindow : Window
 
         updateCheckInProgress = true;
         UpdateCheckButton.IsEnabled = false;
+        bool closingForUpdate = false;
         if (!silent)
         {
             SetStatus("Проверка обновлений...");
@@ -368,14 +369,32 @@ public sealed partial class MainWindow : Window
 
             string currentVersion = AutoUpdateService.FormatVersion(update.CurrentVersion);
             string remoteVersion = AutoUpdateService.FormatVersion(update.RemoteVersion);
+
+            // Установщик обновляет ту копию, которая установлена, а не ту, из
+            // которой запущен процесс. Если это разные каталоги, пользователь
+            // должен узнать об этом до загрузки: иначе он получит вторую копию
+            // приложения и то же предложение обновиться при следующем запуске.
+            string? copyMismatch = AutoUpdateService.DescribeCopyMismatch();
+            string promptText =
+                $"Доступна версия {remoteVersion}.\nТекущая версия: {currentVersion}.";
+            promptText += copyMismatch is null
+                ? "\n\nСкачать и установить обновление?"
+                : $"\n\n{copyMismatch}\n\nВсё равно скачать и установить обновление?";
+
             ContentDialog prompt = new()
             {
                 XamlRoot = Content.XamlRoot,
                 Title = "Обновление доступно",
-                Content = $"Доступна версия {remoteVersion}.\nТекущая версия: {currentVersion}.\n\nСкачать и установить обновление?",
+                Content = new TextBlock
+                {
+                    Text = promptText,
+                    TextWrapping = TextWrapping.Wrap
+                },
                 PrimaryButtonText = "Скачать и установить",
                 CloseButtonText = "Позже",
-                DefaultButton = ContentDialogButton.Primary
+                DefaultButton = copyMismatch is null
+                    ? ContentDialogButton.Primary
+                    : ContentDialogButton.Close
             };
             if (await prompt.ShowAsync() != ContentDialogResult.Primary)
             {
@@ -385,16 +404,15 @@ public sealed partial class MainWindow : Window
 
             SetStatus($"Загрузка обновления {remoteVersion}...");
             string installerPath = await autoUpdateService.DownloadInstallerAsync(update, cancellationToken);
-            if (!AutoUpdateService.StartInstaller(installerPath))
+            if (!AutoUpdateService.StartInstaller(installerPath, out string startError))
             {
-                await ShowUpdateMessageAsync(
-                    "Ошибка обновления",
-                    "Установщик скачан, но его не удалось запустить.");
+                await ShowUpdateMessageAsync("Ошибка обновления", startError);
                 SetStatus("Не удалось запустить установщик обновления");
                 return;
             }
 
             SetStatus("Установщик обновления запущен");
+            closingForUpdate = true;
             Close();
         }
         catch (OperationCanceledException)
@@ -415,7 +433,14 @@ public sealed partial class MainWindow : Window
         finally
         {
             updateCheckInProgress = false;
-            UpdateCheckButton.IsEnabled = true;
+
+            // Окно уже закрывается под установщик: его элементы к этому моменту
+            // разрушены, и обращение к ним падает исключением, которое некому
+            // обработать.
+            if (!closingForUpdate)
+            {
+                UpdateCheckButton.IsEnabled = true;
+            }
         }
     }
 
@@ -966,7 +991,9 @@ public sealed partial class MainWindow : Window
         item400.Click += (_, _) => OnFrequencyChosen(graphNumber, FrequencyBand.Freq400KHz);
         MenuFlyoutItem item2000 = new() { Text = "2000 кГц" };
         item2000.Click += (_, _) => OnFrequencyChosen(graphNumber, FrequencyBand.Freq2000KHz);
+        ScaleMenuItem(item400);
         flyout.Items.Add(item400);
+        ScaleMenuItem(item2000);
         flyout.Items.Add(item2000);
         return flyout;
     }
@@ -1072,27 +1099,63 @@ public sealed partial class MainWindow : Window
     ///
     /// Перед всеми разделами, кроме первого, ставится разделитель.
     /// </remarks>
-    private static void AddPresetGroupHeader(MenuFlyout flyout, string title)
+    private void AddPresetGroupHeader(MenuFlyout flyout, string title)
     {
         if (flyout.Items.Count > 0)
         {
             flyout.Items.Add(new MenuFlyoutSeparator());
         }
 
-        flyout.Items.Add(new MenuFlyoutItem
+        MenuFlyoutItem header = new()
         {
             Text = title,
             IsEnabled = false,
-            FontSize = 12,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
-        });
+        };
+        ScaleMenuItem(header, MenuHeaderFontSize);
+        flyout.Items.Add(header);
     }
 
     private void AddPresetMenuItem(MenuFlyout flyout, int graphNumber, string label, PresetType preset, SmtComputationMode? mode)
     {
         MenuFlyoutItem item = new() { Text = label, Tag = new PresetMenuTag(preset, mode) };
+        ScaleMenuItem(item);
         item.Click += (_, _) => OnPresetChosen(graphNumber, preset, mode);
         flyout.Items.Add(item);
+    }
+
+    /// <summary>Кегль заголовка раздела в меню пресетов до масштабирования.</summary>
+    private const double MenuHeaderFontSize = 12.0;
+
+    /// <summary>Кегль пункта меню до масштабирования — базовый кегль темы.</summary>
+    private const double MenuItemFontSize = 14.0;
+
+    /// <summary>Высота пункта меню до масштабирования.</summary>
+    private const double MenuItemHeight = 32.0;
+
+    /// <summary>Боковой отступ пункта меню до масштабирования.</summary>
+    private const double MenuItemSidePadding = 11.0;
+
+    /// <summary>
+    /// Задаёт пункту меню размер, соответствующий масштабу интерфейса.
+    /// </summary>
+    /// <remarks>
+    /// <c>MenuFlyout</c> разворачивается в собственном окне, куда преобразование
+    /// содержимого главного окна не попадает, поэтому меню оставалось в
+    /// системном размере и на дисплее со 100 % выглядело мельче остального
+    /// интерфейса. Масштабируется именно разметка, а не отрисовка: окно popup'а
+    /// строится по разметке, поэтому размер верен с первого кадра, ничего не
+    /// обрезается и не меняется в ответ на посторонний ввод.
+    ///
+    /// Список <c>ComboBox</c> сюда не входит: он разворачивается внутри окна и
+    /// масштаб уже наследует.
+    /// </remarks>
+    private void ScaleMenuItem(MenuFlyoutItem item, double baseFontSize = MenuItemFontSize)
+    {
+        double scale = windowScaleService.PopupContentScale;
+        item.FontSize = baseFontSize * scale;
+        item.Height = MenuItemHeight * scale;
+        item.Padding = new Thickness(MenuItemSidePadding * scale, 0, MenuItemSidePadding * scale, 0);
     }
 
     private async void OnPresetChosen(int graphNumber, PresetType preset, SmtComputationMode? mode)
@@ -1727,6 +1790,7 @@ public sealed partial class MainWindow : Window
             IsEnabled = args.HasCrosshair
         };
         setXFromItem.Click += (_, _) => SetXRangeBoundaryFromCrosshair(graphNumber, setStart: true);
+        ScaleMenuItem(setXFromItem);
         menu.Items.Add(setXFromItem);
 
         MenuFlyoutItem setXToItem = new()
@@ -1735,6 +1799,7 @@ public sealed partial class MainWindow : Window
             IsEnabled = args.HasCrosshair
         };
         setXToItem.Click += (_, _) => SetXRangeBoundaryFromCrosshair(graphNumber, setStart: false);
+        ScaleMenuItem(setXToItem);
         menu.Items.Add(setXToItem);
         menu.Items.Add(new MenuFlyoutSeparator());
 
@@ -1746,6 +1811,7 @@ public sealed partial class MainWindow : Window
                 && !(graphNumber == 2 && chartWorkspace.IsGraph2Independent)
         };
         addNoteItem.Click += async (_, _) => await CreateNoteAtCrosshairAsync(graphNumber);
+        ScaleMenuItem(addNoteItem);
         menu.Items.Add(addNoteItem);
         menu.ShowAt(graphControl, new FlyoutShowOptions { Position = args.Position });
     }
@@ -2021,6 +2087,29 @@ public sealed partial class MainWindow : Window
     private void WindowScaleService_ScaleChanged(object? sender, EventArgs e)
     {
         windowScaleSettingsStore.Save(windowScaleService.Settings);
+        RebuildScaledMenus();
+    }
+
+    /// <summary>
+    /// Пересобирает выпадающие меню под новый масштаб интерфейса.
+    /// </summary>
+    /// <remarks>
+    /// Размер пунктов заложен в их разметку при построении, поэтому смена
+    /// масштаба сама по себе меню не трогает: без пересборки они остались бы в
+    /// размере, который был при запуске. Контекстное меню графика строится
+    /// каждый раз заново и в пересборке не нуждается.
+    /// </remarks>
+    private void RebuildScaledMenus()
+    {
+        foreach ((int graphNumber, DropDownButton button) in presetDropDowns)
+        {
+            button.Flyout = BuildPresetFlyout(graphNumber);
+        }
+
+        foreach ((int graphNumber, DropDownButton button) in frequencyDropDowns)
+        {
+            button.Flyout = BuildFrequencyFlyout(graphNumber);
+        }
     }
 
     private void DeviceRegistryButton_Click(object sender, RoutedEventArgs e)
@@ -3223,7 +3312,7 @@ public sealed partial class MainWindow : Window
         graphControl.ShowLegacyEmptyState(
             $"График {graphNumber}",
             hasData
-                ? "Нажмите «Настройка кривых» или иконку «Ключ с шестерёнкой» в левом углу графика для настройки вывода кривых"
+                ? "Для вывода кривых выберите необходимый пресет в выпадающем списке «Быстрые пресеты» или кликните на «Настройка кривых» в левом углу графика"
                 : "Сначала откройте файл данных или включите прибор");
         UpdateRangeControls(graphNumber);
     }

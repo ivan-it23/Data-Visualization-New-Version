@@ -1,0 +1,2398 @@
+
+// Included Files
+//
+#include "driverlib.h"
+#include "device.h"
+#include "ad9956.h"
+#include "ads131A04.h"
+#include "stdio.h"
+#include <stdlib.h>
+#include "string.h"
+#include <complex.h>
+#include <math.h>
+#include <stdbool.h>
+#include "ModesAndCommands.h"
+#include "ExpData.h"
+#include "flash_programming_f28004x.h"
+#include "F021_F28004x_C28x.h"
+
+// Длительность одного состояния циклограммы
+#define StMDelay 31000//31000
+
+// Фаза третьего DDS:
+//#define  PHASE_DEG 0.0
+//#define  PHASE_MSB (((uint16_t)((16384.0/360.0)*PHASE_DEG))>>8)&0x00FF;
+//#define  PHASE_LSB ((uint16_t)((16384.0/360.0)*PHASE_DEG))&0x00FF;
+
+//настраиваем шим для гетеродина 2000 кГц
+#define EPWM6_TIMER_TBPRD_2000    23U//12U//13U //27U//12U
+#define EPWM6_MAX_CMPB_2000       12U//6U //13U//6U
+#define EPWM6_MIN_CMPB_2000       12U//6U //13U//6U
+#define EPWM_CMP_UP          1U
+#define EPWM_CMP_DOWN        0U
+
+//настраиваем шим для гетеродина 400 кГц
+#define EPWM6_TIMER_TBPRD_400    121U//60U//61U//41U// 60U//27U//12U
+#define EPWM6_MAX_CMPB_400       60U//30U//20U// 30U//13U//6U
+#define EPWM6_MIN_CMPB_400       60U//30U//20U// 30U//13U//6U
+
+//настраиваем шим для гетеродина 532.333 кГц
+#define EPWM8_TIMER_TBPRD_400    90//45U //27U//12U
+#define EPWM8_MAX_CMPB_400       45//22U //13U//6U
+#define EPWM8_MIN_CMPB_400       45//22U //13U//6U
+
+// Length (in 16-bit words)
+//файл метрологии 240 байт 2х байтные ворды хранящиеся во FLASH
+#define  WORDS_IN_FLASH_BUFFER    120
+// WDT:
+//#define WDTPeriod 10000
+//#define PWR_SYNC_OUT_PIN             24U
+/* обмен по can*/
+#define MSG_DATA_LENGTH    8
+#define TX_MSG_OBJ_ID      1
+#define ID_transmitter     0x211
+
+#define RX_MSG_OBJ_ID_Tx1  2
+#define RX_MSG_OBJ_ID_Tx2  3
+#define RX_MSG_OBJ_ID_Tx3  4
+#define RX_MSG_OBJ_ID_Tx4  5
+#define RX_MSG_OBJ_ID_Tx5  6
+
+#define CtrlOut1            7U
+#define testPIN             13U
+#define testPIN_1             12U
+//#define const double PI = 3.1415927410125732;
+
+//дополнительные переменные для автоматического воздуха
+bool metro_write_flg = false;
+#define air_aver  30  // усреднение
+volatile uint16_t w_ma = 0;      //окно скользящего среднего
+float air_buff[air_aver][10];
+float air_summ[10];
+
+uint16_t adc_value;   // результат измерений температуры
+uint16_t convisdone; //флагконца преобразования.
+volatile uint16_t N_Tx;
+volatile const float mV = 0.00023842;
+
+// Function Prototypes
+__interrupt void cpuTimer0ISR(void);// основной системный таймер 097
+void initCPUTimers(void);
+void configCPUTimer(uint32_t, float, float);
+
+void initSPIB(void);
+void initSPIA(void);
+__interrupt void xint1ISR(void);
+
+void initEPWM6_2000_kHz(void);
+void initEPWM6_400_kHz(void);
+__interrupt void epwm6ISR(void);
+
+void initEPWM8_533_kHz(void);
+__interrupt void epwm8ISR(void);
+
+void initADC(void);
+void init_ADC_EPWM(void);
+void initADCSOC(void);
+__interrupt void adcA1ISR(void);
+float temp_deg_(uint16_t adc_value);
+
+/* обработчик прерываний по CAN*/
+__interrupt void canaISR(void);
+
+/* обработчик прерываний по UART*/
+__interrupt void sciaRxISR(void);
+void CRC16(uint16_t CMD, uint16_t *nData, uint16_t wLength);
+
+void get_condition(struct GP_DATA *Data, struct GP_METROLOGY *metro, uint16_t N_Tx);
+void simmetry(struct GP_DATA *Data, struct GP_METROLOGY *metro, uint16_t N_Tx);
+void formula_simmetry(float K[5][5], uint16_t condition, uint16_t N_Tx);
+float d_ph(float ph2, float ph1);
+float SIGNAL(struct GP_METROLOGY *metro, uint16_t k_Tx, uint16_t freq, float ro);
+void RO_ARG(struct GP_METROLOGY *metro, struct GP_DATA *Data, uint16_t k_Tx, uint16_t freq);
+struct ID get_sonde_id(uint32_t signature);
+
+void calc_silent_Tx(int32_t CH1[12][64], int32_t CH2[12][64], struct GP_DATA *result);
+void calc_AM_PH_DFT(int32_t CH1[12][64], int32_t CH2[12][64], struct GP_DATA *result);
+
+void startFlashAPI(void);
+void readFlashDataMetrology(void);
+void writeFlashDataMetrology(struct GP_METROLOGY METROLOGY_data);
+void EraseFlashSectorBootLoader(void);
+
+void WorkCyclogramStateCommandHandler();
+void WorkCyclogram();
+
+extern uint32_t freqOffset;
+extern int16_t phaseCosOffset;
+extern int16_t phaseSinOffset;
+
+extern uint16_t from1DataCFR1[];
+extern uint16_t to1DataCFR1[];
+
+extern uint16_t from1DataCFR2[];
+extern uint16_t to1DataCFR2[];
+
+extern uint16_t from1DataPCR0[];
+extern uint16_t to1DataPCR0[];
+
+uint16_t DDSinit_dat[8];
+
+/* обмен по can*/
+volatile uint32_t errorFlag = 0;
+
+volatile unsigned long g_bErrFlag = 0;
+
+unsigned long maxTryCount=100; // число попыток передачи до отбоя
+volatile bool txInProgress;
+volatile unsigned long currTxObj;
+
+volatile unsigned long g_ulTxMsgCount = 0;
+volatile unsigned long g_ulRxMsgCount[15] = {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0};
+volatile unsigned long g_ulRxErrCount[15] = {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0};
+
+uint16_t txMsgData[8];
+uint16_t tmp_txMsgData[2];
+
+uint16_t rxMsgData[15][8];
+
+// Это глобальные счетчики для таймера:
+#define NCntrs 10
+#define usPeriod 64//64
+int32_t usCntr[NCntrs]; //для того, чтобы счетчик считал в мкс, нужно установить его в кратное 50мкс состояние, и вычитать по 50мкс на каждом прерывании таймера
+bool usCntrEnable[NCntrs]; // разрешение счета для счетчиков
+int32_t usWDTCntr;
+
+int32_t usAutoDelayCntr;
+int16_t oneSecondCounter;
+
+uint32_t cpuTimer0IntCount;
+
+bool readEqualWrite;
+uint16_t i;
+uint16_t freqflag;//отладочный флаг для проверки работы прерывания потом можно удалить
+
+bool newADCcycle;// флаг новый семпл 15625 Гц готов.
+uint16_t ADCcycleCount;//флаг для проброса первых 16ти семплов ацп.
+extern uint16_t adcRdArr[15];
+
+uint16_t adcDATA_accumulator[12];
+
+uint16_t count;
+
+uint16_t ADC_sample_count;
+uint16_t ADC_sample_number;
+
+unsigned char *msg;
+
+int32_t adc_ch1; //  для сборки 8ми битных данных с 4х каналов АЦП
+int32_t adc_ch2;
+int32_t adc_ch3;
+int32_t adc_ch4;
+
+#pragma DATA_SECTION(CH1, "ramgs1")
+int32_t CH1[12][64]; // массив семплов каналов в полном 24х битном виде T0f1,T1f1,T2f1,T3f1,T4f1,T5f1,T0f2,T1f2,T2f2,T3f2,T4f2,T5f2.
+#pragma DATA_SECTION(CH2, "ramgs1")
+int32_t CH2[12][64];
+
+
+#pragma DATA_SECTION(LoadingFlag, ".LoadingFlagSection")//для бутлоудера
+const int16_t LoadingFlag[8]={0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000};
+
+int32_t negativ_sampl;
+
+volatile int32_t semple_sum_1;
+volatile int32_t semple_sum_2;
+
+volatile int32_t ADC_CH1_semple_temp;
+volatile int32_t ADC_CH2_semple_temp;
+
+volatile    float sin_f[16];
+volatile    float cos_f[16];
+volatile    float sin_f_64[64];
+volatile    float cos_f_64[64];
+
+uint16_t N,n;
+volatile    float win[64]; //коэффициенты фильтра приподнятый косинус.
+
+volatile    float Im, Qr, I_1, Q_1, I_2, Q_2;
+volatile    float AMP,  AMP_1, AMP_2;
+volatile    float PH, PH_1, PH_2;
+volatile    float PH_F;
+volatile    float AnglePH;
+
+volatile    float AnglePH;
+
+float A;
+float Fi;
+
+volatile    float AMP8, AMP8_1, AMP8_2;
+
+uint16_t sdataB[256];    // Send data for SCI-B
+uint16_t rdataB[256];     // Read data for SCI-B
+
+struct AllData all_data;
+struct GP_DATA gp_data;
+struct ID id;
+
+struct GP_METROLOGY METROLOGY_data;//рабочая структура метрологии в памяти ram
+
+const struct GP_METROLOGY DEFAULT_METROLOGY_data = {
+                                                 0x24DD9,//signature
+                                                 12026,//serial
+                                                 {365,710,1070,1415,1768},//L1 Tx1-Tx5
+                                                 {635,980,1340,1685,2038},//L2 Tx1-Tx5
+                                                 {401,2001},//F1 F2
+                                                 {0,0,0,0,0,0,0,0,0,0},//Air_zz Tx1-Tx5 F1, Tx1-Tx5 F2
+                                                 {0,0,0,0,0,0,0,0,0,0},//Air_zz_amt Tx1-Tx5 F1, Tx1-Tx5 F2
+                                                 90,// D_sonde_mm
+                                                 1,//work_type
+                                                 1,//Rx_Position
+                                                 {0,0,0,0,0,0,//10
+                                                 0,0,0,0,0,0,0,0,0,0,//20
+                                                 0,0,0,0,0,0,0,0,0,0,//30
+                                                 0,0,0,0,0,0,0,0,0,0,//40
+                                                 0,0,0,0,0,0,0,0,0,0,//50
+                                                 0,0,0,0,0,0,0,0,0,0,//60
+                                                 0,0,0,0,0,0,0,0,0,0,//70
+                                                 0,0,0,0,0,0,0,0,0,0,//80
+                                                 0,0}//82
+};
+
+uint16_t test_rdataB[14];
+
+uint16_t dataFromflash[64];
+
+// Указатели для навигации по экспериментальным данным
+struct TInt32Complex* pInt32Complex;
+int32_t tmpDataI, tmpDataQ;
+
+bool writeToFlash;
+
+uint16_t packageNumber; //счетчик пакетов по CAN одного фрейма
+
+
+
+//
+// Main
+//
+void main(void)
+{
+
+Device_init();
+//
+GPIO_setPadConfig(CtrlOut1, GPIO_PIN_TYPE_STD);
+GPIO_setDirectionMode(CtrlOut1, GPIO_DIR_MODE_OUT);
+//
+GPIO_setPadConfig(testPIN, GPIO_PIN_TYPE_STD);
+GPIO_setDirectionMode(testPIN, GPIO_DIR_MODE_OUT);
+//
+GPIO_setPadConfig(testPIN_1, GPIO_PIN_TYPE_STD);
+GPIO_setDirectionMode(testPIN_1, GPIO_DIR_MODE_OUT);
+//
+// Initialize GPIO and configure GPIO pins for CANTX/CANRX
+// on module A
+//
+GPIO_setPinConfig(DEVICE_GPIO_CFG_CANRXA);
+GPIO_setPinConfig(DEVICE_GPIO_CFG_CANTXA);
+//
+// Initialize the CAN controllers
+//
+CAN_initModule(CANA_BASE);
+//
+// Set up the CAN bus bit rate to 500kHz for each module
+// Refer to the Driver Library User Guide for information on how to set
+// tighter timing control. Additionally, consult the device data sheet
+// for more information about the CAN module clocking.
+//
+CAN_selectClockSource(CANA_BASE, CAN_CLOCK_SOURCE_SYS);
+//
+CAN_setBitTiming(CANA_BASE, 11, 0, 7, 6, 3);//5 11
+//
+// Enable interrupts on the CAN B peripheral.
+//
+CAN_enableInterrupt(CANA_BASE, CAN_INT_IE0 | CAN_INT_ERROR | CAN_INT_STATUS);
+
+        DEVICE_DELAY_US(1000);
+
+        ASysCtl_disableDCDC();//запретить dc-dc для разрешения gpio22
+        ad9956_gpio_config();
+        //
+        // Initializes PIE and clear PIE registers. Disables CPU interrupts.
+        // and clear all CPU interrupt flags.
+        //
+        Interrupt_initModule();
+        // Initialize the PIE vector table with pointers to the shell interrupt
+        // Service Routines (ISR).
+        //
+        Interrupt_initVectorTable();
+        //
+        // Interrupts that are used in this example are re-mapped to ISR functionsd
+        // found within this file.
+        //
+        Interrupt_register(INT_XINT1, &xint1ISR);
+        //
+        // Assign the interrupt service routines to ePWM interrupts
+        //
+        Interrupt_register(INT_EPWM6, &epwm6ISR);
+        //
+        Interrupt_register(INT_EPWM8, &epwm8ISR);
+        //
+        Interrupt_register(INT_TIMER0, &cpuTimer0ISR);
+        //
+        Interrupt_register(INT_ADCA1, &adcA1ISR);
+        //
+        initCPUTimers();
+        //настраиваем период таймена на 64мкс
+        configCPUTimer(CPUTIMER0_BASE, DEVICE_SYSCLK_FREQ, usPeriod);
+        configCPUTimer(CPUTIMER1_BASE, DEVICE_SYSCLK_FREQ, 1000000);//1000000
+        CPUTimer_startTimer(CPUTIMER1_BASE);
+        //
+        CPUTimer_enableInterrupt(CPUTIMER0_BASE);
+        //
+        Interrupt_enable(INT_TIMER0);
+        //
+        // Enable XINT interrupts
+        //
+        Interrupt_enable(INT_XINT1);
+        //
+        // Enable Global Interrupt (INTM) and realtime interrupt (DBGM)
+        //
+        EINT;
+        ERTM;
+        //
+        // Enables CPU interrupts
+        //
+        Interrupt_enableMaster();
+        //
+        SysCtl_setClock(DEVICE_SETCLOCK_CFG);
+        SysCtl_selectXTALSingleEnded();
+        SysCtl_setXClk(SYSCTL_XCLKOUT_DIV_2);//1
+        //
+        // Disable sync(Freeze clock to PWM as well)
+        //
+        SysCtl_disablePeripheral(SYSCTL_PERIPH_CLK_TBCLKSYNC);
+        //
+        initEPWM6_2000_kHz();
+        //
+        initEPWM8_533_kHz();
+        //
+        // Инициализируем АЦП для измерений температуры
+        //
+        initADC();
+        init_ADC_EPWM();
+        initADCSOC();
+        //
+        // Enable sync and clock to PWM
+        //
+        SysCtl_enablePeripheral(SYSCTL_PERIPH_CLK_TBCLKSYNC);
+        // Обнуляем таймерные переменные:
+        memset(usCntr, 0x00, NCntrs*sizeof(int32_t));
+        memset(usCntrEnable, 0x00, NCntrs*sizeof(bool));
+        usCntrEnable[0] = true; //нулевой счетчик разрешен по умолчанию
+        //
+        glblFrameNumber = 0;
+        packageNumber = 0;
+        //
+        startFlashAPI();
+        //
+        EINT;
+        ERTM;
+        //
+        Flash_initModule(FLASH0CTRL_BASE, FLASH0ECC_BASE, DEVICE_FLASH_WAITSTATES); //DEVICE_FLASH_WAITSTATES
+        //
+        // Interrupts that are used in this example are re-mapped to
+        // ISR functions found within this file.
+        // This registers the interrupt handler in PIE vector table.
+        //
+        Interrupt_register(INT_CANA0, &canaISR);
+        //
+        // Enable the CAN-A interrupt signal
+        //
+        Interrupt_enable(INT_CANA0);
+        CAN_enableGlobalInterrupt(CANA_BASE, CAN_GLOBAL_INT_CANINT0);
+        // Enable CAN test mode with external loopback
+        //
+        CAN_disableTestMode(CANA_BASE);
+        //
+        // Initialize the transmit message object used for sending CAN messages.
+        // Message Object Parameters:
+        //      CAN Module: A
+        //      Message Object ID Number: 1
+        //      Message Identifier: 0x95555555
+        //      Message Frame: Extended
+        //      Message Type: Transmit
+        //      Message ID Mask: 0x0
+        //      Message Object Flags: None
+        //      Message Data Length: 4 Bytes
+        //
+        CAN_setupMessageObject(CANA_BASE, TX_MSG_OBJ_ID, ID_transmitter, CAN_MSG_FRAME_STD, CAN_MSG_OBJ_TYPE_TX, 0, CAN_MSG_OBJ_TX_INT_ENABLE, MSG_DATA_LENGTH);
+        //
+        // Initialize the receive message object used for receiving CAN messages.
+        // Message Object Parameters:
+        //      CAN Module: B
+        //      Message Object ID Number: 1
+        //      Message Identifier: 0x95555555
+        //      Message Frame: Extended
+        //      Message Type: Receive
+        //      Message ID Mask: 0x0
+        //      Message Object Flags: Receive Interrupt
+        //      Message Data Length: 4 Bytes
+        //
+        // Инициализируем CAN на прием сообщения от 1-го передатчика:
+        CAN_setupMessageObject(CANA_BASE, RX_MSG_OBJ_ID_Tx1, 0x311, CAN_MSG_FRAME_STD, CAN_MSG_OBJ_TYPE_RX, 0, CAN_MSG_OBJ_RX_INT_ENABLE, MSG_DATA_LENGTH);
+        // Инициализируем CAN на прием сообщения от 2-го передатчика:
+        CAN_setupMessageObject(CANA_BASE, RX_MSG_OBJ_ID_Tx2, 0x312, CAN_MSG_FRAME_STD, CAN_MSG_OBJ_TYPE_RX, 0, CAN_MSG_OBJ_RX_INT_ENABLE, MSG_DATA_LENGTH);
+        // Инициализируем CAN на прием сообщения от 3-го передатчика:
+        CAN_setupMessageObject(CANA_BASE, RX_MSG_OBJ_ID_Tx3, 0x313, CAN_MSG_FRAME_STD, CAN_MSG_OBJ_TYPE_RX, 0, CAN_MSG_OBJ_RX_INT_ENABLE, MSG_DATA_LENGTH);
+        // Инициализируем CAN на прием сообщения от 4-го передатчика:
+        CAN_setupMessageObject(CANA_BASE, RX_MSG_OBJ_ID_Tx4, 0x314, CAN_MSG_FRAME_STD, CAN_MSG_OBJ_TYPE_RX, 0, CAN_MSG_OBJ_RX_INT_ENABLE, MSG_DATA_LENGTH);
+        // Инициализируем CAN на прием сообщения от 5-го передатчика:
+        CAN_setupMessageObject(CANA_BASE, RX_MSG_OBJ_ID_Tx5, 0x315, CAN_MSG_FRAME_STD, CAN_MSG_OBJ_TYPE_RX, 0, CAN_MSG_OBJ_RX_INT_ENABLE, MSG_DATA_LENGTH);
+        //
+        // Configure XINT1 to be a triggered by a falling edge and XINT2 to be
+        // triggered by a rising edge.
+        //Настраиваем ножку на прервывние DRY от АЦП
+        GPIO_setInterruptType(GPIO_INT_XINT1, GPIO_INT_TYPE_FALLING_EDGE);
+        //Выход XCLKOUT - клок DDS 48 MHz
+        // GPIO18->Reserve (N/A for GPIO)
+        GPIO_setMasterCore(18, GPIO_CORE_CPU1);
+        GPIO_setPinConfig(GPIO_18_XCLKOUT); //GPIO_18_XCLKOUT
+        GPIO_setDirectionMode(18, GPIO_DIR_MODE_OUT);
+        GPIO_setPadConfig(18, GPIO_PIN_TYPE_STD);
+        //Выход гетеродина 2000kHz 400kHz
+        GPIO_setPadConfig(11, GPIO_PIN_TYPE_STD);
+        GPIO_setPinConfig(GPIO_11_EPWM6B);
+        //выход PWR_SYNC_OUT
+        //GPIO_setPadConfig(PWR_SYNC_OUT_PIN, GPIO_PIN_TYPE_STD);
+        //GPIO_setDirectionMode(PWR_SYNC_OUT_PIN, GPIO_DIR_MODE_OUT);
+        //выход PWR_SYNC_OUT
+        GPIO_setPadConfig(24, GPIO_PIN_TYPE_STD);
+        GPIO_setPinConfig(GPIO_24_EPWM8A);
+        // начинаем инициализацию DDS
+        ad9956_gpio_config();
+        initSPIB();
+        //
+        freqOffset = 0x00000000;
+        phaseCosOffset = 0;
+        phaseSinOffset = 0;
+        //
+        readEqualWrite = true;
+        //
+        // GPIO28 is the SCI Rx pin.
+        //
+        GPIO_setMasterCore(DEVICE_GPIO_PIN_SCIRXDA, GPIO_CORE_CPU1);
+        GPIO_setPinConfig(DEVICE_GPIO_CFG_SCIRXDA);
+        GPIO_setDirectionMode(DEVICE_GPIO_PIN_SCIRXDA, GPIO_DIR_MODE_IN);
+        GPIO_setPadConfig(DEVICE_GPIO_PIN_SCIRXDA, GPIO_PIN_TYPE_STD);
+        GPIO_setQualificationMode(DEVICE_GPIO_PIN_SCIRXDA, GPIO_QUAL_ASYNC);
+        //
+        // GPIO29 is the SCI Tx pin.
+        //
+        GPIO_setMasterCore(DEVICE_GPIO_PIN_SCITXDA, GPIO_CORE_CPU1);
+        GPIO_setPinConfig(DEVICE_GPIO_CFG_SCITXDA);
+        GPIO_setDirectionMode(DEVICE_GPIO_PIN_SCITXDA, GPIO_DIR_MODE_OUT);
+        GPIO_setPadConfig(DEVICE_GPIO_PIN_SCITXDA, GPIO_PIN_TYPE_STD);
+        GPIO_setQualificationMode(DEVICE_GPIO_PIN_SCITXDA, GPIO_QUAL_ASYNC);
+        //
+        // Disable global interrupts.
+        //
+        DINT;
+        //
+        // Map the ISR to the wake interrupt.
+        //
+        //Interrupt_register(INT_SCIA_TX, sciaTxISR);
+        Interrupt_register(INT_SCIA_RX, sciaRxISR);
+        //
+        // Initialize SCIA and its FIFO.
+        //
+        SCI_performSoftwareReset(SCIA_BASE);
+        //
+        // Configure SCIA for echoback.
+        //
+        SCI_setConfig(SCIA_BASE, 96000000, 125000, (SCI_CONFIG_WLEN_8 |   //48000000
+                                                SCI_CONFIG_STOP_ONE |
+                                                SCI_CONFIG_PAR_NONE));
+        SCI_resetChannels(SCIA_BASE);
+        SCI_clearInterruptStatus(SCIA_BASE, SCI_INT_RXFF);
+        SCI_enableFIFO(SCIA_BASE);
+        SCI_enableModule(SCIA_BASE);
+        SCI_performSoftwareReset(SCIA_BASE);
+        //
+        // Set the transmit FIFO level to 0 and the receive FIFO level to 2.
+        // Enable the TXFF and RXFF interrupts.
+        //
+        SCI_setFIFOInterruptLevel(SCIA_BASE, SCI_FIFO_TX0, SCI_FIFO_RX5);
+        SCI_enableInterrupt(SCIA_BASE, SCI_INT_RXFF);
+        //
+        // Clear the SCI interrupts before enabling them.
+        //
+        SCI_clearInterruptStatus(SCIA_BASE, SCI_INT_RXFF);
+        //
+        // Enable the interrupts in the PIE: Group 9 interrupts 1 & 2.
+        //
+        Interrupt_enable(INT_SCIA_RX);
+        Interrupt_clearACKGroup(INTERRUPT_ACK_GROUP9);
+        //
+        // Enable global interrupts.
+        //
+        EINT;
+        //
+        DEVICE_DELAY_US(10000); // 100ms (approx.) pause before starting the job
+        //
+        ad9956_Init();
+        ad9956_Read(0x00, from1DataCFR1, 4);
+        for(i=0; i<4; i++) {
+         if(from1DataCFR1[i]!=to1DataCFR1[i]) {
+           readEqualWrite = false;
+           break;
+         }
+        }
+        ad9956_Read(0x01, from1DataCFR2, 5);
+        for(i=0; i<5; i++) {
+         if(from1DataCFR2[i]!=to1DataCFR2[i]) {
+           readEqualWrite = false;
+           break;
+         }
+        }
+        ad9956_Read(0x06, from1DataPCR0, 8);
+        for(i=0; i<8; i++) {
+         if(from1DataPCR0[i]!=to1DataPCR0[i]) {
+           readEqualWrite = false;
+           break;
+         }
+        }
+        //Устанавливаем частоту 2МГц в профиль 4
+        //0xAAC 0000 0000 //AAA 4B27 2CEE
+        DDSinit_dat[0]=0x04;//0x04; // номер профиля
+        DDSinit_dat[1]=0x0A;//0x0A;//0x0A;//0x0A;//0x0A;//0x09;//0x0A;//0x05; // частота ст
+        DDSinit_dat[2]=0x74;//0x74;//0x3E;//0x74;//0xAC;//0xD9;//0xAC;//0x1E;
+        DDSinit_dat[3]=0x45;//0x45;//0xC5;//0x45;//0x00;//0xF2;//0x00;//0xB8;
+        DDSinit_dat[4]=0xA8;//0xA8;//0xF9;//0xA8;//0x00;//0xDF;//0x00;//0xB6; // частота мл
+        DDSinit_dat[5]=0xEC;//0xEC;//0x2C;//0xEC;//0x00;//0x2D;//0x00;//PHASE_MSB; // фаза ст
+        DDSinit_dat[6]=0xD8;//0xD8;//0x60;//0xD8;//0x00;//0xF3;//0x00;//PHASE_LSB; // фаза мл
+        DDSinit_dat[7]=0x00;//0x00;//0x00;//0x00; // номер передатчика
+        ad9956_WriteProfile(DDSinit_dat);
+        DDSinit_dat[0]=0x05;
+        ad9956_WriteProfile(DDSinit_dat);
+        DDSinit_dat[0]=0x06;
+        ad9956_WriteProfile(DDSinit_dat);
+        DDSinit_dat[0]=0x07;
+        ad9956_WriteProfile(DDSinit_dat);
+        //Устанавливаем частоту 400кГц в профиль 0
+        DDSinit_dat[0]=0x00;//0x00;//0x00;//0x00;//0x00;//0x00;
+        DDSinit_dat[1]=0x02;//0x02;//0x03;//0x02;//0x04;//0x01;//0x04;
+        DDSinit_dat[2]=0x21;//0x1A;//0x20;//0x23;//0xBE;//0x06;//0x93;
+        DDSinit_dat[3]=0x33;//0x83;//0x8D;//0x77;//0xF6;//0x24;//0x9E;
+        DDSinit_dat[4]=0x57;//0x7F;//0x87;//0x77;//0x84;//0xDD;//0x79;
+        DDSinit_dat[5]=0x75;//0x4C;//0x48;//0x77;//0xBD;//0x00;//0xE7;
+        DDSinit_dat[6]=0x33;//0xF1;//0xD8;//0x77;//0xA1;//0x00;//0x9E;
+        DDSinit_dat[7]=0x00;//0x00;//0x00;//0x00;//0x00;//0x00;
+        ad9956_WriteProfile(DDSinit_dat);
+        DDSinit_dat[0]=0x01;
+        ad9956_WriteProfile(DDSinit_dat);
+        DDSinit_dat[0]=0x02;
+        ad9956_WriteProfile(DDSinit_dat);
+        DDSinit_dat[0]=0x03;
+        ad9956_WriteProfile(DDSinit_dat);
+        DDSinit_dat[0]=0x04;
+        ad9956_SetProfile(DDSinit_dat);
+        ad9956_Update();
+        //
+        freqflag = 0;
+        //
+        newADCcycle = false;
+        ADCcycleCount = 0;
+        count = 0;
+        //
+        initSPIA();
+        adc_config();
+        //
+        GPIO_enableInterrupt(GPIO_INT_XINT1);
+        //
+        adc_reset();
+        adc_unlock();
+        adc_writeReg(0x0B, 0x68); //0x68 0x78);
+        adc_writeReg(0x0C, 0x3C);
+        adc_writeReg(0x0D, 0x02);
+        adc_writeReg(0x0E, 0x28);//0x28
+        adc_writeReg(0x0F, 0x03);
+        adc_wakeup();
+        adc_lock();
+        //
+        GPIO_disableInterrupt(GPIO_INT_XINT1);
+        //
+        DDSinit_dat[0]=0x04;
+        ad9956_SetProfile(DDSinit_dat);
+        ad9956_Update();
+        DEVICE_DELAY_US(1000);
+        //
+        uint16_t k=0;
+        ADC_sample_count = 0;
+        //
+        // Initialize the transmit message object data buffer to be sent
+        //
+        txMsgData[0] = 0x00;//0x04;
+        txMsgData[1] = 0x00;
+        txMsgData[2] = 0x00;
+        txMsgData[3] = 0x00;
+        txMsgData[4] = 0x00;
+        txMsgData[5] = 0x00;
+        txMsgData[6] = 0x00;
+        txMsgData[7] = 0x00;
+        //Продолжаем инициализировать CAN:
+        HWREG(CANA_BASE + CAN_O_CTL) |= CAN_CTL_DAR;
+        //
+        // Start CAN module A operations
+        //
+        CAN_startModule(CANA_BASE);
+        //
+        CPUTimer_startTimer(CPUTIMER0_BASE);
+        //
+        freqflag = 0;
+        //
+        //формируем массив sin, cos  для ДПФ
+        for (i = 0; i < 16; i++) {
+           sin_f[i] = sin(M_PI*(float)i / 8.0);
+           cos_f[i] = cos(M_PI*(float)i/ 8.0);
+         }
+        //длинна массива 64 точки 4 полных периода.
+        int16_t j;
+        for (j = 0; j < 4; j++){
+            for (i = 0; i < 16; i++) {
+                sin_f_64[i+(j*16)] = sin_f[i];
+                cos_f_64[i+(j*16)] = cos_f[i];
+            }
+        }
+
+        N = 64;
+
+        for(n = 0; n < 64; n++)
+        {
+           win[n] = 0.54-0.46*cos(2*M_PI*(float)n/(N-1));
+        }
+
+
+        //
+        DEVICE_DELAY_US(10000);
+        currProgramMode=WorkCyclogramState;
+        usCntr[1]=2097152;
+        workCyclogramSubState = WCSSEnd; //WCSSEnd
+        //
+        usCntrEnable[1] = true; //нулевой счетчик разрешен по умолчанию
+        //
+        count=0;
+        //пронуляем где нибудь в начале main один раз ( до while)
+        memset(air_buff, 0x00, air_aver*8*4);
+        memset(air_summ, 0x00, 8*4);
+        //
+        readFlashDataMetrology();
+        //
+        if(METROLOGY_data.signature == 0xFFFFFFFF) {
+        memcpy( &METROLOGY_data, &DEFAULT_METROLOGY_data, sizeof(struct GP_METROLOGY));
+        }
+        gp_data.signature =  METROLOGY_data.signature;
+
+        //автоматическое опредиление числа передатчиков
+        id = get_sonde_id(gp_data.signature);
+        N_Tx = id.N_Tx;
+        //
+        //обнуляем флаг готовности температуры
+        convisdone = 0;
+        GPIO_writePin(testPIN, 1);
+        GPIO_writePin(CtrlOut1, 1); //включаем enable увч.
+        //
+        // Select eCAP1OUT on MUX 0. Make GPIO5 eCAP1OUT for PWM output
+        //
+        XBAR_setOutputMuxConfig(XBAR_OUTPUT7, XBAR_OUT_MUX00_ECAP1_OUT);
+        XBAR_enableOutputMux(XBAR_OUTPUT7, XBAR_MUX00);
+        GPIO_setPadConfig(11, GPIO_PIN_TYPE_STD);
+        GPIO_setPinConfig(GPIO_11_OUTPUTXBAR7);
+        //
+        // Configure eCAP in APWM mode
+        //
+        ECAP_stopCounter(ECAP1_BASE);
+        ECAP_enableAPWMMode(ECAP1_BASE);
+        ECAP_setAPWMPeriod(ECAP1_BASE, 48U);
+        ECAP_setAPWMCompare(ECAP1_BASE,24U);
+        ECAP_clearInterrupt(ECAP1_BASE, (ECAP_ISR_SOURCE_CAPTURE_EVENT_1  |
+                ECAP_ISR_SOURCE_CAPTURE_EVENT_2  |
+                ECAP_ISR_SOURCE_CAPTURE_EVENT_3  |
+                ECAP_ISR_SOURCE_CAPTURE_EVENT_4  |
+                ECAP_ISR_SOURCE_COUNTER_OVERFLOW |
+                ECAP_ISR_SOURCE_COUNTER_PERIOD   |
+                ECAP_ISR_SOURCE_COUNTER_COMPARE));
+        ECAP_startCounter(ECAP1_BASE);
+
+        //пронуляем где нибудь в начале main один раз ( до while)
+        memset(air_buff, 0x00, (air_aver*10)*sizeof(float));
+        memset(air_summ, 0x00, 10*sizeof(float));
+        DEVICE_DELAY_US(100);
+
+
+//        complex float ik = 0.1 + 0.000732 *I;
+
+    while(true){
+        // Если принята новая команда:
+               if(commandReceived) {
+                 if(  currCommand.CRC != currCommand.CalculatedCRC ) { // Если ошибка CRC - то отправляем квитанцию об ошибке
+                     /*
+                     uint16_t crc16;
+                     sdataB[0]=currCommand.Receiver; // кому
+                     sdataB[1]=5;    // длина
+                     sdataB[2]=currCommand.Sender; // адрес мастера
+                     sdataB[3]=currCommand.CommandByte;
+                     sdataB[4]=ACK_BIT_CRC_ERROR|ACK_BIT_PACKET_START|ACK_BIT_PACKET_INTERNAL|ACK_BIT_PACKET_END;
+                     crc16 = GetCRC16(sdataB, 5);
+                     sdataB[5] = (crc16>>8) & 0x00FF ;
+                     sdataB[6] = crc16 & 0x00FF ;
+                 //    rs485_OutPacket(sdataB, 7);
+                  */
+                 }else { // если все хорошо - то обрабатываем команду
+                    WorkCyclogramStateCommandHandler();
+                 }
+                 commandReceived=false;
+               }
+               // Если команда не была принята, то все равно что-то делать нужно:
+               WorkCyclogram();
+               //в основном цикле собираем данные когда они созрели на АЦП
+                   if(newADCcycle)
+                     {
+                      newADCcycle = false;
+                      ADCcycleCount++;//счетчик для проброса первых 48ми семплов АЦП, т.к необходимо дать время на разгон ацп и ддс, ткже используем для начала измеений молчащего передатчика
+/*****************************************************************************/
+                         if((ADCcycleCount >=80)&&(ADCcycleCount <= 143))//15
+                            {  //набираем 64 точек
+                             if(METROLOGY_data.Rx_Position==0){
+                             CH1[count][k] = ADC_CH1_semple_temp;
+                             CH2[count][k] = ADC_CH2_semple_temp;
+                             k++;
+                             GPIO_writePin(testPIN_1, 1);}
+                             if(METROLOGY_data.Rx_Position==1){
+                             CH1[count][k] = ADC_CH2_semple_temp;
+                             CH2[count][k] = ADC_CH1_semple_temp;
+                             k++;
+                             GPIO_writePin(testPIN_1, 1);}
+
+                               if(k==64)// набрали 64 точек по двум каналам закончно. Работающий передатчик прослушали.
+                               {
+                                   GPIO_disableInterrupt(GPIO_INT_XINT1);
+                                   GPIO_writePin(testPIN, 0);
+                                   GPIO_writePin(testPIN_1, 0);
+                                   ADCcycleCount = 0;
+                                   k=0;
+                                   count++;
+                               }
+
+                      }
+
+                   if((SCI_getRxStatus(SCIA_BASE) & SCI_RXSTATUS_ERROR) != 0U)//ресетим usart если возник ERR
+                   {
+                       SCI_performSoftwareReset(SCIA_BASE);}
+
+                    }
+
+            }
+}
+
+    static inline uint16_t inlineGetCRC16(uint16_t *buf, uint16_t len)
+    {
+        static const uint16_t wCRCTable[] = {
+           0X0000, 0XC0C1, 0XC181, 0X0140, 0XC301, 0X03C0, 0X0280, 0XC241,
+           0XC601, 0X06C0, 0X0780, 0XC741, 0X0500, 0XC5C1, 0XC481, 0X0440,
+           0XCC01, 0X0CC0, 0X0D80, 0XCD41, 0X0F00, 0XCFC1, 0XCE81, 0X0E40,
+           0X0A00, 0XCAC1, 0XCB81, 0X0B40, 0XC901, 0X09C0, 0X0880, 0XC841,
+           0XD801, 0X18C0, 0X1980, 0XD941, 0X1B00, 0XDBC1, 0XDA81, 0X1A40,
+           0X1E00, 0XDEC1, 0XDF81, 0X1F40, 0XDD01, 0X1DC0, 0X1C80, 0XDC41,
+           0X1400, 0XD4C1, 0XD581, 0X1540, 0XD701, 0X17C0, 0X1680, 0XD641,
+           0XD201, 0X12C0, 0X1380, 0XD341, 0X1100, 0XD1C1, 0XD081, 0X1040,
+           0XF001, 0X30C0, 0X3180, 0XF141, 0X3300, 0XF3C1, 0XF281, 0X3240,
+           0X3600, 0XF6C1, 0XF781, 0X3740, 0XF501, 0X35C0, 0X3480, 0XF441,
+           0X3C00, 0XFCC1, 0XFD81, 0X3D40, 0XFF01, 0X3FC0, 0X3E80, 0XFE41,
+           0XFA01, 0X3AC0, 0X3B80, 0XFB41, 0X3900, 0XF9C1, 0XF881, 0X3840,
+           0X2800, 0XE8C1, 0XE981, 0X2940, 0XEB01, 0X2BC0, 0X2A80, 0XEA41,
+           0XEE01, 0X2EC0, 0X2F80, 0XEF41, 0X2D00, 0XEDC1, 0XEC81, 0X2C40,
+           0XE401, 0X24C0, 0X2580, 0XE541, 0X2700, 0XE7C1, 0XE681, 0X2640,
+           0X2200, 0XE2C1, 0XE381, 0X2340, 0XE101, 0X21C0, 0X2080, 0XE041,
+           0XA001, 0X60C0, 0X6180, 0XA141, 0X6300, 0XA3C1, 0XA281, 0X6240,
+           0X6600, 0XA6C1, 0XA781, 0X6740, 0XA501, 0X65C0, 0X6480, 0XA441,
+           0X6C00, 0XACC1, 0XAD81, 0X6D40, 0XAF01, 0X6FC0, 0X6E80, 0XAE41,
+           0XAA01, 0X6AC0, 0X6B80, 0XAB41, 0X6900, 0XA9C1, 0XA881, 0X6840,
+           0X7800, 0XB8C1, 0XB981, 0X7940, 0XBB01, 0X7BC0, 0X7A80, 0XBA41,
+           0XBE01, 0X7EC0, 0X7F80, 0XBF41, 0X7D00, 0XBDC1, 0XBC81, 0X7C40,
+           0XB401, 0X74C0, 0X7580, 0XB541, 0X7700, 0XB7C1, 0XB681, 0X7640,
+           0X7200, 0XB2C1, 0XB381, 0X7340, 0XB101, 0X71C0, 0X7080, 0XB041,
+           0X5000, 0X90C1, 0X9181, 0X5140, 0X9301, 0X53C0, 0X5280, 0X9241,
+           0X9601, 0X56C0, 0X5780, 0X9741, 0X5500, 0X95C1, 0X9481, 0X5440,
+           0X9C01, 0X5CC0, 0X5D80, 0X9D41, 0X5F00, 0X9FC1, 0X9E81, 0X5E40,
+           0X5A00, 0X9AC1, 0X9B81, 0X5B40, 0X9901, 0X59C0, 0X5880, 0X9841,
+           0X8801, 0X48C0, 0X4980, 0X8941, 0X4B00, 0X8BC1, 0X8A81, 0X4A40,
+           0X4E00, 0X8EC1, 0X8F81, 0X4F40, 0X8D01, 0X4DC0, 0X4C80, 0X8C41,
+           0X4400, 0X84C1, 0X8581, 0X4540, 0X8701, 0X47C0, 0X4680, 0X8641,
+           0X8201, 0X42C0, 0X4380, 0X8341, 0X4100, 0X81C1, 0X8081, 0X4040 };
+
+        uint16_t nTemp;
+        uint16_t wCRCWord = 0xFFFF;//0xFFFF;
+
+        while (len--)
+            {
+                nTemp = *buf++ ^ wCRCWord;
+                wCRCWord >>= 8;
+                wCRCWord  ^= wCRCTable[(nTemp & 0xFF)];
+            }
+        return wCRCWord;
+
+    }
+
+
+//
+// sciaRxISR - Read two characters from the RXBUF and echo them back.`
+//
+    __interrupt void sciaRxISR(void)
+    {
+    uint16_t i, j, bytesCounter;
+    uint16_t bytesReaded=0;
+    uint16_t countDataBytes; // число байтов данных в команде
+    uint32_t sciTimePeriod = HWREG(CPUTIMER1_BASE + CPUTIMER_O_PRD)>>1; // переменная для таймаута
+    uint16_t bytesToRead = (uint16_t)SCI_getRxFIFOStatus(SCIA_BASE);
+    bool errorFlag=false;
+
+    // пакет с командой 5 байт 0х01 - отдать данные последнего измерения.
+    // | uint16_t cmd | uint16_t Length l | uint16_t Length H | uint16_t CRC16 L | uint16_t CRC16 H |
+
+    // пакет с командой 5 байт 0х02 - отдать файл метрологии.
+    // | uint16_t cmd | uint16_t Length l | uint16_t Length H | uint16_t CRC16 L | uint16_t CRC16 H |
+
+    // пакет с командой 245 байт 0х03 - записать во flash файл метрологии.
+    // | uint16_t cmd | uint16_t Length l | uint16_t Length H | 240 байт данных | uint16_t CRC16 L | uint16_t CRC16 H |
+
+    CPUTimer_reloadTimerCounter(CPUTIMER1_BASE);
+
+    for(bytesCounter=0; bytesCounter<bytesToRead; bytesCounter++) {  // заметьте, bytesCounter не уничтожается после цикла, а используется далее в следующем цикле
+          rdataB[bytesCounter]=SCI_readCharBlockingFIFO(SCIA_BASE);  // Read data
+          bytesReaded++;
+        }
+
+    // складываем принятую команду в структуру (без вызова функции parser, так как из обработчика прерывания):
+       currCommand.cmdByte = rdataB[0]; bytesReaded--;
+       currCommand.Length = (((rdataB[2])<<8) & 0xFF00) | ((rdataB[1]) & 0x00FF); bytesReaded-=2;
+       countDataBytes = currCommand.Length - 5;
+       /*currCommand.CRC = (((rdataB[244])<<8) & 0xFF00) | ((rdataB[243]) & 0x00FF);*/ bytesReaded-=2;
+
+       // Здесь надо сверить принятую длину команды с тем количеством байтов, которые приняты.
+       // 5 байт - это минимальная длина пакета.
+       // Если принято меньшее количество байт, то рассовать принятые байты по местам, а затем проверить еще раз на прием байтов пакета.
+
+       // байты данных рассовываем по принципу: пока есть куда класть, пока есть принятые данные, пока не превышен таймаут ожидания данных
+           j=0;
+           while(j<countDataBytes) {
+             if(bytesReaded>0) {
+               currCommand.DataBytes[j] = rdataB[5+j];
+               bytesReaded--;
+               j++;
+             }else {
+               bytesToRead=(uint16_t)SCI_getRxFIFOStatus(SCIA_BASE);
+               for(i=0; i<bytesToRead; i++) {
+                 rdataB[bytesCounter++]=SCI_readCharBlockingFIFO(SCIA_BASE);
+                 bytesReaded++;
+               }
+             }
+             if( CPUTimer_getTimerCount(CPUTIMER1_BASE) < sciTimePeriod ) {
+               errorFlag = true;
+               // выход по таймауту
+               break;
+             }
+           }
+
+
+
+   if(currCommand.Length>5){
+   //currCommand.CRC = (((rdataB[244])<<8) & 0xFF00) | ((rdataB[243]) & 0x00FF);
+   currCommand.CRC = (((rdataB[currCommand.Length-1])<<8) & 0xFF00) | ((rdataB[currCommand.Length-2]) & 0x00FF);
+   }
+   else{
+   currCommand.CRC = (((rdataB[4])<<8) & 0xFF00) | ((rdataB[3]) & 0x00FF);
+   }
+   currCommand.CalculatedCRC = inlineGetCRC16(rdataB,currCommand.Length-2);
+   //currCommand.CRC = (((rdataB[244])<<8) & 0xFF00) | ((rdataB[243]) & 0x00FF);
+   //
+   // Clear the SCI RXFF interrupt and acknowledge the PIE interrupt.
+   //
+
+
+   if(errorFlag == false) {
+   //  currCommand.done = false;
+     commandReceived = true;
+   }else {
+   //  currCommand.done = false;
+     commandReceived = false;
+   }
+
+
+    SCI_clearInterruptStatus(SCIA_BASE, SCI_INT_RXFF);
+    Interrupt_clearACKGroup(INTERRUPT_ACK_GROUP9);
+
+    }
+
+
+
+    void initCPUTimers(void)
+    {
+    //
+    // Initialize timer period to maximum
+    //
+    CPUTimer_setPeriod(CPUTIMER0_BASE, 0xFFFFFFFF);
+    //
+    // Initialize pre-scale counter to divide by 1 (SYSCLKOUT)
+    //
+    CPUTimer_setPreScaler(CPUTIMER0_BASE, 0);
+    //
+    // Make sure timer is stopped
+    //
+    CPUTimer_stopTimer(CPUTIMER0_BASE);
+    //
+    // Reload all counter register with period value
+    //
+    CPUTimer_reloadTimerCounter(CPUTIMER0_BASE);
+    //
+    // Reset interrupt counter
+    //
+    cpuTimer0IntCount = 0;
+
+    }
+    //
+    // configCPUTimer - This function initializes the selected timer to the
+    // period specified by the "freq" and "period" parameters. The "freq" is
+    // entered as Hz and the period in uSeconds. The timer is held in the stopped
+    // state after configuration.
+    //
+    void configCPUTimer(uint32_t cpuTimer, float freq, float period)
+    {
+    uint32_t temp;
+    //
+    // Initialize timer period:
+    //
+    temp = (uint32_t)(freq / 1000000 * period);
+    CPUTimer_setPeriod(cpuTimer, temp);
+    //
+    // Set pre-scale counter to divide by 1 (SYSCLKOUT):
+    //
+    CPUTimer_setPreScaler(cpuTimer, 0);
+    //
+    // Initializes timer control register. The timer is stopped, reloaded,
+    // free run disabled, and interrupt enabled.
+    // Additionally, the free and soft bits are set
+    //
+    CPUTimer_stopTimer(cpuTimer);
+    CPUTimer_reloadTimerCounter(cpuTimer);
+    CPUTimer_setEmulationMode(cpuTimer, CPUTIMER_EMULATIONMODE_STOPAFTERNEXTDECREMENT);
+    CPUTimer_enableInterrupt(cpuTimer);
+    //
+    // Resets interrupt counters for the three cpuTimers
+    //
+    if (cpuTimer == CPUTIMER0_BASE)
+    {
+        cpuTimer0IntCount = 0;
+    }
+
+    }
+
+    //
+    // cpuTimer0ISR - Counter for CpuTimer0
+    //
+    __interrupt void cpuTimer0ISR(void)
+    {
+    uint16_t i;
+
+
+       cpuTimer0IntCount++; // счетчик прерываний самого таймера
+
+       for(i=0; i<NCntrs; i++) {
+         if((usCntr[i]>0)&&(usCntrEnable[i]==true)) {
+           usCntr[i]-=usPeriod;
+         }
+       }
+
+
+    if(cpuTimer0IntCount==500000){//500000
+        cpuTimer0IntCount = 0;
+    }
+    //
+    // Acknowledge this interrupt to receive more interrupts from group 1
+    //
+    Interrupt_clearACKGroup(INTERRUPT_ACK_GROUP1);
+
+    usAutoDelayCntr-=usPeriod;
+
+
+    if( (usCntr[1]<=0) && (currProgramMode==WorkCyclogramState)) {
+        usCntr[1]=2097152;
+    }
+
+    }
+
+    void initSPIB()
+    {
+     //
+     // GPIO30 is the SPIB SIMO pin.
+     //
+     GPIO_setMasterCore(30, GPIO_CORE_CPU1);
+     GPIO_setPinConfig(GPIO_30_SPISIMOB);
+     GPIO_setDirectionMode(30, GPIO_DIR_MODE_OUT);
+     GPIO_setPadConfig(30, GPIO_PIN_TYPE_STD);
+     GPIO_setQualificationMode(30, GPIO_QUAL_ASYNC);
+     //
+     // GPIO31 is the SPIB SOMI pin.
+     //
+     GPIO_setMasterCore(31, GPIO_CORE_CPU1);
+     GPIO_setPinConfig(GPIO_31_SPISOMIB);
+     GPIO_setDirectionMode(31, GPIO_DIR_MODE_IN);
+     GPIO_setPadConfig(31, GPIO_PIN_TYPE_STD);
+     GPIO_setQualificationMode(31, GPIO_QUAL_ASYNC);
+     //
+     // GPIO14 is the SPIB CLK pin.
+     //
+     GPIO_setMasterCore(14, GPIO_CORE_CPU1);
+     GPIO_setPinConfig(GPIO_14_SPICLKB);
+     GPIO_setDirectionMode(14, GPIO_DIR_MODE_OUT);
+     GPIO_setPadConfig(14, GPIO_PIN_TYPE_STD);
+     GPIO_setQualificationMode(14, GPIO_QUAL_ASYNC);
+     //
+     // GPIO15 is the SPIB STE (CS для DDS) pin.
+     //
+     GPIO_setMasterCore(15, GPIO_CORE_CPU1);
+     GPIO_setPinConfig(GPIO_15_SPISTEB);
+     GPIO_setDirectionMode(15, GPIO_DIR_MODE_OUT);
+     GPIO_setPadConfig(15, GPIO_PIN_TYPE_STD);
+     GPIO_setQualificationMode(15, GPIO_QUAL_ASYNC);
+     //
+     // Must put SPI into reset before configuring it.
+     //
+     SPI_disableModule(SPIB_BASE);
+     //
+     // SPI configuration. Use a 2MHz SPICLK and 8-bit word size.
+     //
+     SPI_setConfig(SPIB_BASE, DEVICE_LSPCLK_FREQ, SPI_PROT_POL1PHA0,
+                   SPI_MODE_MASTER, 2500000, 8); // 5000000
+     //
+     // Configuration complete. Enable the module.
+     //
+     SPI_enableModule(SPIB_BASE);
+    }
+
+    void initSPIA()
+    {
+     //
+     // GPIO8 is the SPIA SIMO pin.
+     //
+     GPIO_setMasterCore(8, GPIO_CORE_CPU1);
+     GPIO_setPinConfig(GPIO_8_SPISIMOA);
+     GPIO_setDirectionMode(8, GPIO_DIR_MODE_OUT);
+     GPIO_setPadConfig(8, GPIO_PIN_TYPE_STD);
+     GPIO_setQualificationMode(8, GPIO_QUAL_ASYNC);
+     //
+     // GPIO10 is the SPIA SOMI pin.
+     //
+     GPIO_setMasterCore(10, GPIO_CORE_CPU1);
+     GPIO_setPinConfig(GPIO_10_SPISOMIA);
+     GPIO_setDirectionMode(10, GPIO_DIR_MODE_IN);
+     GPIO_setPadConfig(10, GPIO_PIN_TYPE_STD);
+     GPIO_setQualificationMode(10, GPIO_QUAL_ASYNC);
+     //
+     // GPIO9 is the SPIA CLK pin.
+     //
+     GPIO_setMasterCore(9, GPIO_CORE_CPU1);
+     GPIO_setPinConfig(GPIO_9_SPICLKA);
+     GPIO_setDirectionMode(9, GPIO_DIR_MODE_OUT);
+     GPIO_setPadConfig(9, GPIO_PIN_TYPE_STD);
+     GPIO_setQualificationMode(9, GPIO_QUAL_ASYNC);
+     //
+     SPI_disableModule(SPIA_BASE);
+     //
+     SPI_setConfig(SPIA_BASE, DEVICE_LSPCLK_FREQ, SPI_PROT_POL0PHA0,
+                   SPI_MODE_MASTER, 2500000, 8); //5000000
+     //
+     // Configuration complete. Enable the module.
+     //
+     SPI_enableModule(SPIA_BASE);
+    }
+
+    //
+    // epwm1ISR - ePWM 1 ISR
+    //
+    __interrupt void epwm6ISR(void)
+    {
+    //
+    // Clear INT flag for this timer
+    //
+    EPWM_clearEventTriggerInterruptFlag(EPWM6_BASE);
+    //
+    // Acknowledge interrupt group
+    //
+    Interrupt_clearACKGroup(INTERRUPT_ACK_GROUP3);
+    }
+    //
+    // CAN B ISR - The interrupt service routine called when a CAN interrupt is
+    //             triggered on CAN module B.
+    //
+    //
+    // epwm1ISR - ePWM 1 ISR
+    //
+    __interrupt void epwm8ISR(void)
+    {
+    //
+    // Clear INT flag for this timer
+    //
+    EPWM_clearEventTriggerInterruptFlag(EPWM8_BASE);
+    //
+    // Acknowledge interrupt group
+    //
+    Interrupt_clearACKGroup(INTERRUPT_ACK_GROUP3);
+    }
+    //
+    // CAN B ISR - The interrupt service routine called when a CAN interrupt is
+    //             triggered on CAN module B.
+    //
+    __interrupt void canaISR(void)
+    {
+    uint32_t status;
+    //
+    // Read the CAN-B interrupt status to find the cause of the interrupt
+    //
+    status = CAN_getInterruptCause(CANA_BASE);
+    //
+    // If the cause is a controller status interrupt, then get the status
+    //
+    if(status == CAN_INT_INT0ID_STATUS)
+    {
+    //
+    // Read the controller status.  This will return a field of status
+    // error bits that can indicate various errors.  Error processing
+    // is not done in this example for simplicity.  Refer to the
+    // API documentation for details about the error status bits.
+    // The act of reading this status will clear the interrupt.
+    //
+    status = CAN_getStatus(CANA_BASE);
+
+    if(((status  & ~(CAN_STATUS_TXOK | CAN_STATUS_RXOK)) != 7) && ((status  & ~(CAN_STATUS_TXOK | CAN_STATUS_RXOK)) != 0)){
+                    g_bErrFlag++;
+                    if(g_bErrFlag<maxTryCount) {
+                        txInProgress = true;
+                        if(TX_MSG_OBJ_ID==1)
+                            //CANMessageSet(CANA_BASE, currTxObj, &sTXCANMessage1, MSG_OBJ_TYPE_TX); сообщение на отправку как у Глеба, у нас ф-ция на отправук другая:
+                            CAN_sendMessage(CANA_BASE, TX_MSG_OBJ_ID, MSG_DATA_LENGTH,txMsgData);
+                        //
+                        // Set a flag to indicate some errors may have occurred.
+                        //
+                        // errorFlag = 1;
+                } else  txInProgress = false;
+            }
+    }
+    //
+    // Check if the cause is the CAN-B receive message object 1
+    //
+    else if(status == RX_MSG_OBJ_ID_Tx1)
+    {
+        CAN_readMessage(CANA_BASE, RX_MSG_OBJ_ID_Tx1, rxMsgData[RX_MSG_OBJ_ID_Tx1]);
+        CAN_clearInterruptStatus(CANA_BASE, RX_MSG_OBJ_ID_Tx1);
+        g_ulRxMsgCount[2]++;
+        errorFlag = 0;/// ну в будующем будем что-то с эти  флагом делать
+    }
+    else if(status == RX_MSG_OBJ_ID_Tx2)
+    {
+        CAN_readMessage(CANA_BASE, RX_MSG_OBJ_ID_Tx2, rxMsgData[RX_MSG_OBJ_ID_Tx2]);
+        CAN_clearInterruptStatus(CANA_BASE, RX_MSG_OBJ_ID_Tx2);
+        g_ulRxMsgCount[3]++;
+        errorFlag = 0;/// ну в будующем будем что-то с эти  флагом делать
+    }
+    else if(status == RX_MSG_OBJ_ID_Tx3)
+    {
+        CAN_readMessage(CANA_BASE, RX_MSG_OBJ_ID_Tx3, rxMsgData[RX_MSG_OBJ_ID_Tx3]);
+        CAN_clearInterruptStatus(CANA_BASE, RX_MSG_OBJ_ID_Tx3);
+        g_ulRxMsgCount[4]++;
+        errorFlag = 0;/// ну в будующем будем что-то с эти  флагом делать
+    }
+    else if(status == RX_MSG_OBJ_ID_Tx4)
+    {
+        CAN_readMessage(CANA_BASE, RX_MSG_OBJ_ID_Tx4, rxMsgData[RX_MSG_OBJ_ID_Tx4]);
+        CAN_clearInterruptStatus(CANA_BASE, RX_MSG_OBJ_ID_Tx4);
+        g_ulRxMsgCount[5]++;
+        errorFlag = 0;/// ну в будующем будем что-то с эти  флагом делать
+    }
+    else if(status == RX_MSG_OBJ_ID_Tx5)
+    {
+        CAN_readMessage(CANA_BASE, RX_MSG_OBJ_ID_Tx5, rxMsgData[RX_MSG_OBJ_ID_Tx5]);
+        CAN_clearInterruptStatus(CANA_BASE, RX_MSG_OBJ_ID_Tx5);
+        g_ulRxMsgCount[6]++;
+        errorFlag = 0;/// ну в будующем будем что-то с эти  флагом делать
+    }
+
+    else if(status == TX_MSG_OBJ_ID)
+        {
+
+            txInProgress = false;
+            //
+            // Getting to this point means that the RX interrupt occurred on
+            // message object 1, and the message RX is complete.  Clear the
+            // message object interrupt.
+            //
+            CAN_clearInterruptStatus(CANA_BASE, TX_MSG_OBJ_ID);
+
+            //
+            // Increment a counter to keep track of how many messages have been
+            // received. In a real application this could be used to set flags to
+            // indicate when a message is received.
+            //
+            //rxMsgCount++;
+            //
+            // Since the message was received, clear any error flags.
+            //
+            errorFlag = 0;/// ну в будующем будем что-то с эти  флагом делать
+        }
+        //
+        // If something unexpected caused the interrupt, this would handle it.
+        //
+        else
+        {
+        //
+        // Spurious interrupt handling can go here.
+        //
+        }
+        //
+        // Clear the global interrupt flag for the CAN interrupt line
+        //
+        CAN_clearGlobalInterruptStatus(CANA_BASE, CAN_GLOBAL_INT_CANINT0);
+        //
+        // Acknowledge this interrupt located in group 9
+        //
+        Interrupt_clearACKGroup(INTERRUPT_ACK_GROUP9);
+    }
+    // Инициализируем PWM для Гетеродина на 2000кГц.
+    //
+    // initEPWM1 - Configure ePWM1
+    //
+    void initEPWM6_2000_kHz()
+    {
+    ECAP_setAPWMShadowPeriod(ECAP1_BASE, 48U);//49
+    ECAP_setAPWMShadowCompare(ECAP1_BASE, 24U);
+    }
+
+    // Инициализируем PWM для Гетеродина на 2000кГц.
+    //
+    // initEPWM1 - Configure ePWM1
+    //
+    void initEPWM6_400_kHz()
+    {
+    ECAP_setAPWMShadowPeriod(ECAP1_BASE, 240U);
+    ECAP_setAPWMShadowCompare(ECAP1_BASE, 120U);
+    }
+
+    // Инициализируем PWM для PWR_SYNC_OUT.
+    //
+    // initEPWM1 - Configure ePWM1
+    //
+    void initEPWM8_533_kHz()
+    {
+    //
+    // Set-up TBCLK
+    //
+    EPWM_setTimeBasePeriod(EPWM8_BASE, EPWM8_TIMER_TBPRD_400);
+    EPWM_setPhaseShift(EPWM8_BASE, 0U);
+    EPWM_setTimeBaseCounter(EPWM8_BASE, 0U);
+    //
+    // Set Compare values
+    //
+    EPWM_setCounterCompareValue(EPWM8_BASE, EPWM_COUNTER_COMPARE_A, EPWM8_MIN_CMPB_400);
+    //
+    // Set up counter mode
+    //
+    EPWM_setTimeBaseCounterMode(EPWM8_BASE, EPWM_COUNTER_MODE_UP_DOWN);
+    EPWM_disablePhaseShiftLoad(EPWM8_BASE);
+    EPWM_setClockPrescaler(EPWM8_BASE, EPWM_CLOCK_DIVIDER_1, EPWM_HSCLOCK_DIVIDER_1);
+    //
+    // Set up shadowing
+    //
+    EPWM_setCounterCompareShadowLoadMode(EPWM8_BASE, EPWM_COUNTER_COMPARE_A, EPWM_COMP_LOAD_ON_CNTR_ZERO);
+    //
+    // Set actions
+    //
+    EPWM_setActionQualifierAction(EPWM8_BASE,  EPWM_AQ_OUTPUT_A, EPWM_AQ_OUTPUT_HIGH,  EPWM_AQ_OUTPUT_ON_TIMEBASE_UP_CMPA);
+    EPWM_setActionQualifierAction(EPWM8_BASE, EPWM_AQ_OUTPUT_A, EPWM_AQ_OUTPUT_LOW, EPWM_AQ_OUTPUT_ON_TIMEBASE_DOWN_CMPA);
+    //
+    // Interrupt where we will change the Compare Values
+    // Select INT on Time base counter zero event,
+    // Enable INT, generate INT on 3rd event
+    //
+    EPWM_setInterruptSource(EPWM8_BASE, EPWM_INT_TBCTR_ZERO);
+    EPWM_enableInterrupt(EPWM8_BASE);
+    EPWM_setInterruptEventCount(EPWM8_BASE, 3U);
+
+    }
+
+    //
+    // initADC - Function to configure and power up ADCA.
+    //
+    void initADC(void)
+    {
+    //
+    // Setup VREF as internal
+    //
+    ADC_setVREF(ADCA_BASE, ADC_REFERENCE_INTERNAL, ADC_REFERENCE_3_3V);
+    //
+    // Set ADCCLK divider to /4
+    //
+    ADC_setPrescaler(ADCA_BASE, ADC_CLK_DIV_1_0);
+    //
+    // Set pulse positions to late
+    //
+    ADC_setInterruptPulseMode(ADCA_BASE, ADC_PULSE_END_OF_CONV);
+    //
+    // Power up the ADC and then delay for 1 ms
+    //
+    ADC_enableConverter(ADCA_BASE);
+    DEVICE_DELAY_US(1000);
+    }
+
+    //
+    // initEPWM - Function to configure ePWM1 to generate the SOC.
+    //
+    void init_ADC_EPWM(void)
+    {
+    //
+    // Disable SOCA
+    //
+    EPWM_disableADCTrigger(EPWM1_BASE, EPWM_SOC_A);
+    //
+    // Configure the SOC to occur on the first up-count event
+    //
+    EPWM_setADCTriggerSource(EPWM1_BASE, EPWM_SOC_A, EPWM_SOC_TBCTR_U_CMPA);
+    EPWM_setADCTriggerEventPrescale(EPWM1_BASE, EPWM_SOC_A, 1);
+    //
+    // Set the compare A value to 2048 and the period to 4096
+    //
+    EPWM_setCounterCompareValue(EPWM1_BASE, EPWM_COUNTER_COMPARE_A, 0x0600);
+    EPWM_setTimeBasePeriod(EPWM1_BASE, 0x800);
+    //
+    // Freeze the counter
+    //
+    EPWM_setTimeBaseCounterMode(EPWM1_BASE, EPWM_COUNTER_MODE_STOP_FREEZE);
+    EPWM_enableADCTrigger(EPWM1_BASE, EPWM_SOC_A);
+    EPWM_setTimeBaseCounterMode(EPWM1_BASE, EPWM_COUNTER_MODE_UP);
+
+    }
+
+    //
+    // initADCSOC - Function to configure ADCA's SOC0 to be triggered by ePWM1.
+    //
+    void initADCSOC(void)
+    {
+    //
+    // Configure SOC0 of ADCA to convert pin A0 with a sample window of 10
+    // SYSCLK cycles. The EPWM1SOCA signal will be the trigger.
+    //
+    ADC_setupSOC(ADCA_BASE, ADC_SOC_NUMBER0, ADC_TRIGGER_EPWM1_SOCA,
+                 ADC_CH_ADCIN6, 10);
+    //
+    // Set SOC0 to set the interrupt 1 flag. Enable the interrupt and make
+    // sure its flag is cleared.
+    //
+    ADC_setInterruptSource(ADCA_BASE, ADC_INT_NUMBER1, ADC_SOC_NUMBER0);
+    ADC_enableInterrupt(ADCA_BASE, ADC_INT_NUMBER1);
+    ADC_clearInterruptStatus(ADCA_BASE, ADC_INT_NUMBER1);
+    }
+    //
+    // adcA1ISR - ADC A Interrupt 1 ISR
+    //
+    __interrupt void adcA1ISR(void)
+    {
+    //
+    // Add the latest result to the buffer
+    //
+    adc_value = ADC_readResult(ADCARESULT_BASE, ADC_SOC_NUMBER0);
+    //
+    // Clear the interrupt flag
+    //
+    ADC_clearInterruptStatus(ADCA_BASE, ADC_INT_NUMBER1);
+
+    //
+    // Check if overflow has occurred
+    //
+    if(true == ADC_getInterruptOverflowStatus(ADCA_BASE, ADC_INT_NUMBER1))
+    {
+        ADC_clearInterruptOverflowStatus(ADCA_BASE, ADC_INT_NUMBER1);
+        ADC_clearInterruptStatus(ADCA_BASE, ADC_INT_NUMBER1);
+    }
+    // флаг готовности измерений термодатчика, отправляемся считать температуру.
+    convisdone = 1;
+    //
+    // Acknowledge the interrupt
+    //
+    Interrupt_clearACKGroup(INTERRUPT_ACK_GROUP1);
+    }
+
+
+    float temp_deg_(uint16_t adc_value) {
+    float temp_deg;
+    float v_in = 3305. * adc_value / 4096.;
+    if (v_in < 1500) temp_deg = (v_in - 500) / 10.;
+    else if (v_in >= 1500 && v_in < 1752.5) temp_deg = (v_in - 1500) / 10.1 + 100;
+    else if (v_in >= 1752.5) temp_deg = (v_in - 1752.5) / 10.6 + 125;
+    return temp_deg;
+    }
+/****************************************************************************************************************/
+
+#ifdef __cplusplus
+#pragma CODE_SECTION(".TI.ramfunc");
+#else
+#pragma CODE_SECTION(startFlashAPI, ".TI.ramfunc");
+#pragma CODE_SECTION(readFlashDataMetrology, ".TI.ramfunc");
+#pragma CODE_SECTION(writeFlashDataMetrology, ".TI.ramfunc");
+#pragma CODE_SECTION(EraseFlashSectorBootLoader, ".TI.ramfunc");
+#endif
+
+
+    void startFlashAPI(void)
+    {
+        Fapi_StatusType  oReturnCheck;
+
+    Flash_setWaitstates(FLASH0CTRL_BASE, 5);//5
+    oReturnCheck = Fapi_initializeAPI(F021_CPU0_BASE_ADDRESS, 100);
+
+    if(oReturnCheck != Fapi_Status_Success)
+    {
+        // Check Flash API documentation for possible errors
+        //Example_Error(oReturnCheck);
+        ;
+    }
+    oReturnCheck = Fapi_setActiveFlashBank(Fapi_FlashBank0);
+   // oReturnCheck = Fapi_setActiveFlashBank(Fapi_FlashBank1);
+
+    if(oReturnCheck != Fapi_Status_Success)
+    {
+        // Check Flash API documentation for possible errors
+        //Example_Error(oReturnCheck);
+        ;
+    }
+    }
+
+/****************************************************************************************************************/
+
+    void readFlashDataMetrology(void)
+    {
+
+    struct GP_METROLOGY *METROLOGY_data_ptr = (struct GP_METROLOGY*)(&METROLOGY_data); // указатель на глобальную структуру метроданных
+    struct GP_METROLOGY *METROLOGY_FLASH_ptr = (struct GP_METROLOGY*)Bzero_Sector14_start; //0x90000; 0x082000
+    memcpy(METROLOGY_data_ptr, METROLOGY_FLASH_ptr, sizeof(struct GP_METROLOGY));
+    }
+/****************************************************************************************************************/
+
+    void writeFlashDataMetrology(struct GP_METROLOGY METROLOGY_data)
+    {
+    uint16_t i,j;
+    uint16_t *dataPtr16;
+    uint16_t dataCount;
+    uint16_t Buffer[240];
+    uint16_t Buffer_1[120];
+    uint32 u32Index = 0;
+    Fapi_StatusType  oReturnCheck;
+
+    dataCount = sizeof(struct GP_METROLOGY) ;
+    dataPtr16 = (uint16_t*)(&METROLOGY_data);
+    j=0;// начало области данных
+                for(i=0; i<dataCount; i++) {
+                    Buffer[j++] =  dataPtr16[i]      & 0x000000FF;  // сначала младший
+                    Buffer[j++] = (dataPtr16[i]>> 8) & 0x000000FF; //  затем старший
+                }
+                for(i=0; i<120; i++){
+                    Buffer_1[i] = (Buffer[2*i])|((Buffer[2*i+1]<<8) & 0xFF00);
+                }
+     // Erase Flash Bank0 sector6
+     oReturnCheck = Fapi_issueAsyncCommandWithAddress(Fapi_EraseSector, (uint32 *)Bzero_Sector14_start);
+      // Wait until FSM is done with erase sector operation
+     while (Fapi_checkFsmForReady() != Fapi_Status_FsmReady){}
+
+                for(i=0, u32Index = Bzero_Sector14_start;(u32Index < (Bzero_Sector14_start + WORDS_IN_FLASH_BUFFER)) && (oReturnCheck == Fapi_Status_Success); i+= 8, u32Index+= 8)
+                    {
+                        oReturnCheck = Fapi_issueProgrammingCommand((uint32 *)u32Index, Buffer_1+i, 8, 0, 0, Fapi_AutoEccGeneration);
+                        while(Fapi_checkFsmForReady() == Fapi_Status_FsmBusy);
+                        Fapi_getFsmStatus();
+                    }
+
+
+    }
+
+    void EraseFlashSectorBootLoader(void){
+          //Erase Flash Bank0 sector15
+          Fapi_issueAsyncCommandWithAddress(Fapi_EraseSector, (uint32 *)Bzero_Sector15_start);
+          //Wait until FSM is done with erase sector operation
+          while (Fapi_checkFsmForReady() != Fapi_Status_FsmReady){}
+        }
+
+    /****************************************************************************************************************/
+
+                // делаем из фаз приемников разность фаз, приведенную к +- PI
+
+            float d_ph(float ph2, float ph1){
+                float result;
+                result = ph2 - ph1;
+                if (fabs(result) < 40) {
+                    while (result > M_PI) result -= 2 * M_PI;
+                    while (result <= -M_PI) result += 2 * M_PI;
+                }
+                else result = 0.0f;
+                return result;
+                }
+
+            //прямая задача
+            //n_Tx - номер передатчика
+            //вспомогательная функция для расчета УЭС выполняется для одного зонда внутри функции RO_ARG
+                float SIGNAL(struct GP_METROLOGY *metro, uint16_t k_Tx, uint16_t freq, float ro) {
+                complex float re = 1.0f;//комплексное число с 0-й мнимой частью. 1.0f- воспринемаеться как вещественное число.
+                float L1 = metro->L1[k_Tx] / 1000.0;
+                float L2 = metro->L2[k_Tx] / 1000.0;
+                float omegamu0sigma = (0.0078957 * metro->F[freq]) / ro;
+                complex float ii = _Imaginary_I;
+                complex float ik = ii*csqrtf(omegamu0sigma*_Imaginary_I);///заменяем I на ii т.к в cjmplex.h нет ф-ции умножения комп.чисел, результат 0.0
+                complex float SGN = cexpf(ik*(L2 - L1))*((re - ik * L2)/(re - ik * L1));
+                return cargf(SGN);
+            }
+
+             //обратная задача МПП "золотое сечение"
+             //n_Tx - номер передатчика
+                void RO_ARG(struct GP_METROLOGY *metro, struct GP_DATA *Data, uint16_t k_Tx, uint16_t freq) {
+                float Ro0 = 0.0f;
+                float epsilon_ARG = 0.0000005; // точность  фазы
+                float epsilon_INF = 0.000000005; // точность  фазы
+                float  Ro_0 = 0.01, Ro_max = 7000.0;  //мин. и мах. значение ус для расчета
+                bool stop_epsl_ARG = false;
+                bool stop_epsl_INF = false;
+                float  ro_0 = Ro_0;
+                float  ro_max = Ro_max;
+
+                do {
+                    float X1 = ro_0 + 0.382*(ro_max - ro_0);
+                    float X2 = ro_max - 0.382*(ro_max - ro_0);
+                    float A = 0;
+                    float B = 0;
+
+
+
+
+                    A = Data->phase_smt[freq][k_Tx] - SIGNAL(metro, k_Tx, freq, X1);//
+                    B = Data->phase_smt[freq][k_Tx] - SIGNAL(metro, k_Tx, freq, X2);//
+
+                    if (fabs(A) > fabs(B)) { ro_0 = X1; }
+                    else { ro_max = X2; }
+                    if (fabs(A) < epsilon_ARG || fabs(B) < epsilon_ARG) { stop_epsl_ARG = true; }
+                    else if (fabs(A - B) < epsilon_INF) { stop_epsl_INF = true; }
+
+                } while (stop_epsl_ARG == false && stop_epsl_INF == false);
+                if (stop_epsl_ARG == true) Ro0 = (ro_0 + ro_max) / 2;
+                if (stop_epsl_INF == true) Ro0 = 7200;//-100
+                ro_0 = Ro_0;
+                ro_max = Ro_max;
+                Data->rho_smt[freq][k_Tx] = Ro0;
+
+                }
+
+            //N_Tx - количество передатчиков
+            //вспомогательная функция выполняется для одной частоты внутри функции simmetry
+            //принимает condition  как один байт от GP_DATA.uint32_t condition
+                void formula_simmetry(float K[5][5], uint16_t condition, uint16_t N_Tx) {
+                    //00054321
+                    if (N_Tx == 5) {
+                        if (condition == 0b00011111 || condition == 0b11111111) {// работают все 5 передатчиков
+                            K[T1][T1] = +0.75;  K[T1][T2] = +0.50; K[T1][T3] = -0.25; K[T1][T4] = +0.00; K[T1][T5] = +0.00;
+                            K[T2][T1] = +0.25;  K[T2][T2] = +0.50; K[T2][T3] = +0.25; K[T2][T4] = +0.00; K[T2][T5] = +0.00;
+                            K[T3][T1] = +0.00;  K[T3][T2] = +0.25; K[T3][T3] = +0.50; K[T3][T4] = +0.25; K[T3][T5] = +0.00;
+                            K[T4][T1] = +0.00;  K[T4][T2] = +0.00; K[T4][T3] = +0.25; K[T4][T4] = +0.50; K[T4][T5] = +0.25;
+                            K[T5][T1] = +0.00;  K[T5][T2] = +0.00; K[T5][T3] = -0.25; K[T5][T4] = +0.50; K[T5][T5] = +0.75;
+                        }
+                        else if (condition == 0b00011110) {// не работает  1й передатчик
+                            K[T1][T1] = +0.00;  K[T1][T2] = +1.25; K[T1][T3] = +0.50; K[T1][T4] = -0.75; K[T1][T5] = +0.00;
+                            K[T2][T1] = +0.00;  K[T2][T2] = +0.75; K[T2][T3] = +0.50; K[T2][T4] = -0.25; K[T2][T5] = +0.00;
+                            K[T3][T1] = +0.00;  K[T3][T2] = +0.25; K[T3][T3] = +0.50; K[T3][T4] = +0.25; K[T3][T5] = +0.00;
+                            K[T4][T1] = +0.00;  K[T4][T2] = +0.00; K[T4][T3] = +0.25; K[T4][T4] = +0.50; K[T4][T5] = +0.25;
+                            K[T5][T1] = +0.00;  K[T5][T2] = +0.00; K[T5][T3] = -0.25; K[T5][T4] = +0.50; K[T5][T5] = +0.75;
+                        }
+                        else if (condition == 0b00011101) {// не работает  2й передатчик
+                            K[T1][T1] = +1.25;  K[T1][T2] = +0.00; K[T1][T3] = -0.75; K[T1][T4] = +0.50; K[T1][T5] = +0.00;
+                            K[T2][T1] = +0.75;  K[T2][T2] = +0.00; K[T2][T3] = -0.25; K[T2][T4] = +0.50; K[T2][T5] = +0.00;
+                            K[T3][T1] = +0.00;  K[T3][T2] = +0.00; K[T3][T3] = +0.75; K[T3][T4] = +0.50; K[T3][T5] = -0.25;
+                            K[T4][T1] = +0.00;  K[T4][T2] = +0.00; K[T4][T3] = +0.25; K[T4][T4] = +0.50; K[T4][T5] = +0.25;
+                            K[T5][T1] = +0.00;  K[T5][T2] = +0.00; K[T5][T3] = -0.25; K[T5][T4] = +0.50; K[T5][T5] = +0.75;
+                        }
+                        else if (condition == 0b00011011) {// не работает  3й передатчик
+                            K[T1][T1] = +0.50;  K[T1][T2] = +0.75; K[T1][T3] = +0.00; K[T1][T4] = -0.25; K[T1][T5] = +0.00;
+                            K[T2][T1] = +0.00;  K[T2][T2] = +1.25; K[T2][T3] = +0.00; K[T2][T4] = -0.75; K[T2][T5] = +0.50;
+                            K[T3][T1] = +0.00;  K[T3][T2] = +0.75; K[T3][T3] = +0.00; K[T3][T4] = -0.25; K[T3][T5] = +0.50;
+                            K[T4][T1] = +0.00;  K[T4][T2] = +0.25; K[T4][T3] = +0.00; K[T4][T4] = +0.25; K[T4][T5] = +0.05;
+                            K[T5][T1] = +0.00;  K[T5][T2] = -0.25; K[T5][T3] = +0.00; K[T5][T4] = +0.75; K[T5][T5] = +0.05;
+                        }
+                        else if (condition == 0b00010111) {// не работает  4й передатчик
+                            K[T1][T1] = +0.75;  K[T1][T2] = +0.50; K[T1][T3] = -0.25; K[T1][T4] = +0.00; K[T1][T5] = +0.00;
+                            K[T2][T1] = +0.25;  K[T2][T2] = +0.50; K[T2][T3] = +0.25; K[T2][T4] = +0.00; K[T2][T5] = +0.00;
+                            K[T3][T1] = -0.25;  K[T3][T2] = +0.50; K[T3][T3] = +0.75; K[T3][T4] = +0.00; K[T3][T5] = +0.00;
+                            K[T4][T1] = +0.00;  K[T4][T2] = +0.50; K[T4][T3] = -0.25; K[T4][T4] = +0.00; K[T4][T5] = +0.75;
+                            K[T5][T1] = +0.00;  K[T5][T2] = +0.50; K[T5][T3] = -0.75; K[T5][T4] = +0.00; K[T5][T5] = +1.25;
+                        }
+                        else if (condition == 0b00001111) {// не работает  5й передатчик
+                            K[T1][T1] = +0.75;  K[T1][T2] = +0.50; K[T1][T3] = -0.25; K[T1][T4] = +0.00; K[T1][T5] = +0.00;
+                            K[T2][T1] = +0.25;  K[T2][T2] = +0.50; K[T2][T3] = +0.25; K[T2][T4] = +0.00; K[T2][T5] = +0.00;
+                            K[T3][T1] = +0.05;  K[T3][T2] = +0.25; K[T3][T3] = +0.50; K[T3][T4] = +0.25; K[T3][T5] = +0.00;
+                            K[T4][T1] = +0.00;  K[T4][T2] = -0.25; K[T4][T3] = +0.50; K[T4][T4] = +0.75; K[T4][T5] = +0.00;
+                            K[T5][T1] = +0.00;  K[T5][T2] = -0.75; K[T5][T3] = +0.50; K[T5][T4] = +1.25; K[T5][T5] = +0.00;
+                        }
+                        else if (condition == 0b00000000) {// выводим несимметризованные значения для всех передатчиков
+                            K[T1][T1] = +1.00; K[T1][T2] = +0.00; K[T1][T3] = +0.00; K[T1][T4] = +0.00; K[T1][T5] = +0.00;
+                            K[T2][T1] = +0.00; K[T2][T2] = +1.00; K[T2][T3] = +0.00; K[T2][T4] = +0.00; K[T2][T5] = +0.00;
+                            K[T3][T1] = +0.00; K[T3][T2] = +0.00; K[T3][T3] = +1.00; K[T3][T4] = +0.00; K[T3][T5] = +0.00;
+                            K[T4][T1] = +0.00; K[T4][T2] = +0.00; K[T4][T3] = +0.00; K[T4][T4] = +1.00; K[T4][T5] = +0.00;
+                            K[T5][T1] = +0.00; K[T5][T2] = +0.00; K[T5][T3] = +0.00; K[T5][T4] = +0.00; K[T5][T5] = +1.00;
+                        }
+                        else {// работает меньше четырех передатчиков
+                            //находим рабочие передатчики и для них выводим несимметризованные значения, для нерабочих фаза равна 0
+                            bool k1 = (condition >> 0) & 1u;
+                            bool k2 = (condition >> 1) & 1u;
+                            bool k3 = (condition >> 2) & 1u;
+                            bool k4 = (condition >> 3) & 1u;
+                            bool k5 = (condition >> 4) & 1u;
+                            K[T1][T1] = 1.00*k1; K[T1][T2] = 0.00;    K[T1][T3] = 0.00;    K[T1][T4] = 0.00;    K[T1][T5] = 0.00;
+                            K[T2][T1] = 0.00;    K[T2][T2] = 1.00*k2; K[T2][T3] = 0.00;    K[T2][T4] = 0.00;    K[T2][T5] = 0.00;
+                            K[T3][T1] = 0.00;    K[T3][T2] = 0.00;    K[T3][T3] = 1.00*k3; K[T3][T4] = 0.00;    K[T3][T5] = 0.00;
+                            K[T4][T1] = 0.00;    K[T4][T2] = 0.00;    K[T4][T3] = 0.00;    K[T4][T4] = 1.00*k4; K[T4][T5] = 0.00;
+                            K[T5][T1] = 0.00;    K[T5][T2] = 0.00;    K[T5][T3] = 0.00;    K[T5][T4] = 0.00;    K[T5][T5] = 1.00*k5;
+                        }
+                    }
+
+                    //00054321
+                    if (N_Tx == 4) {
+                        if (condition == 0b00001111 || condition == 0b11111111) {// работают все 4 передатчика 5й не существует
+                            K[T1][T1] = +0.75;  K[T1][T2] = +0.50; K[T1][T3] = -0.25; K[T1][T4] = +0.00; K[T1][T5] = +0.00;
+                            K[T2][T1] = +0.25;  K[T2][T2] = +0.50; K[T2][T3] = +0.25; K[T2][T4] = +0.00; K[T2][T5] = +0.00;
+                            K[T3][T1] = +0.00;  K[T3][T2] = +0.25; K[T3][T3] = +0.50; K[T3][T4] = +0.25; K[T3][T5] = +0.00;
+                            K[T4][T1] = +0.00;  K[T4][T2] = -0.25; K[T4][T3] = +0.50; K[T4][T4] = +0.75; K[T4][T5] = +0.00;
+                            K[T5][T1] = +0.00;  K[T5][T2] = +0.00; K[T5][T3] = +0.00; K[T5][T4] = +0.00; K[T5][T5] = +0.00;
+                        }
+                        else if (condition == 0b00001110) {// не работает  1й передатчик 5й не существует
+                            K[T1][T1] = +0.00; K[T1][T2] = +1.25; K[T1][T3] = +0.50; K[T1][T4] = -0.75; K[T1][T5] = +0.00;
+                            K[T2][T1] = +0.00; K[T2][T2] = +0.75; K[T2][T3] = +0.50; K[T2][T4] = -0.25; K[T2][T5] = +0.00;
+                            K[T3][T1] = +0.00; K[T3][T2] = +0.25; K[T3][T3] = +0.50; K[T3][T4] = +0.25; K[T3][T5] = +0.00;
+                            K[T4][T1] = +0.00; K[T4][T2] = -0.25; K[T4][T3] = +0.50; K[T4][T4] = +0.75; K[T4][T5] = +0.00;
+                            K[T5][T1] = +0.00; K[T5][T2] = +0.00; K[T5][T3] = +0.00; K[T5][T4] = +0.00; K[T5][T5] = +0.00;
+                        }
+                        else if (condition == 0b00001101) {// не работает  2й передатчик 5й не существует
+                            K[T1][T1] = +1.25; K[T1][T2] = +0.00; K[T1][T3] = -0.75; K[T1][T4] = +0.50; K[T1][T5] = +0.00;
+                            K[T2][T1] = +0.75; K[T2][T2] = +0.00; K[T2][T3] = -0.25; K[T2][T4] = +0.50; K[T2][T5] = +0.00;
+                            K[T3][T1] = +0.25; K[T3][T2] = +0.00; K[T3][T3] = +0.25; K[T3][T4] = +0.50; K[T3][T5] = +0.00;
+                            K[T4][T1] = -0.25; K[T4][T2] = +0.00; K[T4][T3] = +0.75; K[T4][T4] = +0.50; K[T4][T5] = +0.00;
+                            K[T5][T1] = +0.00; K[T5][T2] = +0.00; K[T5][T3] = +0.00; K[T5][T4] = +0.00; K[T5][T5] = +0.00;
+                        }
+                        else if (condition == 0b00001011) {// не работает  3й передатчик 5й не существует
+                            K[T1][T1] = +0.50; K[T1][T2] = +0.75; K[T1][T3] = +0.00; K[T1][T4] = -0.25; K[T1][T5] = +0.00;
+                            K[T2][T1] = +0.50; K[T2][T2] = +0.25; K[T2][T3] = +0.00; K[T2][T4] = +0.25; K[T2][T5] = +0.00;
+                            K[T3][T1] = +0.50; K[T3][T2] = -0.25; K[T3][T3] = +0.00; K[T3][T4] = +0.75; K[T3][T5] = +0.00;
+                            K[T4][T1] = -0.50; K[T4][T2] = -0.75; K[T4][T3] = +0.00; K[T4][T4] = +1.25; K[T4][T5] = +0.00;
+                            K[T5][T1] = +0.00; K[T5][T2] = -0.00; K[T5][T3] = +0.00; K[T5][T4] = +0.00; K[T5][T5] = +0.00;
+                        }
+                        else if (condition == 0b00000111) {// не работает  4й передатчик 5й не существует
+                            K[T1][T1] = +0.75; K[T1][T2] = +0.50; K[T1][T3] = -0.25; K[T1][T4] = +0.00; K[T1][T5] = +0.00;
+                            K[T2][T1] = +0.25; K[T2][T2] = +0.50; K[T2][T3] = +0.25; K[T2][T4] = +0.00; K[T2][T5] = +0.00;
+                            K[T3][T1] = -0.25; K[T3][T2] = +0.50; K[T3][T3] = +0.75; K[T3][T4] = +0.00; K[T3][T5] = +0.00;
+                            K[T4][T1] = -0.75; K[T4][T2] = +0.50; K[T4][T3] = +1.25; K[T4][T4] = +0.00; K[T4][T5] = +0.00;
+                            K[T5][T1] = +0.00; K[T5][T2] = +0.00; K[T5][T3] = +0.00; K[T5][T4] = +0.00; K[T5][T5] = +0.00;
+                        }
+                        else if (condition == 0b00000000) {// выводим несимметризованные значения для всех передатчиков
+                            K[T1][T1] = +1.00; K[T1][T2] = +0.00; K[T1][T3] = +0.00; K[T1][T4] = +0.00; K[T1][T5] = +0.00;
+                            K[T2][T1] = +0.00; K[T2][T2] = +1.00; K[T2][T3] = +0.00; K[T2][T4] = +0.00; K[T2][T5] = +0.00;
+                            K[T3][T1] = +0.00; K[T3][T2] = +0.00; K[T3][T3] = +1.00; K[T3][T4] = +0.00; K[T3][T5] = +0.00;
+                            K[T4][T1] = +0.00; K[T4][T2] = +0.00; K[T4][T3] = +0.00; K[T4][T4] = +1.00; K[T4][T5] = +0.00;
+                            K[T5][T1] = +0.00; K[T5][T2] = +0.00; K[T5][T3] = +0.00; K[T5][T4] = +0.00; K[T5][T5] = +0.00;
+                        }
+                        else {// работает меньше трех передатчиков
+                            //находим рабочие передатчики и для них выводим несимметризованные значения, для нерабочих фаза равна 0
+                            bool k1 = (condition >> 0) & 1u;
+                            bool k2 = (condition >> 1) & 1u;
+                            bool k3 = (condition >> 2) & 1u;
+                            bool k4 = (condition >> 3) & 1u;
+                            bool k5 = (condition >> 4) & 1u;
+                            K[T1][T1] = 1.00*k1; K[T1][T2] = 0.00;    K[T1][T3] = 0.00;    K[T1][T4] = 0.00;    K[T1][T5] = 0.00;
+                            K[T2][T1] = 0.00;    K[T2][T2] = 1.00*k2; K[T2][T3] = 0.00;    K[T2][T4] = 0.00;    K[T2][T5] = 0.00;
+                            K[T3][T1] = 0.00;    K[T3][T2] = 0.00;    K[T3][T3] = 1.00*k3; K[T3][T4] = 0.00;    K[T3][T5] = 0.00;
+                            K[T4][T1] = 0.00;    K[T4][T2] = 0.00;    K[T4][T3] = 0.00;    K[T4][T4] = 1.00*k4; K[T4][T5] = 0.00;
+                            K[T5][T1] = 0.00;    K[T5][T2] = 0.00;    K[T5][T3] = 0.00;    K[T5][T4] = 0.00;    K[T5][T5] = 0.00*k5;
+                        }
+                    }
+
+                    //00054321
+                    if (N_Tx == 3) {//добавлено
+                        if (condition == 0b00000111) {// 4й и 5й передатчики  не существуют
+                            K[T1][T1] = +0.75; K[T1][T2] = +0.50; K[T1][T3] = -0.25; K[T1][T4] = +0.00; K[T1][T5] = +0.00;
+                            K[T2][T1] = +0.25; K[T2][T2] = +0.50; K[T2][T3] = +0.25; K[T2][T4] = +0.00; K[T2][T5] = +0.00;
+                            K[T3][T1] = -0.25; K[T3][T2] = +0.50; K[T3][T3] = +0.75; K[T3][T4] = +0.00; K[T3][T5] = +0.00;
+                            K[T4][T1] = -0.75; K[T4][T2] = +0.50; K[T4][T3] = +1.25; K[T4][T4] = +0.00; K[T4][T5] = +0.00;
+                            K[T5][T1] = +0.00; K[T5][T2] = +0.00; K[T5][T3] = +0.00; K[T5][T4] = +0.00; K[T5][T5] = +0.00;
+                        }
+                        else if (condition == 0b00000000) {// выводим несимметризованные значения для всех передатчиков
+                            K[T1][T1] = +1.00; K[T1][T2] = +0.00; K[T1][T3] = +0.00; K[T1][T4] = +0.00; K[T1][T5] = +0.00;
+                            K[T2][T1] = +0.00; K[T2][T2] = +1.00; K[T2][T3] = +0.00; K[T2][T4] = +0.00; K[T2][T5] = +0.00;
+                            K[T3][T1] = +0.00; K[T3][T2] = +0.00; K[T3][T3] = +1.00; K[T3][T4] = +0.00; K[T3][T5] = +0.00;
+                            K[T4][T1] = +0.00; K[T4][T2] = +0.00; K[T4][T3] = +0.00; K[T4][T4] = +1.00; K[T4][T5] = +0.00;
+                            K[T5][T1] = +0.00; K[T5][T2] = +0.00; K[T5][T3] = +0.00; K[T5][T4] = +0.00; K[T5][T5] = +0.00;
+                        }
+                        else {// работает меньше трех передатчиков
+                            //находим рабочие передатчики и для них выводим несимметризованные значения, для нерабочих фаза равна 0
+                            bool k1 = (condition >> 0) & 1u;
+                            bool k2 = (condition >> 1) & 1u;
+                            bool k3 = (condition >> 2) & 1u;
+                            bool k4 = (condition >> 3) & 1u;
+                            bool k5 = (condition >> 4) & 1u;
+                            K[T1][T1] = 1.00*k1; K[T1][T2] = 0.00;    K[T1][T3] = 0.00;    K[T1][T4] = 0.00;    K[T1][T5] = 0.00;
+                            K[T2][T1] = 0.00;    K[T2][T2] = 1.00*k2; K[T2][T3] = 0.00;    K[T2][T4] = 0.00;    K[T2][T5] = 0.00;
+                            K[T3][T1] = 0.00;    K[T3][T2] = 0.00;    K[T3][T3] = 1.00*k3; K[T3][T4] = 0.00;    K[T3][T5] = 0.00;
+                            K[T4][T1] = 0.00;    K[T4][T2] = 0.00;    K[T4][T3] = 0.00;    K[T4][T4] = 1.00*k4; K[T4][T5] = 0.00;
+                            K[T5][T1] = 0.00;    K[T5][T2] = 0.00;    K[T5][T3] = 0.00;    K[T5][T4] = 0.00;    K[T5][T5] = 0.00*k5;
+                        }
+                    }
+
+
+                }
+
+            //N_Tx - количество передатчиков
+                void simmetry(struct GP_DATA *Data, struct GP_METROLOGY *metro, uint16_t N_Tx) {
+                    //выполняем для двух частот
+                    enum T_ {
+                    T1, T2, T3, T4, T5
+                };
+
+                    for (int freq = 0; freq < 2; freq++){
+                        uint16_t condition;
+                        float d_PH[5] = { 0.0, };
+                        float K[5][5];
+
+                        for (int Tx = 0; Tx < N_Tx; Tx++) {
+                            d_PH[Tx] = Data->DELTA_PH[freq][Tx];
+                        }
+
+                        // для автоматического воздуха
+                        for (int Tx = 0; Tx < N_Tx; Tx++){
+                            //скользящее среднее  для воздуха
+                            air_summ[Tx + 5*freq] -= air_buff[w_ma][Tx + 5*freq];
+                            air_buff[w_ma][Tx + 5*freq] = d_PH[Tx];
+                            air_summ[Tx + 5*freq] += air_buff[w_ma][Tx + 5*freq];
+                        }
+                        // нормализуем сигнал к воздуху
+                        //Z1 повернут T1 phRx2-phRx1
+                        d_PH[T1] = +(d_PH[T1] - ((float)(metro->Air_zz[freq][T1])) / 57297.0);
+                        d_PH[T2] = -(d_PH[T2] - ((float)(metro->Air_zz[freq][T2])) / 57297.0);
+                        d_PH[T3] = +(d_PH[T3] - ((float)(metro->Air_zz[freq][T3])) / 57297.0);
+                        d_PH[T4] = -(d_PH[T4] - ((float)(metro->Air_zz[freq][T4])) / 57297.0);
+                        d_PH[T5] = +(d_PH[T5] - ((float)(metro->Air_zz[freq][T5])) / 57297.0);
+                        // перекладываем 32 бит Data->condition в 16 бит condition, в зависимости от частоты
+                        // GP_DATA.uint32_t condition;
+                        //                  400  kGz  2000 kGz
+                        //00000000 00000000 00012345 00012345
+                        if(freq == 0){
+                            condition = (Data->condition >> 8);
+                        }
+                        if(freq == 1){
+                            uint16_t buff = (Data->condition << 8);
+                            condition = (buff >> 8);
+                        }
+
+                        //рассчитываем коэф. симметризации в зависимости от работоспособности передатчиков
+                        formula_simmetry(K, condition, N_Tx);
+                        //производим симметризацию и записываем в структуру Data
+                        for (int Tx = 0; Tx < N_Tx; Tx++) {
+                            Data->phase_smt[freq][Tx] = K[Tx][T1] * d_PH[T1] + K[Tx][T2] * d_PH[T2] + K[Tx][T3] * d_PH[T3] + K[Tx][T4] * d_PH[T4] + K[Tx][T5] * d_PH[T5];
+                        }
+                    }
+                    //приращение счетчика для скользящего среднего один раз за вызов функции
+                    w_ma++;
+                    if(w_ma == air_aver){
+                        w_ma = 0;
+                    }
+
+                }
+
+            //далее  freq = 0 для 400_kGz или freq = 1 для 2000_kGz
+            //N_Tx - количество передатчиков
+            // condition пишется в GP_DATA.uint32_t condition
+                void get_condition(struct GP_DATA *Data, struct GP_METROLOGY *metro, uint16_t N_Tx){
+
+                    // GP_DATA.uint32_t condition;
+                    //                  400  kGz  2000 kGz
+                    //00000000 00000000 00054321 00054321
+                        for (int freq = 0; freq < 2; freq++){
+                            uint16_t condition = 0;
+                            //Tx1:
+                            if (Data->AM_RX_2[freq][T1]  > metro->Air_zz_amt[freq][T1])
+                                condition |= (1 << T1);
+                            //Tx2:
+                            if (Data->AM_RX_1[freq][T2]  > metro->Air_zz_amt[freq][T2])
+                                condition |= (1 << T2);
+                            //Tx3:
+                            if (Data->AM_RX_2[freq][T3] > metro->Air_zz_amt[freq][T3])
+                                condition |= (1 << T3);
+                            //Tx4:
+                            if(N_Tx == 4 || N_Tx == 5){//изменено
+                                if (Data->AM_RX_1[freq][T4]  > metro->Air_zz_amt[freq][T4])
+                                condition |= (1 << T4);
+                            }
+                            //Tx5:
+                            if(N_Tx == 5){
+                                if (Data->AM_RX_2[freq][T5]  > metro->Air_zz_amt[freq][T5])
+                                    condition |= (1 << T5);
+                            }
+
+                            if(freq == 0)
+                                Data->condition |= (condition << 8);
+                            if(freq == 1)
+                                Data->condition |= (condition << 0);
+                        }
+
+                         //Data->condition = 0xffffffff;
+                }
+
+        struct ID get_sonde_id(uint32_t signature){
+               struct ID tool;
+               uint32_t buff;
+               buff = signature << 12;
+               buff = buff >> 12;
+               tool.type_ = buff / 100000;
+               tool.N_Tx = (buff % 100000) / 10000;
+               tool.mod = (buff % 10000) / 1000;
+               tool.number = (buff % 1000);
+               tool.type = buff / 1000;
+               return tool;
+           }
+
+    /****************************************************************************************************************/
+    void calc_silent_Tx(int32_t CH1[12][64], int32_t CH2[12][64], struct GP_DATA *result){
+
+    Q_1 = 0.0; I_1 = 0.0; Q_2 = 0.0; I_2 = 0.0; PH_1 = 0.0; PH_2 = 0.0;
+    AMP_1 = 0.0; AMP_2 = 0.0; AMP8_1 = 0.0; AMP8_2 = 0.0;
+
+    //накладываем окно приподнятый косинус win[n]
+/*    for (int i = 0; i < 64; i++) {
+        CH1[0][i] = win[i]*CH1[0][i];//маасивов молчащих передатчиков 400 кГц
+        CH2[0][i] = win[i]*CH2[0][i];//маасивов молчащих передатчиков 400 кГц
+
+        CH1[6][i] = win[i]*CH1[0][i];//маасивов молчащих передатчиков 400 кГц
+        CH2[6][i] = win[i]*CH2[0][i];//маасивов молчащих передатчиков 400 кГц
+
+    }
+*/
+    for (int i = 0; i < 64; i++) {
+        Q_1 += CH1[0][i] * sin_f_64[i]; //первый канал ДФТ для маасивов молчащих передатчиков 400 кГц
+        I_1 += CH1[0][i] * cos_f_64[i]; //перрвый канал ДФТ для маасивов молчащих передатчиков 400 кГц
+    }
+
+    for (int i = 0; i < 64; i++) {
+        Q_2 += CH2[0][i] * sin_f_64[i]; //второй канал ДФТ для маасивов молчащих передатчиков 400 кГц
+        I_2 += CH2[0][i] * cos_f_64[i]; //второй канал ДФТ для маасивов молчащих передатчиков 400 кГц
+    }
+
+    AMP_1 = sqrt(I_1 * I_1 + Q_1 * Q_1);
+    AMP8_1 = AMP_1/32.0;
+
+    AMP_2 = sqrt(I_2 * I_2 + Q_2 * Q_2);
+    AMP8_2 = AMP_2/32.0;
+
+    PH_1 = atan2f(Q_1 , I_1);
+    PH_2 = atan2f(Q_2 , I_2);
+
+
+    result->ZERO_AM_RX_1[0] = AMP8_1*mV; // амплитуды на первом приемнике [400, 2000] при молчащих передатчиках
+    result->ZERO_AM_RX_2[0] = AMP8_2*mV; // амплитуды на втором приемнике [400, 2000] при молчащих передатчиках
+
+    result->ZERO_dPH[0] = d_ph(PH_2, PH_1); //разность фаз [400, 2000] при молчащих передатчиках
+
+    Q_1 = 0.0; I_1 = 0.0; Q_2 = 0.0; I_2 = 0.0; PH_1 = 0.0; PH_2 = 0.0;
+    AMP_1 = 0.0; AMP_2 = 0.0; AMP8_1 = 0.0; AMP8_2 = 0.0;
+
+    for (int i = 0; i < 64; i++) {
+            Q_1 += CH1[6][i] * sin_f_64[i]; //первый канал ДФТ для маасивов молчащих передатчиков 400 кГц
+            I_1 += CH1[6][i] * cos_f_64[i]; //перрвый канал ДФТ для маасивов молчащих передатчиков 400 кГц
+        }
+
+    for (int i = 0; i < 64; i++) {
+            Q_2 += CH2[6][i] * sin_f_64[i]; //второй канал ДФТ для маасивов молчащих передатчиков 400 кГц
+            I_2 += CH2[6][i] * cos_f_64[i]; //второй канал ДФТ для маасивов молчащих передатчиков 400 кГц
+        }
+
+    AMP_1 = sqrt(I_1 * I_1 + Q_1 * Q_1);
+    AMP8_1 = AMP_1/32.0;
+
+    AMP_2 = sqrt(I_2 * I_2 + Q_2 * Q_2);
+    AMP8_2 = AMP_2/32.0;
+
+    PH_1 = atan2f(Q_1 , I_1);
+    PH_2 = atan2f(Q_2 , I_2);
+
+    result->ZERO_AM_RX_1[1] = AMP8_1*mV; // амплитуды на первом приемнике [400, 2000] при молчащих передатчиках
+    result->ZERO_AM_RX_2[1] = AMP8_2*mV; // амплитуды на втором приемнике [400, 2000] при молчащих передатчиках
+
+    result->ZERO_dPH[1] = d_ph(PH_2, PH_1); //разность фаз [400, 2000] при молчащих передатчиках
+    }
+
+    void calc_AM_PH_DFT(int32_t CH1[12][64], int32_t CH2[12][64], struct GP_DATA *result){
+    //ДФТ для 1го и 2го канала 400 кГц T1-T5
+    // поиск I, Q для первой гармоники по 16 точкам
+    for (int j = 0; j < 5; j++){   //перебераем массивы передатчиков на 1й (400кГц) частоте.
+
+        Q_1 = 0.0; I_1 = 0.0; Q_2 = 0.0; I_2 = 0.0;
+        AMP_1 = 0.0; AMP_2 = 0.0; AMP8_1 = 0.0;
+        PH_1 = 0.0; AMP8_2 = 0.0; PH_2 = 0.0;
+
+        //накладываем окно приподнятый косинус win[n]
+/*        for (int i = 0; i < 64; i++) {
+            CH1[j+1][i] = win[i]*CH1[j+1][i];//маасивов молчащих передатчиков 400 кГц
+            CH2[j+1][i] = win[i]*CH2[j+1][i];//маасивов молчащих передатчиков 400 кГц
+        }*/
+       //
+
+        for (int i = 0; i < 64; i++) {
+            Q_1 += CH1[j+1][i] * sin_f_64[i]; //первый канал CH1[0][i] - в нулевом элементе массива каналов лежат молчащие передатчики. п.э начинаем с 1го
+            I_1 += CH1[j+1][i] * cos_f_64[i]; //перрвый канал
+        }
+
+        // поиск I, Q для первой гармоники по 16 точкам
+        for (int i = 0; i < 64; i++) {
+            Q_2 += CH2[j+1][i] * sin_f_64[i]; //второй канал CH2[0][i] - в нулевом элементе массива каналов лежат молчащие передатчики. п.э начинаем с 1го
+            I_2 += CH2[j+1][i] * cos_f_64[i]; //второй канал
+        }
+
+                AMP_1 = sqrt(I_1 * I_1 + Q_1 * Q_1)/32.0;
+                //AMP8_1 = AMP_1/32.0;
+
+                AMP_2 = sqrt(I_2 * I_2 + Q_2 * Q_2)/32.0;
+                //AMP8_2 = AMP_2/32.0;
+
+                PH_1 = atan2(Q_1 , I_1);
+                PH_2 = atan2(Q_2 , I_2);
+
+                result->AM_RX_1[0][j] = AMP_1*mV; // амплитуды на первом приемнике [400, 2000]
+                result->AM_RX_2[0][j] = AMP_2*mV; // амплитуды на втором приемнике [400, 2000]
+
+                result->DELTA_PH[0][j] = d_ph(PH_2, PH_1); //разность фаз [400, 2000]
+
+               }
+    //ДФТ для 1го и 2го канала 2000 кГц T1-T5
+    // поиск I, Q для первой гармоники по 16 точкам
+    for (int j = 0; j < 5; j++){   //перебераем массивы передатчиков на 2й (2000кГц) частоте.
+
+        Q_1 = 0.0; I_1 = 0.0; Q_2 = 0.0; I_2 = 0.0;
+        AMP_1 = 0.0; AMP_2 = 0.0; AMP8_1 = 0.0;
+        PH_1 = 0.0; AMP8_2 = 0.0; PH_2 = 0.0;
+
+        //накладываем окно приподнятый косинус win[n]
+/*        for (int i = 0; i < 64; i++) {
+            CH1[j+7][i] = win[i]*CH1[j+7][i];//маасивов молчащих передатчиков 400 кГц
+            CH2[j+7][i] = win[i]*CH2[j+7][i];//маасивов молчащих передатчиков 400 кГц
+        }*/
+       //
+
+        for (int i = 0; i < 64; i++) {
+            Q_1 += CH1[j+7][i] * sin_f_64[i]; //первый канал CH1[6][i] - в нулевом элементе массива каналов лежат молчащие передатчики. п.э начинаем с 7го
+            I_1 += CH1[j+7][i] * cos_f_64[i]; //перрвый канал
+        }
+
+        // поиск I, Q для первой гармоники по 16 точкам
+        for (int i = 0; i < 64; i++) {
+            Q_2 += CH2[j+7][i] * sin_f_64[i]; //второй канал CH2[6][i] - в нулевом элементе массива каналов лежат молчащие передатчики. п.э начинаем с 7го
+            I_2 += CH2[j+7][i] * cos_f_64[i]; //второй канал
+        }
+
+                AMP_1 = sqrt(I_1 * I_1 + Q_1 * Q_1)/32.0;
+                //AMP8_1 = AMP_1/32.0;
+
+                AMP_2 = sqrt(I_2 * I_2 + Q_2 * Q_2)/32.0;
+                //AMP8_2 = AMP_2/32.0;
+
+                PH_1 = atan2(Q_1 , I_1);
+                PH_2 = atan2(Q_2 , I_2);
+
+                result->AM_RX_1[1][j] = AMP_1*mV; // амплитуды на первом приемнике [400, 2000]
+                result->AM_RX_2[1][j] = AMP_2*mV; // амплитуды на втором приемнике [400, 2000]
+
+                result->DELTA_PH[1][j] = d_ph(PH_2, PH_1); //разность фаз [400, 2000]
+
+               }
+    }
+
+
+/**************************************************************************/
+
+// Обработчик команды в режиме WorkCyclogram
+    void WorkCyclogramStateCommandHandler()
+    {
+    uint16_t crc16;
+    uint16_t i,j;
+    //uint32_t *dataPtr;
+    uint16_t *dataPtr16;
+
+    uint16_t dataCount;
+
+
+
+        if(currCommand.cmdByte == GetDataCommand) {
+            // Пришла команда отдать результаты последнего измерения:
+
+            // пакет с ответом 245 байт 0х11 - ответ на запрос последнего измерения.
+            // | uint16_t cmd | uint16_t Length l | uint16_t Length H | 240 байт данных struct Alldata | uint16_t CRC16 L | uint16_t CRC16 H |
+
+            sdataB[0]=currCommand.cmdByte;
+            sdataB[1]=245;
+            sdataB[2]=0;
+
+            dataCount = sizeof(struct GP_DATA);
+            dataPtr16 = (uint16_t*)(&gp_data);
+            j=3;// начало области данных
+                       for(i=0; i<dataCount; i++) {
+                         sdataB[j++] =  dataPtr16[i]      & 0x000000FF;  // сначала младший
+                         sdataB[j++] = (dataPtr16[i]>> 8) & 0x000000FF;  //; //  затем старший
+                       }
+
+                       crc16=inlineGetCRC16(sdataB,243);
+                       sdataB[j++] =  crc16     & 0x00FF ;
+                       sdataB[j++] = (crc16>>8) & 0x00FF ;
+
+                       SCI_writeCharArray(SCIA_BASE, (uint16_t*)sdataB, 245);
+                       //DEVICE_DELAY_US(10);
+
+
+
+                       Interrupt_disable(INT_SCIA_RX);//на
+                       workCyclogramSubState = WCSSBegin;//после передачи измерения начинаем новый цикл измерений
+
+                       currCommand.cmdByte = NoCommand;
+
+                       memset(sdataB,0x00,sizeof(sdataB));
+
+
+
+        }
+        else if (currCommand.cmdByte == SetMetroCommand) {
+  //Пришла команда записать файл метрологии:
+  //Обрабатываем метрологию рассовываем по структуре.
+
+            for(i=0; i<240; i++) {
+                rdataB[i] =  rdataB[i+3];//нужно отбросить код команды и длинну посылки из данных метрологии
+                }
+            //побайтово переписываем массив в структуру метрологии:
+            dataPtr16 = (uint16_t*)(&METROLOGY_data);
+
+            for(i=0; i<240; i++) {
+                dataPtr16[i] = (rdataB[2*i])|((rdataB[2*i+1]<<8) & 0xFF00);
+                }
+
+            if((METROLOGY_data.Air_zz[0][0]==0)&&(METROLOGY_data.Air_zz[0][1]==0)&&
+               (METROLOGY_data.Air_zz[0][2]==0)&&(METROLOGY_data.Air_zz[0][3]==0)&&
+               (METROLOGY_data.Air_zz[0][4]==0)&&(METROLOGY_data.Air_zz[1][0]==0)&&
+               (METROLOGY_data.Air_zz[1][1]==0)&&(METROLOGY_data.Air_zz[1][2]==0)&&
+               (METROLOGY_data.Air_zz[1][3]==0)&&(METROLOGY_data.Air_zz[1][4]==0)){
+    //если пришла структура метрологии с 0-ми воздухами, записываем в структуру METROLOGY_data автоматические воздуха из simmetry
+
+                for (int freq = 0; freq < 2; freq++){
+                    for (int Tx = 0; Tx < N_Tx; Tx++){
+                        METROLOGY_data.Air_zz[freq][Tx] = (int16_t)((air_summ[Tx + 5*freq]/air_aver)*57297.0);
+                    }
+                }
+                                writeFlashDataMetrology(METROLOGY_data);
+
+                            }
+                           //конец для автоматического воздуха /////
+
+
+            else{
+    //если пришла структура метрологии с НЕ 0-ми воздухами, записываем в структуру METROLOGY_data что пришло.
+    //т.е устанавливаем нули воздуха по старому в ручную
+    //непосредственно пишем во FLASH
+            writeFlashDataMetrology(METROLOGY_data);
+            }
+            //Передаем ответ, что файл принят.
+            sdataB[0]=currCommand.cmdByte;
+            sdataB[1]=5;
+            sdataB[2]=0;
+            crc16=inlineGetCRC16(sdataB,3);
+            sdataB[3] =  crc16     & 0x00FF ;
+            sdataB[4] = (crc16>>8) & 0x00FF ;
+
+            SCI_writeCharArray(SCIA_BASE, (uint16_t*)sdataB, 5);
+            currCommand.cmdByte = NoCommand;
+            memset(sdataB,0x00,sizeof(sdataB));
+          //  memset(sdataB,0x00,sizeof(sdataB));
+
+
+        }
+        else if (currCommand.cmdByte == SetAirCommand) {
+            //Пришла команда сделать автоматический воздух, записываем в структуру METROLOGY_data автоматические воздуха из simmetry
+
+            for (int freq = 0; freq < 2; freq++){
+                for (int Tx = 0; Tx < N_Tx; Tx++){
+                    METROLOGY_data.Air_zz[freq][Tx] = (int16_t)((air_summ[Tx + 5*freq]/air_aver)*57297.0);
+                }
+            }
+
+            writeFlashDataMetrology(METROLOGY_data);
+            //Передаем ответ, что файл принят.
+            sdataB[0]=currCommand.cmdByte;
+            sdataB[1]=5;
+            sdataB[2]=0;
+            crc16=inlineGetCRC16(sdataB,3);
+            sdataB[3] =  crc16     & 0x00FF ;
+            sdataB[4] = (crc16>>8) & 0x00FF ;
+
+            SCI_writeCharArray(SCIA_BASE, (uint16_t*)sdataB, 5);
+            currCommand.cmdByte = NoCommand;
+            memset(sdataB,0x00,sizeof(sdataB));
+        }
+
+        else if (currCommand.cmdByte == GetMetroCommand) {
+            //Пришла команда выдать файл метрологии
+
+            sdataB[0]=currCommand.cmdByte;
+            sdataB[1]=245;
+            sdataB[2]=0;
+
+            dataCount = sizeof(struct GP_METROLOGY) ;
+            dataPtr16 = (uint16_t*)(&METROLOGY_data);
+            j=3;// начало области данных
+                        for(i=0; i<dataCount; i++) {
+                        sdataB[j++] =  dataPtr16[i]      & 0x000000FF;  // сначала младший
+                        sdataB[j++] = (dataPtr16[i]>> 8) & 0x000000FF; //  затем старший
+                        }
+
+                        crc16=inlineGetCRC16(sdataB,243);
+                        sdataB[j++] =  crc16     & 0x00FF ;
+                        sdataB[j++] = (crc16>>8) & 0x00FF ;
+
+                        SCI_writeCharArray(SCIA_BASE, (uint16_t*)sdataB, 245);
+
+
+                        currCommand.cmdByte = NoCommand;
+
+                        memset(sdataB,0x00,sizeof(sdataB));
+
+        }
+
+        else if (currCommand.cmdByte == GetSignature) {
+            //Пришла команда выдать сигнатуру прибора
+
+            sdataB[0]=currCommand.cmdByte;
+            sdataB[1]=9;
+            sdataB[2]=0;
+            sdataB[3]=METROLOGY_data.signature & 0x000000FF; //lsb;
+            sdataB[4]=(METROLOGY_data.signature >> 8) & 0x000000FF;
+            sdataB[5]=(METROLOGY_data.signature >> 16) & 0x000000FF;
+            sdataB[6]=(METROLOGY_data.signature >> 24) & 0x000000FF;//msb
+
+            crc16=inlineGetCRC16(sdataB,7);
+            sdataB[7] =  crc16     & 0x00FF ;
+            sdataB[8] = (crc16>>8) & 0x00FF ;
+
+            SCI_writeCharArray(SCIA_BASE, (uint16_t*)sdataB, 9);
+
+            currCommand.cmdByte = NoCommand;
+
+            memset(sdataB,0x00,sizeof(sdataB));
+
+        }
+        else if (currCommand.cmdByte == BootLoaderComman){
+            //LoadingFlag - стереть 15й сектор FLASH
+            EraseFlashSectorBootLoader();
+
+            sdataB[0]=currCommand.cmdByte;
+            sdataB[1]=5;
+            sdataB[2]=0;
+
+            crc16=inlineGetCRC16(sdataB,3);
+            sdataB[3] =  crc16     & 0x00FF ;
+            sdataB[4] = (crc16>>8) & 0x00FF ;
+
+            SCI_writeCharArray(SCIA_BASE, (uint16_t*)sdataB, 5);
+
+            currCommand.cmdByte = NoCommand;
+            //
+            memset(sdataB,0x00,sizeof(sdataB));
+
+            SysCtl_enableWatchdog();
+            while(true);
+        }
+
+    }
+
+    // Работа по циклограмме:
+    void WorkCyclogram()
+    {
+
+    static uint16_t TXNumber;
+    static uint16_t FreqProfile;
+    uint16_t dataIndex;
+//    uint16_t j = 0;
+
+
+    switch (workCyclogramSubState) {
+      case WCSSBegin: {
+          // обнуляем ошибки передач данных:
+          g_ulRxErrCount[0]=0;
+          g_ulRxErrCount[1]=0;
+          g_ulRxErrCount[2]=0;
+          g_ulRxErrCount[3]=0;
+          g_ulRxErrCount[4]=0;
+          g_ulRxErrCount[5]=0;
+          g_ulRxErrCount[6]=0;
+          g_ulRxErrCount[7]=0;
+          g_ulRxErrCount[8]=0;
+          g_ulRxErrCount[9]=0;
+          g_ulRxErrCount[10]=0;
+          g_ulRxErrCount[11]=0;
+          g_ulRxErrCount[12]=0;
+          g_ulRxErrCount[13]=0;
+          g_ulRxErrCount[14]=0;
+
+         usCntr[0]=1000;
+         workCyclogramSubState = WCSSWaitInclinoResponse;
+         break;
+      }
+      // Выполнение накопления данных на частоте 400кГц:
+      case WCSSWaitInclinoResponse: {
+          if( usCntr[0]<=0 ) {
+            //молчащие передатчики
+            // Устанавливаем частоту 400кГц на DDS,
+            DDSinit_dat[0]=0x00;
+            ad9956_SetProfile(DDSinit_dat);
+            ad9956_Update();
+            // на PWM, 400 кгц
+            initEPWM6_400_kHz();
+            TXNumber = 0; // это значит - слушаем молчащие передатчики
+            FreqProfile = 0; // это значит - передаем частоту 400кГц
+            GPIO_writePin(testPIN, 1);
+            GPIO_enableInterrupt(GPIO_INT_XINT1);// включаем приемник на прием, разрешаем прерывание DRY.
+            usCntr[0]=StMDelay;
+            workCyclogramSubState = WCSSWaitTXCycle;
+          }
+          break;
+      }
+
+      case WCSSWaitTXCycle: {
+          if( usCntr[0]<=0 ) {      // По окончании накопления данных молчащих передатчиков:
+              TXNumber++;
+              // Посылаем команду на включение передатчика:
+              g_ulRxMsgCount[9+TXNumber]=0;
+              txMsgData[0] = FreqProfile;
+              txMsgData[1] = 0x0000;
+              txMsgData[2] = 0x0000;
+              txMsgData[3] = 0x0000;
+              txMsgData[4] = 0x0000;
+              txMsgData[5] = 0x0000;
+              txMsgData[6] = 0x0000;
+              txMsgData[7] = 0x0000;
+
+              CAN_setupMessageObject(CANA_BASE, TX_MSG_OBJ_ID, 0x210+TXNumber, CAN_MSG_FRAME_STD, CAN_MSG_OBJ_TYPE_TX, 0, CAN_MSG_OBJ_TX_INT_ENABLE, MSG_DATA_LENGTH);
+
+              txInProgress = true;
+              g_bErrFlag = 0;
+              currTxObj = 1;
+              CAN_sendMessage(CANA_BASE, TX_MSG_OBJ_ID, MSG_DATA_LENGTH,txMsgData);
+              while(txInProgress) ;
+              //Если передали, запускаем ожидание ответа от передатчика
+              usCntr[0]=1000;
+              workCyclogramSubState = WCSSWaitTXResponse;
+          }
+          break;
+      }
+
+      case WCSSWaitTXResponse: {
+          if( usCntr[0]<=0 ) {
+            dataIndex = 1+TXNumber;
+            if(g_ulRxMsgCount[dataIndex]==1 ) { // передатчик ответил температурой:
+               g_ulRxMsgCount[dataIndex]=0;
+               g_ulRxErrCount[dataIndex]=0;
+               // Сохраняем данные от передатчика
+               tmpDataI = (((int32_t)(rxMsgData[dataIndex][0]))<<24)|(((int32_t)(rxMsgData[dataIndex][2]))<<16)|(((int32_t)(rxMsgData[dataIndex][2]))<<8)|((int32_t)(rxMsgData[dataIndex][3]));
+               expTxData[TXNumber-1].mcu_temp = (uint16_t)tmpDataI;
+            }else { // Неудача! Передатчик промолчал до таймаута!
+               g_ulRxMsgCount[dataIndex]=0;
+               g_ulRxErrCount[dataIndex]++;
+               expTxData[TXNumber-1].mcu_temp = 0;
+            }
+            usCntr[0]=StMDelay;
+            if(TXNumber<=5) {
+              // включаем приемник на прием.
+              GPIO_writePin(testPIN, 1);
+             // GPIO_writePin(testPIN_1, 1);
+              GPIO_enableInterrupt(GPIO_INT_XINT1);
+              workCyclogramSubState = WCSSWaitTXCycle;
+            }else {
+              TXNumber = 0;
+              if(FreqProfile==0) {
+                // Устанавливаем частоту 2000кГц на DDS,
+                  DDSinit_dat[0]=0x04;
+                  ad9956_SetProfile(DDSinit_dat);
+                  ad9956_Update();
+                  // на PWM, 2000 кГц
+                  initEPWM6_2000_kHz();
+                 // включаем приемник на прием.
+                  // DEVICE_DELAY_US(10000);
+                  GPIO_writePin(testPIN, 1);
+                 // GPIO_writePin(testPIN_1, 1);
+
+                  GPIO_enableInterrupt(GPIO_INT_XINT1);
+                  FreqProfile = 4;
+                workCyclogramSubState = WCSSWaitTXCycle;
+              }else {
+                  //обрабатывем принятые данные
+                  //измеряем температуру
+                  Interrupt_enable(INT_ADCA1);
+                  DEVICE_DELAY_US(10);
+                  Interrupt_disable(INT_ADCA1);
+                     if(convisdone == 1)
+                     {
+                         gp_data.temperature = temp_deg_(adc_value);
+                         convisdone = 0;
+                         adc_value = 0;
+                     }
+          //ДФТ
+
+          calc_silent_Tx(CH1, CH2, (struct GP_DATA*)&gp_data);
+          calc_AM_PH_DFT(CH1, CH2, (struct GP_DATA*)&gp_data);
+
+          get_condition(&gp_data, &METROLOGY_data, N_Tx);
+
+          simmetry(&gp_data, &METROLOGY_data, N_Tx);
+
+          for (int freq = 0; freq < 2; freq++){
+              for (uint16_t Tx = 0; Tx < N_Tx; Tx++){
+                  RO_ARG(&METROLOGY_data, &gp_data,  Tx,  freq);
+              }
+          }
+           gp_data.signature =  METROLOGY_data.signature;
+           gp_data.frame = glblFrameNumber;
+
+           Interrupt_enable(INT_SCIA_RX);
+           workCyclogramSubState = WCSSEnd;
+           count=0;
+           glblFrameNumber++; // счетчик кадров
+           packageNumber = 0;
+
+
+              }
+            }
+
+          }
+          break;
+      }
+
+      case WCSSEnd: {
+         // ничего не делаем, ждем нового цикла, который начнется по времени.
+         break;
+      }
+    }
+
+}
+
+
+
+

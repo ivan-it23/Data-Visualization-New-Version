@@ -1,4 +1,4 @@
-; ============================================================================
+﻿; ============================================================================
 ; «Визуализация данных» — all-users Inno Setup installer
 ; ============================================================================
 
@@ -35,7 +35,10 @@ AllowNoIcons=yes
 
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-MinVersion=10.0
+; Не 10.0: Windows App SDK требует Windows 10 1809 (сборка 17763), и это же
+; значение стоит в TargetPlatformMinVersion проекта. С прежним 10.0 установка
+; на более раннюю сборку проходила, а приложение потом не запускалось.
+MinVersion=10.0.17763
 
 CloseApplications=force
 CloseApplicationsFilter={#MyAppExeName}
@@ -81,10 +84,15 @@ Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Working
 
 [Run]
 ; Обычная установка: мастер предлагает запуск через checkbox.
-Filename: "{app}\{#MyAppExeName}"; Description: "Запустить {#MyAppName}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
+; runasoriginaluser обязателен в обеих строках. Установщик работает с правами
+; администратора, и без этого флага приложение наследует его токен: окно
+; запущенного так приложения не принимает перетаскивание файлов из Проводника,
+; а при разных учётных записях пользователя и администратора настройки и журналы
+; уходят в профиль администратора, а не того, кто работает.
+Filename: "{app}\{#MyAppExeName}"; Description: "Запустить {#MyAppName}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 ; AutoUpdate запускает setup с /UPDATE=1: после тихого обновления приложение
 ; стартует заново без дополнительного пользовательского шага.
-Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Flags: nowait; Check: IsAutoUpdateMode
+Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Flags: nowait runasoriginaluser; Check: IsAutoUpdateMode
 
 [Code]
 function IsAutoUpdateMode: Boolean;

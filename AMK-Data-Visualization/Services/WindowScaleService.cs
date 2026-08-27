@@ -1,8 +1,10 @@
+﻿using System.Runtime.InteropServices;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Windows.Foundation;
 using Windows.Graphics;
+using WinRT.Interop;
 
 namespace AMK.DataVisualization.App.Services;
 
@@ -11,14 +13,30 @@ namespace AMK.DataVisualization.App.Services;
 /// the physical UI size of the 125%-DPI reference display, independently for
 /// every window and monitor. The user can choose one smaller or larger preset.
 ///
-/// Known limitation: flyouts, menus and content dialogs are hosted in the popup
-/// root rather than inside the window content, so they keep their system size and
-/// do not follow this zoom.
+/// Выпадающие списки, меню и диалоги живут в отдельном popup-слое окна, куда
+/// преобразование содержимого не достаёт. Их размер задаётся при построении
+/// самих поверхностей через <see cref="PopupContentScale"/>: у части popup'ов
+/// собственное окно, и преобразование отрисовки на них либо не действует, либо
+/// накладывается поверх уже применённого — предсказуемо работает только
+/// масштабирование разметки.
 /// </summary>
 internal sealed class WindowScaleService
 {
     public const double DefaultScale = 1.0;
     public const double ReferenceRasterizationScale = 1.25;
+
+    /// <summary>
+    /// Ширина холста, на которую рассчитана компоновка главного окна, в
+    /// аппаратно-независимых пикселях. Ровно столько даёт эталонный дисплей:
+    /// 1920 физических пикселей при масштабе Windows 125 %.
+    /// </summary>
+    /// <remarks>
+    /// Ограничение только по ширине. По вертикали компоновка тянется — графики
+    /// делят остаток, — а по горизонтали верхняя панель управления состоит из
+    /// элементов фиксированной ширины, и именно она уходит за край, если холст
+    /// уже эталонного.
+    /// </remarks>
+    public const double ReferenceCanvasWidth = 1536.0;
 
     // Пределы подобраны по тому, как окна ведут себя на деле: при 125 % часть
     // элементов не помещалась на экран, при 75 % становилась слишком мелкой.
@@ -29,8 +47,20 @@ internal sealed class WindowScaleService
 
     private const double ScaleEpsilon = 1e-9;
 
-    /// <summary>Larger, default and smaller values in their display order.</summary>
-    public static IReadOnlyList<double> ManualScales { get; } = [MaximumScale, DefaultScale, MinimumScale];
+    /// <summary>Точек на дюйм, соответствующих системному масштабу 100 %.</summary>
+    private const double DefaultDpi = 96.0;
+
+    /// <summary>
+    /// На сколько холст может не дотянуть до эталонного, чтобы это
+    /// ещё считалось совпадением.
+    /// </summary>
+    private const double FitToleranceDips = 16.0;
+
+    /// <summary>
+    /// Значения масштаба в порядке отображения: уменьшение, значение по
+    /// умолчанию, увеличение.
+    /// </summary>
+    public static IReadOnlyList<double> ManualScales { get; } = [MinimumScale, DefaultScale, MaximumScale];
 
     private readonly Dictionary<Window, ScaledWindow> attachedWindows = [];
 
@@ -41,6 +71,24 @@ internal sealed class WindowScaleService
     public double CurrentScale { get; private set; } = DefaultScale;
 
     public double ManualScale => Settings.ManualScale;
+
+    /// <summary>
+    /// Масштаб, который поверхности всплывающих меню обязаны заложить в свою
+    /// разметку, чтобы совпасть с остальным интерфейсом.
+    /// </summary>
+    /// <remarks>
+    /// Всплывающие поверхности живут в отдельном слое окна, и ведут себя они
+    /// по-разному. Список <c>ComboBox</c> разворачивается внутри окна и
+    /// преобразование содержимого наследует — его трогать не нужно и нельзя,
+    /// иначе масштаб умножится на себя. А <c>MenuFlyout</c> получает собственное
+    /// окно, куда преобразование не попадает, и остаётся в системном размере.
+    ///
+    /// Поэтому меню масштабируются не преобразованием отрисовки, а разметкой:
+    /// высота, кегль и отступы пунктов задаются при построении меню. Так размер
+    /// верен с первой отрисовки, окно popup'а строится уже по нему — ничего не
+    /// обрезается и ничто не меняется в ответ на посторонний ввод.
+    /// </remarks>
+    public double PopupContentScale { get; private set; } = DefaultScale;
 
     public void Initialize(WindowScaleSettings storedSettings)
     {
@@ -55,12 +103,15 @@ internal sealed class WindowScaleService
     /// together with its content; the maximized main window does not. A window
     /// whose initial frame was already converted from DIPs also passes
     /// <paramref name="baseSizeTracksSystemDpi"/> so its reference frame is not
-    /// scaled twice.
+    /// scaled twice. Окно, содержимое которого заполняет его целиком, передаёт
+    /// <paramref name="fitContentToWindow"/>: приведение к эталону тогда не
+    /// перерастает фактическую ширину экрана.
     /// </summary>
     public void Attach(
         Window window,
         bool resizeWithScale,
-        bool baseSizeTracksSystemDpi = false)
+        bool baseSizeTracksSystemDpi = false,
+        bool fitContentToWindow = false)
     {
         if (attachedWindows.ContainsKey(window) || window.Content is not FrameworkElement content)
         {
@@ -77,12 +128,18 @@ internal sealed class WindowScaleService
 
         ScaledWindow entry = new(
             window,
+            WindowNative.GetWindowHandle(window),
             host,
             content,
             resizeWithScale,
             baseSize,
-            baseSizeTracksSystemDpi);
+            baseSizeTracksSystemDpi,
+            fitContentToWindow);
         attachedWindows[window] = entry;
+
+        // Эталонный размер кадра выводится сразу: масштаб монитора уже известен
+        // из окна, ждать XamlRoot незачем.
+        ResolveReferenceBaseSize(entry);
 
         host.Loaded += Host_Loaded;
         host.SizeChanged += Host_SizeChanged;
@@ -124,10 +181,22 @@ internal sealed class WindowScaleService
 
     private void Host_SizeChanged(object sender, SizeChangedEventArgs args)
     {
-        if (sender is Grid host && FindByHost(host) is { } entry)
+        if (sender is not Grid host || FindByHost(host) is not { } entry)
         {
-            ApplyLayoutSize(entry, args.NewSize);
+            return;
         }
+
+        if (entry.FitContentToWindow)
+        {
+            // Масштаб такого окна зависит от его ширины, поэтому смена размера
+            // требует пересчёта целиком, а не только нового размера содержимого.
+            // Цикла здесь нет: размер содержимого на размер хоста не влияет —
+            // хост растянут по окну.
+            ApplyEntry(entry);
+            return;
+        }
+
+        ApplyLayoutSize(entry, args.NewSize);
     }
 
     private void XamlRoot_Changed(XamlRoot sender, XamlRootChangedEventArgs args)
@@ -177,23 +246,82 @@ internal sealed class WindowScaleService
             xamlRoot.Changed += XamlRoot_Changed;
         }
 
-        if (!entry.ReferenceBaseSizeResolved)
+        ResolveReferenceBaseSize(entry);
+    }
+
+    /// <summary>
+    /// Переводит исходный размер кадра окна в размер, который он имел бы на
+    /// эталонном дисплее. Выполняется один раз: дальше кадр считается от него.
+    /// </summary>
+    private static void ResolveReferenceBaseSize(ScaledWindow entry)
+    {
+        if (entry.ReferenceBaseSizeResolved)
         {
-            double rasterizationScale = ResolveRasterizationScale(entry);
-            entry.ReferenceBaseSize = new SizeInt32(
-                (int)Math.Round(entry.RawBaseSize.Width * ReferenceRasterizationScale / rasterizationScale),
-                (int)Math.Round(entry.RawBaseSize.Height * ReferenceRasterizationScale / rasterizationScale));
-            entry.ReferenceBaseSizeResolved = true;
+            return;
         }
+
+        double rasterizationScale = ResolveRasterizationScale(entry);
+        entry.ReferenceBaseSize = new SizeInt32(
+            (int)Math.Round(entry.RawBaseSize.Width * ReferenceRasterizationScale / rasterizationScale),
+            (int)Math.Round(entry.RawBaseSize.Height * ReferenceRasterizationScale / rasterizationScale));
+        entry.ReferenceBaseSizeResolved = true;
     }
 
     private void ApplyEntry(ScaledWindow entry)
     {
-        double rasterizationScale = ResolveRasterizationScale(entry);
-        entry.EffectiveScale = CurrentScale * ReferenceRasterizationScale / rasterizationScale;
+        entry.EffectiveScale = CurrentScale * ResolveBaseScale(entry);
+
+        // Меню строит главное окно, оно же задаёт масштаб для их разметки.
+        if (entry.FitContentToWindow)
+        {
+            PopupContentScale = entry.EffectiveScale;
+        }
 
         ApplyTransform(entry);
         ApplyWindowSize(entry);
+    }
+
+    /// <summary>
+    /// Множитель, который соответствует выбранным 100 %: приведение
+    /// системного масштаба к эталонному, ограниченное тем, что реально
+    /// помещается в окно.
+    /// </summary>
+    /// <remarks>
+    /// На экране не меньше эталонного ограничение ничего не меняет и
+    /// 100 % воспроизводит физический размер эталона. На экране уже
+    /// эталонного — например, на ноутбуке 1366×768 — эталонный размер
+    /// физически недостижим, и без ограничения верхняя панель ушла бы за край.
+    ///
+    /// Ограничивается именно база, а не итоговый масштаб: выбрав 115 %,
+    /// пользователь сознательно меняет обзор на крупность, и отменять этот
+    /// выбор приложение не вправе — на эталонной машине 115 % ведёт себя так же.
+    /// </remarks>
+    private static double ResolveBaseScale(ScaledWindow entry)
+    {
+        double referenceScale = ReferenceRasterizationScale / ResolveRasterizationScale(entry);
+        if (!entry.FitContentToWindow)
+        {
+            return referenceScale;
+        }
+
+        double hostWidth = entry.Host.ActualWidth;
+        if (hostWidth <= 0.0)
+        {
+            // Размера ещё нет — ограничивать нечем. Первый же SizeChanged пересчитает.
+            return referenceScale;
+        }
+
+        // На эталонном дисплее ширина холста равна эталонной ровно, без запаса.
+        // Без допуска лишний пиксель рамки давал бы масштаб вроде 0.996:
+        // на глаз незаметно, но это уже не пиксель в пиксель, а пересчёт
+        // всего содержимого через преобразование.
+        double canvasAtReference = hostWidth / referenceScale;
+        if (canvasAtReference >= ReferenceCanvasWidth - FitToleranceDips)
+        {
+            return referenceScale;
+        }
+
+        return hostWidth / ReferenceCanvasWidth;
     }
 
     private void ApplyTransform(ScaledWindow entry)
@@ -267,14 +395,47 @@ internal sealed class WindowScaleService
             entry => ReferenceEquals(entry.Host, host));
     }
 
+    /// <summary>
+    /// Системный масштаб монитора, на котором сейчас находится окно.
+    /// </summary>
+    /// <remarks>
+    /// <c>XamlRoot</c> появляется только к первому проходу разметки, а масштаб
+    /// нужен уже в <see cref="Attach"/>: иначе первый кадр рисуется без
+    /// компенсации и пользователь видит, как интерфейс скачком меняет размер.
+    /// Поэтому до появления <c>XamlRoot</c> масштаб берётся у самого окна через
+    /// <c>GetDpiForWindow</c> — это тот же источник, из которого его выводит и
+    /// сам WinUI.
+    ///
+    /// Эталон подставляется только тогда, когда не ответил ни один источник:
+    /// он даёт <c>EffectiveScale = 1</c>, то есть поведение без компенсации.
+    /// </remarks>
     private static double ResolveRasterizationScale(ScaledWindow entry)
     {
-        double rasterizationScale = entry.XamlRoot?.RasterizationScale
-            ?? ReferenceRasterizationScale;
-        return double.IsFinite(rasterizationScale) && rasterizationScale > 0.0
-            ? rasterizationScale
-            : ReferenceRasterizationScale;
+        if (IsUsableScale(entry.XamlRoot?.RasterizationScale, out double xamlRootScale))
+        {
+            return xamlRootScale;
+        }
+
+        if (entry.WindowHandle != IntPtr.Zero)
+        {
+            uint dpi = GetDpiForWindow(entry.WindowHandle);
+            if (dpi > 0 && IsUsableScale(dpi / DefaultDpi, out double windowScale))
+            {
+                return windowScale;
+            }
+        }
+
+        return ReferenceRasterizationScale;
     }
+
+    private static bool IsUsableScale(double? candidate, out double scale)
+    {
+        scale = candidate ?? 0.0;
+        return candidate is not null && double.IsFinite(scale) && scale > 0.0;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr windowHandle);
 
     private static bool IsUnscaled(double scale)
     {
@@ -295,16 +456,20 @@ internal sealed class WindowScaleService
     {
         public ScaledWindow(
             Window window,
+            IntPtr windowHandle,
             Grid host,
             FrameworkElement content,
             bool resizeWithScale,
             SizeInt32 rawBaseSize,
-            bool baseSizeTracksSystemDpi)
+            bool baseSizeTracksSystemDpi,
+            bool fitContentToWindow)
         {
             Window = window;
+            WindowHandle = windowHandle;
             Host = host;
             Content = content;
             ResizeWithScale = resizeWithScale;
+            FitContentToWindow = fitContentToWindow;
             RawBaseSize = rawBaseSize;
             ReferenceBaseSize = rawBaseSize;
             ReferenceBaseSizeResolved = !baseSizeTracksSystemDpi;
@@ -312,11 +477,23 @@ internal sealed class WindowScaleService
 
         public Window Window { get; }
 
+        /// <summary>
+        /// Дескриптор окна. Нужен, чтобы узнать системный масштаб монитора до
+        /// того, как у содержимого появится <c>XamlRoot</c>.
+        /// </summary>
+        public IntPtr WindowHandle { get; }
+
         public Grid Host { get; }
 
         public FrameworkElement Content { get; }
 
         public bool ResizeWithScale { get; }
+
+        /// <summary>
+        /// Содержимое занимает окно целиком, поэтому масштаб ограничен
+        /// тем, что фактически помещается в это окно.
+        /// </summary>
+        public bool FitContentToWindow { get; }
 
         public SizeInt32 RawBaseSize { get; }
 

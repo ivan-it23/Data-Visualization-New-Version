@@ -1,7 +1,9 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Reflection;
 using System.Security.Cryptography;
+using Microsoft.Win32;
 
 namespace AMK.DataVisualization.App.Services;
 
@@ -26,6 +28,17 @@ internal sealed class AutoUpdateService : IDisposable
         UpdateRoot,
         "data-visualization-version.txt");
     private const long MaximumInstallerSize = 1024L * 1024L * 1024L;
+
+    /// <summary>Код Windows для «операция отменена пользователем» — отказ в UAC.</summary>
+    private const int ElevationCancelledErrorCode = 1223;
+
+    /// <summary>
+    /// Ключ, который создаёт Inno Setup для этого приложения. Значение — AppId
+    /// из <c>installer/setup.iss</c> с суффиксом <c>_is1</c>. Установка идёт для всех
+    /// пользователей, поэтому ключ лежит в HKLM.
+    /// </summary>
+    private const string UninstallKeyPath =
+        @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{BC8F93C7-591A-4A5B-8A3B-D298E5201D2B}_is1";
 
     private readonly HttpClient httpClient;
 
@@ -115,7 +128,7 @@ internal sealed class AutoUpdateService : IDisposable
 
         string finalPath = Path.Combine(updateDirectory, update.InstallerFileName);
         string temporaryPath = finalPath + ".download";
-        File.Delete(temporaryPath);
+        TryDeleteFile(temporaryPath);
 
         try
         {
@@ -155,27 +168,142 @@ internal sealed class AutoUpdateService : IDisposable
         }
         catch
         {
-            File.Delete(temporaryPath);
+            // Убирать за собой обязательно, но не ценой исходной причины: если
+            // недокачанный файл занят антивирусом, File.Delete бросит своё
+            // исключение поверх настоящего, и вместо «не сошлась контрольная
+            // сумма» пользователь увидит «файл занят другим процессом».
+            TryDeleteFile(temporaryPath);
             throw;
         }
     }
 
-    public static bool StartInstaller(string installerPath)
+    /// <summary>
+    /// Запускает скачанный установщик. При отказе возвращает причину,
+    /// пригодную для показа пользователю.
+    /// </summary>
+    /// <remarks>
+    /// <c>/SUPPRESSMSGBOXES</c> сознательно не передаётся. Приложение закрывается
+    /// сразу после запуска установщика, и с подавленными сообщениями неудачное
+    /// обновление выглядело бы как просто закрывшееся приложение: объяснить
+    /// причину было бы некому.
+    /// </remarks>
+    public static bool StartInstaller(string installerPath, out string errorMessage)
     {
+        errorMessage = string.Empty;
         if (!File.Exists(installerPath))
         {
+            errorMessage = "Скачанный установщик не найден.";
             return false;
         }
 
-        Process? process = Process.Start(new ProcessStartInfo
+        try
         {
-            FileName = installerPath,
-            Arguments = "/SILENT /CLOSEAPPLICATIONS /NORESTARTAPPLICATIONS /SUPPRESSMSGBOXES /UPDATE=1",
-            UseShellExecute = true,
-            Verb = "runas",
-            WorkingDirectory = Path.GetDirectoryName(installerPath) ?? Path.GetTempPath()
-        });
-        return process is not null;
+            Process? process = Process.Start(new ProcessStartInfo
+            {
+                FileName = installerPath,
+                Arguments = "/SILENT /CLOSEAPPLICATIONS /NORESTARTAPPLICATIONS /UPDATE=1",
+                UseShellExecute = true,
+                Verb = "runas",
+                WorkingDirectory = Path.GetDirectoryName(installerPath) ?? Path.GetTempPath()
+            });
+            if (process is not null)
+            {
+                return true;
+            }
+
+            errorMessage = "Не удалось запустить установщик обновления.";
+            return false;
+        }
+        catch (Win32Exception exception) when (exception.NativeErrorCode == ElevationCancelledErrorCode)
+        {
+            errorMessage = "Установка обновления требует прав администратора, а запрос был отклонён. "
+                + "Приложение продолжает работать в прежней версии.";
+            return false;
+        }
+        catch (Win32Exception exception)
+        {
+            errorMessage = $"Не удалось запустить установщик обновления: {exception.Message}";
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Каталог, в который приложение установлено установщиком, либо <c>null</c>,
+    /// если на этом компьютере приложение не устанавливалось.
+    /// </summary>
+    public static string? GetInstalledLocation()
+    {
+        try
+        {
+            using RegistryKey? key = Registry.LocalMachine.OpenSubKey(UninstallKeyPath);
+            return key?.GetValue("InstallLocation") is string location
+                && !string.IsNullOrWhiteSpace(location)
+                    ? location
+                    : null;
+        }
+        catch (Exception exception) when (exception is System.Security.SecurityException
+                                              or UnauthorizedAccessException
+                                              or IOException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Объясняет, почему обновление не затронет запущенную копию, либо
+    /// <c>null</c>, если затронет.
+    /// </summary>
+    /// <remarks>
+    /// Установщик кладёт файлы туда, куда приложение было установлено, и никак
+    /// не связан с тем, откуда запущен текущий процесс. Копия, распакованная из
+    /// архива в произвольную папку, после обновления останется старой и будет
+    /// предлагать то же обновление бесконечно. Об этом нужно сказать до
+    /// загрузки, а не после того, как пользователь обнаружит вторую копию.
+    /// </remarks>
+    public static string? DescribeCopyMismatch()
+    {
+        string runningDirectory = AppContext.BaseDirectory;
+        string? installedDirectory = GetInstalledLocation();
+        if (installedDirectory is null)
+        {
+            return "Эта копия запущена из каталога\n"
+                + $"{TrimDirectory(runningDirectory)}\n"
+                + "и на этом компьютере установщиком не устанавливалась. Обновление установит "
+                + "приложение отдельной копией, а эта папка останется со старой версией.";
+        }
+
+        if (DirectoriesMatch(runningDirectory, installedDirectory))
+        {
+            return null;
+        }
+
+        return "Эта копия запущена из каталога\n"
+            + $"{TrimDirectory(runningDirectory)}\n"
+            + "а установлено приложение в\n"
+            + $"{TrimDirectory(installedDirectory)}\n"
+            + "Обновление получит установленная копия, а запущенная сейчас останется прежней версии.";
+    }
+
+    private static bool DirectoriesMatch(string first, string second)
+    {
+        try
+        {
+            return string.Equals(
+                TrimDirectory(Path.GetFullPath(first)),
+                TrimDirectory(Path.GetFullPath(second)),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception exception) when (exception is ArgumentException
+                                              or NotSupportedException
+                                              or IOException)
+        {
+            return false;
+        }
+    }
+
+    private static string TrimDirectory(string path)
+    {
+        return path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 
     public static string FormatVersion(Version version)
@@ -330,6 +458,20 @@ internal sealed class AutoUpdateService : IDisposable
             catch (UnauthorizedAccessException)
             {
             }
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
         }
     }
 
