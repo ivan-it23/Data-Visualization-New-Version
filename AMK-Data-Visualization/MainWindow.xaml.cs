@@ -55,6 +55,16 @@ public sealed partial class MainWindow : Window
     private WindowScaleWindow? windowScaleWindow;
     private string currentDataFilePath = string.Empty;
     private string configuredAppendRecordPath = string.Empty;
+
+    /// <summary>
+    /// Файл, в который писала текущая сессия опроса.
+    /// </summary>
+    /// <remarks>
+    /// Переживает отключение прибора: кадры остаются на графике, файл остаётся
+    /// на диске, и заметки должны продолжать привязываться к нему. Сбрасывается
+    /// началом новой сессии и открытием другого файла данных.
+    /// </remarks>
+    private string sessionRecordFilePath = string.Empty;
     private bool serialRecordingEnabled;
     private int activeChartNumber = 1;
     private ChartPointSelectedEventArgs? chart1Crosshair;
@@ -123,6 +133,7 @@ public sealed partial class MainWindow : Window
         GraphControl.CurveVisibilityRequested += (_, anchor) => ShowCurveVisibilityFlyout(1, anchor);
         Graph2Control.CurveVisibilityRequested += (_, anchor) => ShowCurveVisibilityFlyout(2, anchor);
         chartDisplaySettings = chartDisplaySettingsStore.Load();
+        ScaleFileMenuItems();
         InitializeDisplayOverlays();
         ShowLegacyEmptyState(1, hasData: false);
         ShowLegacyEmptyState(2, hasData: false);
@@ -607,6 +618,7 @@ public sealed partial class MainWindow : Window
     private void PrepareSerialSession(SerialConnectionSettings settings)
     {
         currentDataFilePath = string.Empty;
+        sessionRecordFilePath = string.Empty;
         serialRecordingEnabled = settings.RecordingEnabled;
         configuredAppendRecordPath = settings.RecordingEnabled
             && settings.AppendToExistingFile
@@ -1691,16 +1703,41 @@ public sealed partial class MainWindow : Window
             return currentDataFilePath + ".notes.jsonl";
         }
 
-        SerialStatusSnapshot status = serialDeviceService.GetStatus();
-        if (!serialRecordingEnabled || !serialDeviceService.IsConnected)
+        string recordPath = ResolveSessionRecordPath();
+        return recordPath.Length > 0 ? recordPath + ".notes.jsonl" : string.Empty;
+    }
+
+    /// <summary>
+    /// Файл записи текущей сессии — и пока прибор опрашивается, и после того,
+    /// как его отключили.
+    /// </summary>
+    /// <remarks>
+    /// Раньше путь выдавался только при подключённом приборе, поэтому после
+    /// отключения привязка заметок терялась: принятые кадры оставались на
+    /// графике, файл — на диске, а поставить заметку по только что записанным
+    /// данным было нельзя, пока тот же файл не откроешь заново через меню.
+    /// </remarks>
+    private string ResolveSessionRecordPath()
+    {
+        if (serialRecordingEnabled && serialDeviceService.IsConnected)
         {
-            return string.Empty;
+            SerialStatusSnapshot status = serialDeviceService.GetStatus();
+            string activePath = status.RecordFilePath.Length > 0
+                ? status.RecordFilePath
+                : configuredAppendRecordPath;
+            if (activePath.Length > 0)
+            {
+                sessionRecordFilePath = activePath;
+                return activePath;
+            }
         }
 
-        string recordPath = status.RecordFilePath.Length > 0
-            ? status.RecordFilePath
-            : configuredAppendRecordPath;
-        return recordPath.Length > 0 ? recordPath + ".notes.jsonl" : string.Empty;
+        // Прибор отключён, но его запись никуда не делась. Файл проверяется на
+        // месте: его могли удалить или перенести, а заметки рядом с
+        // несуществующим файлом не нужны.
+        return sessionRecordFilePath.Length > 0 && File.Exists(sessionRecordFilePath)
+            ? sessionRecordFilePath
+            : string.Empty;
     }
 
     private void ChartPointSelected(int graphNumber, ChartPointSelectedEventArgs args)
@@ -2109,6 +2146,29 @@ public sealed partial class MainWindow : Window
         foreach ((int graphNumber, DropDownButton button) in frequencyDropDowns)
         {
             button.Flyout = BuildFrequencyFlyout(graphNumber);
+        }
+
+        ScaleFileMenuItems();
+    }
+
+    /// <summary>
+    /// Задаёт масштаб пунктам меню «Файл».
+    /// </summary>
+    /// <remarks>
+    /// Пункты этого меню объявлены в разметке, а не построены кодом, поэтому
+    /// они не проходят через <see cref="ScaleMenuItem"/> при создании и остались
+    /// бы в системном размере — как и любое другое <c>MenuFlyout</c>.
+    /// Заголовок «Файл» в масштабировании не нуждается: он часть содержимого
+    /// главного окна.
+    /// </remarks>
+    private void ScaleFileMenuItems()
+    {
+        foreach (MenuFlyoutItemBase item in FileMenuBarItem.Items)
+        {
+            if (item is MenuFlyoutItem menuItem)
+            {
+                ScaleMenuItem(menuItem);
+            }
         }
     }
 

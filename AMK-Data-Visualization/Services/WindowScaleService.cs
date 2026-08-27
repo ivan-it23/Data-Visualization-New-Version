@@ -121,16 +121,28 @@ internal sealed class WindowScaleService
         SizeInt32 baseSize = window.AppWindow.Size;
         window.Content = null;
 
+        // Слоёв два, и это существенно. Внешний растянут по окну, внутренний
+        // несёт масштаб. Преобразование ставится на внутренний — он создан
+        // здесь же и в разметке ещё не участвовал. Раньше масштаб ставился
+        // прямо на содержимое окна, то есть на элемент, который уже прошёл
+        // разметку и был перепривязан к новому родителю: у окон фиксированного
+        // размера такое преобразование выставлялось, но на отрисовку не
+        // влияло — содержимое занимало 1/1.25 окна, оставляя пустое место
+        // справа и снизу.
         Grid host = new();
-        content.RenderTransformOrigin = new Point(0, 0);
-        host.Children.Add(content);
+        Grid scaler = new();
+        scaler.RenderTransformOrigin = new Point(0, 0);
+        scaler.HorizontalAlignment = HorizontalAlignment.Left;
+        scaler.VerticalAlignment = VerticalAlignment.Top;
+        scaler.Children.Add(content);
+        host.Children.Add(scaler);
         window.Content = host;
 
         ScaledWindow entry = new(
             window,
             WindowNative.GetWindowHandle(window),
             host,
-            content,
+            scaler,
             resizeWithScale,
             baseSize,
             baseSizeTracksSystemDpi,
@@ -143,6 +155,7 @@ internal sealed class WindowScaleService
 
         host.Loaded += Host_Loaded;
         host.SizeChanged += Host_SizeChanged;
+        window.Activated += Window_Activated;
         window.Closed += Window_Closed;
 
         ApplyEntry(entry);
@@ -186,17 +199,35 @@ internal sealed class WindowScaleService
             return;
         }
 
-        if (entry.FitContentToWindow)
-        {
-            // Масштаб такого окна зависит от его ширины, поэтому смена размера
-            // требует пересчёта целиком, а не только нового размера содержимого.
-            // Цикла здесь нет: размер содержимого на размер хоста не влияет —
-            // хост растянут по окну.
-            ApplyEntry(entry);
-            return;
-        }
+        // Пересчитывается всё целиком, а не только размер содержимого.
+        // Преобразование и размер — две половины одного масштаба, и задавать их
+        // порознь нельзя: окно, у которого размер задан, а преобразование нет,
+        // рисует содержимое в 1/1.25 своей ширины и обрезает его по этой
+        // границе — именно так выглядело окно «Связь с БД».
+        //
+        // Цикла здесь нет: размер содержимого на размер хоста не влияет, а
+        // ApplyWindowSize меняет кадр только тогда, когда он действительно
+        // отличается от нужного.
+        ApplyEntry(entry);
+    }
 
-        ApplyLayoutSize(entry, args.NewSize);
+    /// <summary>
+    /// Пересчитывает масштаб при первой активации окна.
+    /// </summary>
+    /// <remarks>
+    /// Немодальное окно приложения к моменту первого прохода разметки ещё не
+    /// имеет окончательных размеров: их доводят настройка владельца и
+    /// центрирование над ним. Единственный SizeChanged к этому моменту уже
+    /// прошёл, а неизменяемому окну второго не будет — содержимое так и
+    /// осталось бы посчитанным по промежуточному размеру и не заполняло бы
+    /// окно.
+    /// </remarks>
+    private void Window_Activated(object sender, WindowActivatedEventArgs args)
+    {
+        if (sender is Window window && attachedWindows.TryGetValue(window, out ScaledWindow? entry))
+        {
+            ApplyEntry(entry);
+        }
     }
 
     private void XamlRoot_Changed(XamlRoot sender, XamlRootChangedEventArgs args)
@@ -219,6 +250,7 @@ internal sealed class WindowScaleService
 
         entry.Host.Loaded -= Host_Loaded;
         entry.Host.SizeChanged -= Host_SizeChanged;
+        window.Activated -= Window_Activated;
         window.Closed -= Window_Closed;
 
         if (entry.XamlRoot is not null)
