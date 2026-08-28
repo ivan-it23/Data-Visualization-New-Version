@@ -491,7 +491,7 @@ public sealed partial class SchematicWindow : Window
             Content = content,
             CloseButtonText = "ОК"
         };
-        await dialog.ShowAsync();
+        await dialog.ShowScaledAsync();
     }
 
     private void AppWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)

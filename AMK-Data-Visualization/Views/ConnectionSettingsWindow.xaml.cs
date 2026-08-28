@@ -391,7 +391,7 @@ public sealed partial class ConnectionSettingsWindow : Window
             CloseButtonText = "Закрыть",
             XamlRoot = RootGrid.XamlRoot
         };
-        await dialog.ShowAsync();
+        await dialog.ShowScaledAsync();
     }
 
     private void AppWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)

@@ -336,7 +336,7 @@ public sealed partial class FileConstructorWindow : Window
             Content = message,
             CloseButtonText = "ОК"
         };
-        await dialog.ShowAsync();
+        await dialog.ShowScaledAsync();
     }
 
     private void AppWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)

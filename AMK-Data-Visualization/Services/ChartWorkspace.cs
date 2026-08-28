@@ -12,6 +12,24 @@ internal enum Graph2DataMode
 }
 
 /// <summary>
+/// Что показывает первый график: живые кадры опроса или открытый файл данных.
+/// </summary>
+/// <remarks>
+/// Источники разделены, потому что они существуют одновременно. Опрос прибора
+/// не прекращается оттого, что пользователь открыл файл: кадры продолжают
+/// приходить и писаться на диск. Пока источник был один, эти кадры дописывались
+/// в хвост открытого файла — на графике появлялась запись, которой в файле нет.
+/// </remarks>
+internal enum Graph1DataSource
+{
+    /// <summary>Кадры, принимаемые от прибора в текущей сессии опроса.</summary>
+    Device,
+
+    /// <summary>Файл данных, открытый пользователем.</summary>
+    File
+}
+
+/// <summary>
 /// Surface a graph's applied configuration came from. The curve-setup window only
 /// highlights schematic elements for configurations it produced itself: a
 /// selection made on the chart cannot be re-derived from the curves without
@@ -37,7 +55,36 @@ internal sealed class ChartWorkspace
         Graph2Configuration = graph2Configuration;
     }
 
-    public ToolDataRepository Graph1Repository { get; } = new();
+    /// <summary>
+    /// Кадры текущей сессии опроса. Наполняется всегда, пока идёт опрос, — и
+    /// тогда, когда на графике показан открытый файл, а не прибор.
+    /// </summary>
+    public ToolDataRepository Graph1DeviceRepository { get; } = new();
+
+    /// <summary>
+    /// Файл данных, открытый для первого графика. Живые кадры сюда не
+    /// попадают: файл на диске от них не растёт, и график не должен показывать
+    /// иное.
+    /// </summary>
+    public ToolDataRepository Graph1FileRepository { get; } = new();
+
+    /// <summary>
+    /// Хранилище, которое первый график показывает прямо сейчас.
+    /// </summary>
+    public ToolDataRepository Graph1Repository => Graph1Source == Graph1DataSource.Device
+        ? Graph1DeviceRepository
+        : Graph1FileRepository;
+
+    /// <summary>
+    /// Источник, показываемый первым графиком. По умолчанию файловый: до первой
+    /// сессии опроса живых кадров не существует.
+    /// </summary>
+    public Graph1DataSource Graph1Source { get; private set; } = Graph1DataSource.File;
+
+    public void SetGraph1Source(Graph1DataSource source)
+    {
+        Graph1Source = source;
+    }
 
     public ToolDataRepository Graph2IndependentRepository { get; } = new();
 

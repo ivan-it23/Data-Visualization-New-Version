@@ -175,7 +175,7 @@ public sealed partial class DeviceRegistryWindow : Window
             CloseButtonText = "ОК"
         };
 
-        await dialog.ShowAsync();
+        await dialog.ShowScaledAsync();
     }
 
     private void SetBusy(bool busy)

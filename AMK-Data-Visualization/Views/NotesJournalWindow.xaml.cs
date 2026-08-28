@@ -153,7 +153,7 @@ public sealed partial class NotesJournalWindow : Window
             CloseButtonText = "Отмена",
             DefaultButton = ContentDialogButton.Primary
         };
-        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+        if (await dialog.ShowScaledAsync() == ContentDialogResult.Primary)
         {
             row.SetDraft(editor.Text);
         }
@@ -199,7 +199,7 @@ public sealed partial class NotesJournalWindow : Window
             Content = content,
             CloseButtonText = "ОК"
         };
-        await dialog.ShowAsync();
+        await dialog.ShowScaledAsync();
     }
 
     private void AppWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)

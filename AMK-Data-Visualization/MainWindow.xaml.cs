@@ -157,45 +157,98 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        // Файл читается в собственное хранилище, и только удачное чтение
+        // переключает на него график. Иначе неудачная попытка открыть файл
+        // обрывала бы показ идущего опроса прибора.
+        ToolDataRepository repository = chartWorkspace.Graph1FileRepository;
         try
         {
-            chartWorkspace.Graph1Repository.LoadDataFromFile(file.Path);
+            repository.LoadDataFromFile(file.Path);
             if (fileConstructorWindow is not null)
             {
                 await fileConstructorWindow.LoadOpenedDataFileAsync(file.Path);
             }
 
-            LogLoadedDataFile(file.Path, chartWorkspace.Graph1Repository);
-
-            currentDataFilePath = file.Path;
-            EnsureNotesLoadedForCurrentSource();
-
-            chartWorkspace.Graph1Viewport.ResetAll();
-            if (!chartWorkspace.IsGraph2Independent)
-            {
-                chartWorkspace.Graph2Viewport.ResetAll();
-            }
-            schematicWindow?.RefreshDataContext(1, 2);
-            RenderGraph(1);
-            RenderGraph(2);
+            LogLoadedDataFile(file.Path, repository);
+            ShowGraph1File(file.Path);
             SetStatus("Готов");
-            UpdateStatusBarFileInfo();
-            await ReportFileLoadIssuesAsync(chartWorkspace.Graph1Repository);
+            await ReportFileLoadIssuesAsync(repository);
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException)
         {
-            chartWorkspace.Graph1Repository.ClearData();
-            schematicWindow?.RefreshDataContext(1, 2);
-            GraphControl.ClearSeries("Ошибка загрузки");
-            if (!chartWorkspace.IsGraph2Independent)
+            repository.ClearData();
+            if (chartWorkspace.Graph1Source == Graph1DataSource.File)
             {
-                Graph2Control.ClearSeries("Ошибка загрузки");
+                schematicWindow?.RefreshDataContext(1, 2);
+                GraphControl.ClearSeries("Ошибка загрузки");
+                if (!chartWorkspace.IsGraph2Independent)
+                {
+                    Graph2Control.ClearSeries("Ошибка загрузки");
+                }
             }
 
             SetStatus("Ошибка загрузки");
             UpdateStatusBarFileInfo();
             await ShowFileLoadErrorAsync(file.Path, ex);
         }
+    }
+
+    /// <summary>
+    /// Переводит первый график на открытый файл данных. Опрос прибора при этом
+    /// не прерывается: кадры продолжают приниматься и писаться в файл сессии, а
+    /// кнопка подключения превращается в возврат к прибору.
+    /// </summary>
+    private void ShowGraph1File(string filePath)
+    {
+        currentDataFilePath = filePath;
+        chartWorkspace.SetGraph1Source(Graph1DataSource.File);
+        SwitchGraph1Source();
+    }
+
+    /// <summary>
+    /// Возвращает первый график к кадрам прибора и отпускает открытый файл.
+    /// </summary>
+    private void ShowGraph1Device()
+    {
+        currentDataFilePath = string.Empty;
+        chartWorkspace.Graph1FileRepository.ClearData();
+        chartWorkspace.SetGraph1Source(Graph1DataSource.Device);
+        SwitchGraph1Source();
+    }
+
+    /// <summary>
+    /// Общая часть смены источника первого графика: заметки, состояние
+    /// просмотра и перерисовка. Диапазон и история масштаба сбрасываются — у
+    /// нового источника своя длина, и переносить на неё окно предыдущего
+    /// нельзя.
+    /// </summary>
+    private void SwitchGraph1Source()
+    {
+        EnsureNotesLoadedForCurrentSource();
+
+        // Перекрестие указывало на запись прежнего источника, и его координаты
+        // к новому отношения не имеют.
+        int previousActiveChart = activeChartNumber;
+        ClearChartCrosshair(1);
+        chartWorkspace.Graph1Viewport.ResetAll();
+        if (!chartWorkspace.IsGraph2Independent)
+        {
+            ClearChartCrosshair(2);
+            chartWorkspace.Graph2Viewport.ResetAll();
+        }
+
+        activeChartNumber = previousActiveChart;
+
+        schematicWindow?.RefreshDataContext(1, 2);
+        RenderGraph(1);
+        if (!chartWorkspace.IsGraph2Independent)
+        {
+            RenderGraph(2);
+        }
+
+        // Обновляет и надпись на кнопке подключения, и строку состояния: она
+        // называет источник, показанный на графике.
+        UpdateConnectionControls(serialDeviceService.GetStatus());
     }
 
     /// <summary>
@@ -258,25 +311,10 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            ToolDataRepository repository = chartWorkspace.Graph1Repository;
+            ToolDataRepository repository = chartWorkspace.Graph1FileRepository;
             repository.LoadDataFromFile(filePath);
             LogLoadedDataFile(filePath, repository);
-            currentDataFilePath = filePath;
-            EnsureNotesLoadedForCurrentSource();
-            chartWorkspace.Graph1Viewport.ResetAll();
-            if (!chartWorkspace.IsGraph2Independent)
-            {
-                chartWorkspace.Graph2Viewport.ResetAll();
-            }
-
-            schematicWindow?.RefreshDataContext(1, 2);
-            RenderGraph(1);
-            if (!chartWorkspace.IsGraph2Independent)
-            {
-                RenderGraph(2);
-            }
-
-            UpdateStatusBarFileInfo();
+            ShowGraph1File(filePath);
             SetStatus("Сконструированный файл сохранён и загружен");
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException)
@@ -407,7 +445,7 @@ public sealed partial class MainWindow : Window
                     ? ContentDialogButton.Primary
                     : ContentDialogButton.Close
             };
-            if (await prompt.ShowAsync() != ContentDialogResult.Primary)
+            if (await prompt.ShowScaledAsync() != ContentDialogResult.Primary)
             {
                 SetStatus("Обновление отложено");
                 return;
@@ -513,7 +551,7 @@ public sealed partial class MainWindow : Window
 
         closeButton.Click += (_, _) => dialog.Hide();
         dialog.Opened += (_, _) => closeButton.Focus(FocusState.Programmatic);
-        await dialog.ShowAsync();
+        await dialog.ShowScaledAsync();
     }
 
     private void ShowConnectionSettingsWindow()
@@ -530,6 +568,17 @@ public sealed partial class MainWindow : Window
     {
         if (serialDeviceService.IsConnectionRequested)
         {
+            // Пока показан открытый файл, эта кнопка возвращает к прибору, а не
+            // отключает его: опрос идёт, и первым действием пользователь ждёт
+            // возврата к живым кадрам, а не обрыва сессии. Отключение остаётся
+            // на этой же кнопке следующим нажатием.
+            if (chartWorkspace.Graph1Source == Graph1DataSource.File)
+            {
+                ShowGraph1Device();
+                SetStatus("Показаны данные прибора");
+                return;
+            }
+
             await serialDeviceService.DisconnectAsync();
             SetStatus("Прибор отключён");
             return;
@@ -631,13 +680,20 @@ public sealed partial class MainWindow : Window
         bool loadExisting = settings.AppendToExistingFile
             && settings.ShowFullExistingFile
             && File.Exists(settings.ExistingRecordFile);
+
+        // Новая сессия всегда начинается с показа прибора: файл, открытый до
+        // неё, к этой сессии отношения не имеет.
+        chartWorkspace.Graph1FileRepository.ClearData();
+        chartWorkspace.SetGraph1Source(Graph1DataSource.Device);
         if (loadExisting)
         {
-            chartWorkspace.Graph1Repository.LoadDataFromFile(settings.ExistingRecordFile);
+            // Дозапись идёт в этот же файл, поэтому его содержимое — начало
+            // живого хранилища, а не отдельный источник.
+            chartWorkspace.Graph1DeviceRepository.LoadDataFromFile(settings.ExistingRecordFile);
         }
         else
         {
-            chartWorkspace.Graph1Repository.ClearData();
+            chartWorkspace.Graph1DeviceRepository.ClearData();
         }
 
         chartWorkspace.Graph1Viewport.ResetAll();
@@ -660,17 +716,24 @@ public sealed partial class MainWindow : Window
     {
         DispatcherQueue.TryEnqueue(() =>
         {
-            bool firstFrame = !chartWorkspace.Graph1Repository.HasData;
-            chartWorkspace.Graph1Repository.AddParsedData(e.Frame);
-            if (firstFrame)
+            // Кадр всегда идёт в живое хранилище, а не в то, что показано.
+            // Пока открыт файл данных, опрос продолжается и пишется на диск, но
+            // к содержимому файла принятые кадры отношения не имеют.
+            ToolDataRepository deviceRepository = chartWorkspace.Graph1DeviceRepository;
+            bool firstFrame = !deviceRepository.HasData;
+            deviceRepository.AddParsedData(e.Frame);
+            if (chartWorkspace.Graph1Source == Graph1DataSource.Device)
             {
-                schematicWindow?.RefreshDataContext(1, 2);
-            }
+                if (firstFrame)
+                {
+                    schematicWindow?.RefreshDataContext(1, 2);
+                }
 
-            RenderGraph(1);
-            if (!chartWorkspace.IsGraph2Independent && DualModeCheckBox.IsChecked == true)
-            {
-                RenderGraph(2);
+                RenderGraph(1);
+                if (!chartWorkspace.IsGraph2Independent && DualModeCheckBox.IsChecked == true)
+                {
+                    RenderGraph(2);
+                }
             }
 
             SetStatus($"Получен кадр {e.SessionFrameNumber}");
@@ -699,7 +762,20 @@ public sealed partial class MainWindow : Window
     {
         bool connected = status.State == SerialConnectionState.Connected;
         bool busy = status.State == SerialConnectionState.Connecting;
-        ConnectionToggleButton.Content = status.ConnectionRequested ? "Отключить" : "Включить";
+
+        // Сессия опроса идёт, но график показывает открытый файл: пользователю
+        // нужен возврат к прибору, а не отключение. Отключение доступно после
+        // возврата, этой же кнопкой.
+        bool viewingFileWhileConnected = status.ConnectionRequested
+            && chartWorkspace.Graph1Source == Graph1DataSource.File;
+        ConnectionToggleButton.Content = status.ConnectionRequested
+            ? viewingFileWhileConnected ? "К прибору →" : "Отключить"
+            : "Включить";
+        ToolTipService.SetToolTip(
+            ConnectionToggleButton,
+            viewingFileWhileConnected
+                ? "Вернуться к данным прибора (опрос продолжается)"
+                : "Включение/Отключение прибора");
         ConnectionToggleButton.IsEnabled = !busy;
         PollingToggleIcon.Symbol = status.IsPolling ? Symbol.Pause : Symbol.Play;
         PollingToggleButton.IsEnabled = connected;
@@ -768,13 +844,26 @@ public sealed partial class MainWindow : Window
 
     private IReadOnlyList<FolderTarget> GetStatusFolderTargets()
     {
-        List<FolderTarget> targets = new(2);
+        List<FolderTarget> targets = new(3);
         FolderTarget? graph1Target = serialDeviceService.IsConnected
             ? CreateSerialRecordingFolderTarget()
             : CreateRepositoryFolderTarget(1, chartWorkspace.Graph1Repository);
         if (graph1Target is not null)
         {
             targets.Add(graph1Target);
+        }
+
+        // Прибор подключён, но на графике открытый файл: его каталог — тоже
+        // рабочий, и предлагать один каталог записи было бы неверно.
+        if (serialDeviceService.IsConnected && chartWorkspace.Graph1Source == Graph1DataSource.File)
+        {
+            FolderTarget? openedFileTarget = CreateRepositoryFolderTarget(
+                1,
+                chartWorkspace.Graph1FileRepository);
+            if (openedFileTarget is not null)
+            {
+                targets.Add(openedFileTarget);
+            }
         }
 
         bool hasIndependentGraph2 = DualModeCheckBox.IsChecked == true
@@ -858,7 +947,7 @@ public sealed partial class MainWindow : Window
             CloseButtonText = "Отмена",
             DefaultButton = ContentDialogButton.Primary
         };
-        ContentDialogResult result = await dialog.ShowAsync();
+        ContentDialogResult result = await dialog.ShowScaledAsync();
         return result == ContentDialogResult.Primary
             && choices.SelectedIndex >= 0
             && choices.SelectedIndex < targets.Count
@@ -1164,7 +1253,7 @@ public sealed partial class MainWindow : Window
     /// </remarks>
     private void ScaleMenuItem(MenuFlyoutItem item, double baseFontSize = MenuItemFontSize)
     {
-        double scale = windowScaleService.PopupContentScale;
+        double scale = WindowScaleService.PopupContentScale;
         item.FontSize = baseFontSize * scale;
         item.Height = MenuItemHeight * scale;
         item.Padding = new Thickness(MenuItemSidePadding * scale, 0, MenuItemSidePadding * scale, 0);
@@ -1420,6 +1509,11 @@ public sealed partial class MainWindow : Window
         content.Children.Add(xAxisCheck);
 
         Flyout flyout = new() { Content = content };
+
+        // Флайаут разворачивается в popup-слое окна, куда преобразование
+        // содержимого не достаёт, поэтому масштаб задаётся его разметке —
+        // так же, как пунктам меню.
+        PopupScale.Apply(flyout);
         flyout.ShowAt(anchor);
     }
 
@@ -1490,6 +1584,11 @@ public sealed partial class MainWindow : Window
         }
 
         Flyout flyout = new() { Content = content };
+
+        // Флайаут разворачивается в popup-слое окна, куда преобразование
+        // содержимого не достаёт, поэтому масштаб задаётся его разметке —
+        // так же, как пунктам меню.
+        PopupScale.Apply(flyout);
         flyout.ShowAt(anchor);
     }
 
@@ -1943,7 +2042,7 @@ public sealed partial class MainWindow : Window
             CloseButtonText = "Отмена",
             DefaultButton = ContentDialogButton.Primary
         };
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        if (await dialog.ShowScaledAsync() != ContentDialogResult.Primary)
         {
             return;
         }
@@ -2005,7 +2104,7 @@ public sealed partial class MainWindow : Window
             CloseButtonText = "Закрыть",
             DefaultButton = ContentDialogButton.Primary
         };
-        ContentDialogResult result = await dialog.ShowAsync();
+        ContentDialogResult result = await dialog.ShowScaledAsync();
         if (result == ContentDialogResult.Primary)
         {
             if (!UpdateNoteTextById(note.NoteId, editor.Text))
@@ -2024,7 +2123,7 @@ public sealed partial class MainWindow : Window
                 CloseButtonText = "Отмена",
                 DefaultButton = ContentDialogButton.Close
             };
-            if (await confirmation.ShowAsync() == ContentDialogResult.Primary)
+            if (await confirmation.ShowScaledAsync() == ContentDialogResult.Primary)
             {
                 if (!notesModule.DeleteNoteById(note.NoteId))
                 {
@@ -2206,8 +2305,12 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        // Выгружается то, что пользователь видит. Пока идёт опрос и открыт файл,
+        // существуют оба источника, и запись сессии не должна подменять собой
+        // файл, который сейчас на графике.
         string recordingPath = GetActiveRecordingPath();
-        bool useRecording = recordingPath.Length > 0;
+        bool useRecording = recordingPath.Length > 0
+            && chartWorkspace.Graph1Source == Graph1DataSource.Device;
         string sourcePath = useRecording ? recordingPath : currentDataFilePath;
 
         if (string.IsNullOrWhiteSpace(sourcePath) || !File.Exists(sourcePath))
@@ -2321,7 +2424,7 @@ public sealed partial class MainWindow : Window
             DefaultButton = ContentDialogButton.Primary
         };
 
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        if (await dialog.ShowScaledAsync() != ContentDialogResult.Primary)
         {
             return null;
         }
@@ -2554,7 +2657,7 @@ public sealed partial class MainWindow : Window
             Content = message,
             CloseButtonText = "ОК"
         };
-        await dialog.ShowAsync();
+        await dialog.ShowScaledAsync();
     }
 
     private static List<float> BuildVisibleSegmentBoundaryXValues(
@@ -3107,7 +3210,7 @@ public sealed partial class MainWindow : Window
         };
         cancelButton.Click += (_, _) => dialog.Hide();
 
-        await dialog.ShowAsync();
+        await dialog.ShowScaledAsync();
         return result;
     }
 
@@ -3161,7 +3264,7 @@ public sealed partial class MainWindow : Window
             CloseButtonText = "Отмена",
             DefaultButton = ContentDialogButton.Primary
         };
-        ContentDialogResult choice = await dialog.ShowAsync();
+        ContentDialogResult choice = await dialog.ShowScaledAsync();
         if (choice != ContentDialogResult.Primary)
         {
             return;
@@ -3349,7 +3452,7 @@ public sealed partial class MainWindow : Window
             Content = message,
             CloseButtonText = "ОК"
         };
-        await dialog.ShowAsync();
+        await dialog.ShowScaledAsync();
     }
 
     private static bool PathsEqual(string left, string right)
@@ -3411,7 +3514,7 @@ public sealed partial class MainWindow : Window
         bool connected = serialDeviceService.IsConnected;
         FolderStatusButton.Visibility = hasAnyData || connected ? Visibility.Visible : Visibility.Collapsed;
         LoadedFileStatusTextBlock.Text = connected
-            ? $"{serialDeviceService.ConnectedPort}  |  Кадров: {chartWorkspace.Graph1Repository.DataSize}"
+            ? BuildConnectedStatusInformation()
             : chartWorkspace.GetStatusFileInformation();
 
         // Здесь же, а не в отдельных местах: этот метод вызывается и при
@@ -3419,6 +3522,28 @@ public sealed partial class MainWindow : Window
         // связи — то есть ровно тогда, когда меняется наличие того, что можно
         // выгрузить.
         UpdateUploadMenuAvailability();
+    }
+
+    /// <summary>
+    /// Строка состояния при подключённом приборе. Счётчик кадров всегда
+    /// относится к сессии опроса, даже когда на графике показан открытый файл:
+    /// опрос в этот момент идёт, и его нужно видеть. Открытый файл называется
+    /// отдельно, чтобы одно не выдавалось за другое.
+    /// </summary>
+    private string BuildConnectedStatusInformation()
+    {
+        string deviceInformation =
+            $"{serialDeviceService.ConnectedPort}  |  Кадров: {chartWorkspace.Graph1DeviceRepository.DataSize}";
+        if (chartWorkspace.Graph1Source != Graph1DataSource.File)
+        {
+            return deviceInformation;
+        }
+
+        ToolDataRepository fileRepository = chartWorkspace.Graph1FileRepository;
+        string fileName = string.IsNullOrWhiteSpace(fileRepository.LoadedFileName)
+            ? "нет файла"
+            : Path.GetFileName(fileRepository.LoadedFileName);
+        return $"{deviceInformation}  |  На графике: {fileName} ({fileRepository.DataSize})";
     }
 
     private static FileOpenPicker CreateDataFilePicker()

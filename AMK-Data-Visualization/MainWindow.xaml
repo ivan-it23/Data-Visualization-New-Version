@@ -277,7 +277,7 @@
                 </Button>
                 <Button
                     x:Name="ConnectionToggleButton"
-                    Width="80"
+                    Width="96"
                     Height="24"
                     MinWidth="0"
                     Padding="0"

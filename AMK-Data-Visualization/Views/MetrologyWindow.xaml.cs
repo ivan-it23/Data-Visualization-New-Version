@@ -742,7 +742,7 @@ public sealed partial class MetrologyWindow : Window
             DefaultButton = ContentDialogButton.Primary
         };
 
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        if (await dialog.ShowScaledAsync() != ContentDialogResult.Primary)
         {
             return null;
         }
@@ -768,7 +768,7 @@ public sealed partial class MetrologyWindow : Window
             Content = content,
             CloseButtonText = "ОК"
         };
-        await dialog.ShowAsync();
+        await dialog.ShowScaledAsync();
     }
 
     private async Task<bool> ConfirmAsync(string title, string content)
@@ -782,7 +782,7 @@ public sealed partial class MetrologyWindow : Window
             CloseButtonText = "Нет",
             DefaultButton = ContentDialogButton.Primary
         };
-        return await dialog.ShowAsync() == ContentDialogResult.Primary;
+        return await dialog.ShowScaledAsync() == ContentDialogResult.Primary;
     }
 
     private static bool TryReadUShort(

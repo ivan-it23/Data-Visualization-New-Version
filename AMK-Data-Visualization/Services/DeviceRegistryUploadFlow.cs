@@ -270,7 +270,7 @@ internal sealed class DeviceRegistryUploadFlow
             DefaultButton = ContentDialogButton.Primary
         };
 
-        ContentDialogResult result = await dialog.ShowAsync();
+        ContentDialogResult result = await dialog.ShowScaledAsync();
         if (result != ContentDialogResult.Primary)
         {
             return null;
@@ -323,7 +323,7 @@ internal sealed class DeviceRegistryUploadFlow
 
         while (true)
         {
-            ContentDialogResult result = await dialog.ShowAsync();
+            ContentDialogResult result = await dialog.ShowScaledAsync();
             if (result != ContentDialogResult.Primary)
             {
                 return null;
@@ -385,7 +385,7 @@ internal sealed class DeviceRegistryUploadFlow
             DefaultButton = ContentDialogButton.Close
         };
 
-        return await dialog.ShowAsync() == ContentDialogResult.Primary;
+        return await dialog.ShowScaledAsync() == ContentDialogResult.Primary;
     }
 
     private static async Task ShowMessageAsync(XamlRoot xamlRoot, string title, string message)
@@ -398,6 +398,6 @@ internal sealed class DeviceRegistryUploadFlow
             CloseButtonText = "ОК"
         };
 
-        await dialog.ShowAsync();
+        await dialog.ShowScaledAsync();
     }
 }

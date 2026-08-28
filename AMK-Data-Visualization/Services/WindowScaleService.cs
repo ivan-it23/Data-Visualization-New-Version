@@ -88,7 +88,13 @@ internal sealed class WindowScaleService
     /// верен с первой отрисовки, окно popup'а строится уже по нему — ничего не
     /// обрезается и ничто не меняется в ответ на посторонний ввод.
     /// </remarks>
-    public double PopupContentScale { get; private set; } = DefaultScale;
+    /// <remarks>
+    /// Значение общее для приложения: главное окно задаёт его, а пользуются им
+    /// все всплывающие поверхности, включая построенные во вторичных окнах,
+    /// у которых ссылки на службу нет. Экземпляр службы в приложении один —
+    /// его создаёт главное окно.
+    /// </remarks>
+    public static double PopupContentScale { get; private set; } = DefaultScale;
 
     public void Initialize(WindowScaleSettings storedSettings)
     {
