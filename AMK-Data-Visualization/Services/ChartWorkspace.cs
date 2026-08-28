@@ -49,6 +49,8 @@ internal enum ChartConfigurationSource
 /// </summary>
 internal sealed class ChartWorkspace
 {
+    private sealed record SuppressedCurve(CurveDefinition Curve, int OriginalIndex);
+
     public ChartWorkspace(ChartConfiguration graph1Configuration, ChartConfiguration graph2Configuration)
     {
         Graph1Configuration = graph1Configuration;
@@ -100,6 +102,8 @@ internal sealed class ChartWorkspace
 
     private ChartConfigurationSource graph1ConfigurationSource = ChartConfigurationSource.CurveSetupWindow;
     private ChartConfigurationSource graph2ConfigurationSource = ChartConfigurationSource.CurveSetupWindow;
+    private readonly List<SuppressedCurve> graph1SuppressedCurves = [];
+    private readonly List<SuppressedCurve> graph2SuppressedCurves = [];
 
     public bool IsGraph2Independent => Graph2Mode == Graph2DataMode.IndependentFile;
 
@@ -196,23 +200,35 @@ internal sealed class ChartWorkspace
     }
 
     /// <summary>
-    /// Drops curves the loaded source cannot provide and reports whether anything
-    /// was removed. A configuration built for a 5Tx tool survives a switch to a
-    /// four-transmitter source, and its T5 curves would otherwise keep appearing
-    /// in the legend, in the on-chart schematic and in the visibility list.
+    /// Temporarily suppresses transmitter curves the loaded source cannot provide
+    /// and restores them when a compatible transmitter count becomes active again.
+    /// Reports whether the applied configuration changed. A configuration built
+    /// for a 5Tx tool can therefore be shown on a four-transmitter source without
+    /// permanently losing its T5 curves.
     /// </summary>
     public bool DropUnsupportedCurvesForGraph(int graphNumber)
     {
         ChartConfiguration configuration = GetConfigurationForGraph(graphNumber);
-        if (configuration.IsEmpty)
-        {
-            return false;
-        }
-
+        List<SuppressedCurve> suppressedCurves = GetSuppressedCurves(graphNumber);
         int availableTransmitterCount = GetAvailableTransmitterCountForGraph(graphNumber);
-        int removedCount = configuration.Curves.RemoveAll(curve =>
-            curve.SourceElement == ElementType.Transmitter
-            && (curve.ElementIndex < 0 || curve.ElementIndex >= availableTransmitterCount));
+        bool changed = RestoreSupportedCurves(
+            configuration,
+            suppressedCurves,
+            availableTransmitterCount);
+
+        for (int index = configuration.Curves.Count - 1; index >= 0; index--)
+        {
+            CurveDefinition curve = configuration.Curves[index];
+            if (curve.SourceElement != ElementType.Transmitter
+                || curve.ElementIndex >= 0 && curve.ElementIndex < availableTransmitterCount)
+            {
+                continue;
+            }
+
+            suppressedCurves.Add(new SuppressedCurve(curve, index));
+            configuration.Curves.RemoveAt(index);
+            changed = true;
+        }
 
         // Конфигурация, построенная для прибора новой прошивки, могла пережить
         // переход на источник старой: её амплитудные кривые данных не имеют и
@@ -226,17 +242,53 @@ internal sealed class ChartWorkspace
         if (TryGetSourceCapabilitiesForGraph(graphNumber, out ToolCapabilities capabilities)
             && !capabilities.IsExtendedFirmware)
         {
-            removedCount += configuration.Curves.RemoveAll(
-                curve => curve.DataType is DataType.RhoAttSmt or DataType.AttDbSmt);
+            changed |= configuration.Curves.RemoveAll(
+                curve => curve.DataType is DataType.RhoAttSmt or DataType.AttDbSmt) > 0;
         }
 
-        if (removedCount == 0)
+        if (!changed)
         {
             return false;
         }
 
         configuration.UpdateAxisConfiguration();
         return true;
+    }
+
+    private static bool RestoreSupportedCurves(
+        ChartConfiguration configuration,
+        List<SuppressedCurve> suppressedCurves,
+        int availableTransmitterCount)
+    {
+        bool changed = false;
+        foreach (SuppressedCurve suppressed in suppressedCurves.OrderBy(item => item.OriginalIndex).ToArray())
+        {
+            CurveDefinition curve = suppressed.Curve;
+            if (curve.SourceElement != ElementType.Transmitter
+                || curve.ElementIndex < 0
+                || curve.ElementIndex >= availableTransmitterCount)
+            {
+                continue;
+            }
+
+            configuration.Curves.Insert(
+                Math.Min(suppressed.OriginalIndex, configuration.Curves.Count),
+                suppressed.Curve);
+            suppressedCurves.Remove(suppressed);
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    private List<SuppressedCurve> GetSuppressedCurves(int graphNumber)
+    {
+        return graphNumber switch
+        {
+            1 => graph1SuppressedCurves,
+            2 => graph2SuppressedCurves,
+            _ => throw new ArgumentOutOfRangeException(nameof(graphNumber))
+        };
     }
 
     public ChartConfigurationSource GetConfigurationSourceForGraph(int graphNumber)
@@ -255,6 +307,7 @@ internal sealed class ChartWorkspace
         ChartConfigurationSource source)
     {
         ChartConfiguration copy = configuration.Copy();
+        GetSuppressedCurves(graphNumber).Clear();
         switch (graphNumber)
         {
             case 1:

@@ -239,12 +239,16 @@ public sealed partial class MainWindow : Window
 
         activeChartNumber = previousActiveChart;
 
-        schematicWindow?.RefreshDataContext(1, 2);
         RenderGraph(1);
         if (!chartWorkspace.IsGraph2Independent)
         {
             RenderGraph(2);
         }
+
+        // RenderGraph first reconciles the applied curves with the new source.
+        // Refresh the cached setup editors afterwards so they see restored T5
+        // curves when returning from a four-transmitter file to a 5Tx device.
+        schematicWindow?.RefreshDataContext(1, 2);
 
         // Обновляет и надпись на кнопке подключения, и строку состояния: она
         // называет источник, показанный на графике.
