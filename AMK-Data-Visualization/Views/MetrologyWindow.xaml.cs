@@ -424,8 +424,7 @@ public sealed partial class MetrologyWindow : Window
         picker.FileTypeFilter.Add(".bin");
         picker.FileTypeFilter.Add(".met");
         picker.FileTypeFilter.Add("*");
-        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
-        Windows.Storage.StorageFile? file = await picker.PickSingleFileAsync();
+        Windows.Storage.StorageFile? file = await FilePickers.PickSingleFileAsync(picker, this);
         if (file is null)
         {
             return;
@@ -463,8 +462,7 @@ public sealed partial class MetrologyWindow : Window
             SuggestedFileName = data.Serial > 0 ? $"metrology_{data.Serial}" : "metrology"
         };
         picker.FileTypeChoices.Add("Файл метрологии", new List<string> { ".bin" });
-        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
-        Windows.Storage.StorageFile? file = await picker.PickSaveFileAsync();
+        Windows.Storage.StorageFile? file = await FilePickers.PickSaveFileAsync(picker, this);
         if (file is null)
         {
             return;

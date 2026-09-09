@@ -165,12 +165,38 @@ internal static class PopupScale
     }
 
     /// <summary>
+    /// Очередь показа диалогов. WinUI допускает только один открытый
+    /// <see cref="ContentDialog"/>, и второй показ падает исключением
+    /// «Only a single ContentDialog can be open at any time».
+    /// </summary>
+    /// <remarks>
+    /// Так и произошло при загрузке файла в базу: пока был открыт один диалог,
+    /// поток загрузки попытался показать выбор прибора. Исключение уходило из
+    /// обработчика <c>async void</c> мимо кода окна и роняло приложение.
+    ///
+    /// Очередь делает столкновение невозможным: второй диалог ждёт, пока
+    /// пользователь ответит на первый, и показывается сразу после него. Это то
+    /// же поведение, которого пользователь ждёт от модальных окон, и оно не
+    /// зависит от того, из какого окна пришёл вызов.
+    /// </remarks>
+    private static readonly SemaphoreSlim DialogGate = new(1, 1);
+
+    /// <summary>
     /// Показывает диалог, предварительно приведя его к масштабу интерфейса.
+    /// Диалоги показываются по одному.
     /// </summary>
     public static async Task<ContentDialogResult> ShowScaledAsync(this ContentDialog dialog)
     {
         Apply(dialog);
-        return await dialog.ShowAsync();
+        await DialogGate.WaitAsync();
+        try
+        {
+            return await dialog.ShowAsync();
+        }
+        finally
+        {
+            DialogGate.Release();
+        }
     }
 
     /// <summary>

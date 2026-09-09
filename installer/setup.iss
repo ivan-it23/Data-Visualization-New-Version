@@ -83,16 +83,30 @@ Name: "{commonprograms}\{#MyAppName}\Удалить {#MyAppName}"; Filename: "{u
 Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\Assets\{#MyAppIconName}"; Comment: "{#MyAppDescription}"; Tasks: desktopicon
 
 [Run]
-; Обычная установка: мастер предлагает запуск через checkbox.
-; runasoriginaluser обязателен в обеих строках. Установщик работает с правами
-; администратора, и без этого флага приложение наследует его токен: окно
-; запущенного так приложения не принимает перетаскивание файлов из Проводника,
-; а при разных учётных записях пользователя и администратора настройки и журналы
-; уходят в профиль администратора, а не того, кто работает.
-Filename: "{app}\{#MyAppExeName}"; Description: "Запустить {#MyAppName}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent runasoriginaluser
+; Приложение запускается ЧЕРЕЗ ОБОЛОЧКУ, а не напрямую, и это обязательно.
+;
+; Установщик работает с правами администратора. Запущенное им напрямую
+; приложение наследует его токен, а приложение с повышенными правами теряет
+; часть возможностей Windows: диалоги выбора файла и папки
+; (`Windows.Storage.Pickers`) отказывают с E_FAIL, окно не принимает
+; перетаскивание файлов из Проводника, а при разных учётных записях
+; пользователя и администратора настройки и журналы уходят в чужой профиль.
+;
+; Флаг runasoriginaluser здесь не помогает. Документация Inno Setup:
+; «If a user launches Setup by right-clicking its EXE file and selecting
+; "Run as administrator", then this flag, unfortunately, will have no effect,
+; because Setup has no opportunity to run any code with the original user
+; credentials. The same is true if Setup is launched from an already-elevated
+; process.» Приложение запускает setup именно так — через ShellExecute с
+; глаголом runas, — поэтому флаг молча ничего не делал, и после автообновления
+; приложение работало с правами администратора до первого ручного перезапуска.
+;
+; explorer.exe уже работает под обычным пользователем, поэтому запущенное им
+; приложение получает обычный токен независимо от прав установщика.
+Filename: "{win}\explorer.exe"; Parameters: """{app}\{#MyAppExeName}"""; Description: "Запустить {#MyAppName}"; Flags: nowait postinstall skipifsilent
 ; AutoUpdate запускает setup с /UPDATE=1: после тихого обновления приложение
 ; стартует заново без дополнительного пользовательского шага.
-Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Flags: nowait runasoriginaluser; Check: IsAutoUpdateMode
+Filename: "{win}\explorer.exe"; Parameters: """{app}\{#MyAppExeName}"""; Flags: nowait; Check: IsAutoUpdateMode
 
 [Code]
 function IsAutoUpdateMode: Boolean;

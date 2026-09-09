@@ -150,8 +150,7 @@ public sealed partial class MainWindow : Window
     private async void OpenFileButton_Click(object sender, RoutedEventArgs e)
     {
         FileOpenPicker picker = CreateDataFilePicker();
-        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
-        Windows.Storage.StorageFile? file = await picker.PickSingleFileAsync();
+        Windows.Storage.StorageFile? file = await FilePickers.PickSingleFileAsync(picker, this);
         if (file is null)
         {
             return;
@@ -796,8 +795,7 @@ public sealed partial class MainWindow : Window
     private async void OpenGraph2FileButton_Click(object sender, RoutedEventArgs e)
     {
         FileOpenPicker picker = CreateDataFilePicker();
-        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
-        Windows.Storage.StorageFile? file = await picker.PickSingleFileAsync();
+        Windows.Storage.StorageFile? file = await FilePickers.PickSingleFileAsync(picker, this);
         if (file is null)
         {
             return;
@@ -3125,8 +3123,7 @@ public sealed partial class MainWindow : Window
             SuggestedFileName = $"{repository.LoadedFileName}_range_{range.StartIndex}_{range.EndIndex}_{DateTime.Now:dd_MM_yyyy}"
         };
         picker.FileTypeChoices.Add("AMK BIN", [".bin"]);
-        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
-        Windows.Storage.StorageFile? file = await picker.PickSaveFileAsync();
+        Windows.Storage.StorageFile? file = await FilePickers.PickSaveFileAsync(picker, this);
         if (file is null)
         {
             return;
@@ -3293,8 +3290,7 @@ public sealed partial class MainWindow : Window
             SuggestedFileName = $"{repository.LoadedFileName}_cut_{range.StartIndex}_{range.EndIndex}"
         };
         picker.FileTypeChoices.Add("AMK data", [extension]);
-        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
-        Windows.Storage.StorageFile? target = await picker.PickSaveFileAsync();
+        Windows.Storage.StorageFile? target = await FilePickers.PickSaveFileAsync(picker, this);
         if (target is null)
         {
             return;
@@ -3424,8 +3420,7 @@ public sealed partial class MainWindow : Window
             CommitButtonText = title
         };
         picker.FileTypeFilter.Add(".bin");
-        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
-        return await picker.PickSingleFileAsync();
+        return await FilePickers.PickSingleFileAsync(picker, this);
     }
 
     private void ReloadGraph1AfterFileChange(ToolDataRepository repository)

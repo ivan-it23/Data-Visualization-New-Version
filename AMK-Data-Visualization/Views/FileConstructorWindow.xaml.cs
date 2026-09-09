@@ -80,7 +80,7 @@ public sealed partial class FileConstructorWindow : Window
     private async void AddFilesButton_Click(object sender, RoutedEventArgs e)
     {
         FileOpenPicker picker = CreateDataFilePicker("Добавить файлы данных");
-        IReadOnlyList<Windows.Storage.StorageFile> files = await picker.PickMultipleFilesAsync();
+        IReadOnlyList<Windows.Storage.StorageFile> files = await FilePickers.PickMultipleFilesAsync(picker, this);
         if (files.Count == 0)
         {
             return;
@@ -118,8 +118,7 @@ public sealed partial class FileConstructorWindow : Window
             CommitButtonText = "Открыть сборку"
         };
         picker.FileTypeFilter.Add(".bin");
-        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
-        Windows.Storage.StorageFile? file = await picker.PickSingleFileAsync();
+        Windows.Storage.StorageFile? file = await FilePickers.PickSingleFileAsync(picker, this);
         if (file is null)
         {
             return;
@@ -172,8 +171,7 @@ public sealed partial class FileConstructorWindow : Window
             SuggestedFileName = "constructed_file"
         };
         picker.FileTypeChoices.Add("AMK BIN", [".bin"]);
-        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
-        Windows.Storage.StorageFile? file = await picker.PickSaveFileAsync();
+        Windows.Storage.StorageFile? file = await FilePickers.PickSaveFileAsync(picker, this);
         if (file is null)
         {
             return;
@@ -301,7 +299,8 @@ public sealed partial class FileConstructorWindow : Window
         picker.FileTypeFilter.Add(".bin");
         picker.FileTypeFilter.Add(".biv");
         picker.FileTypeFilter.Add(".DEV");
-        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
+
+        // Привязку к окну выполняет FilePickers в момент показа.
         return picker;
     }
 

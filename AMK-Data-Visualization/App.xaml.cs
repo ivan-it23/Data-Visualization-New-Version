@@ -16,7 +16,10 @@ public partial class App : Application
     {
         try
         {
-            WriteLifecycle("before-main-window");
+            // Права процесса пишутся первой строкой сессии: приложение с
+            // повышенными правами теряет системные диалоги выбора файлов, и по
+            // журналу это должно быть видно сразу, а не выводиться по симптомам.
+            WriteLifecycle($"before-main-window elevated={Services.FilePickers.IsElevatedProcess}");
             window = new MainWindow();
             WriteLifecycle($"after-main-window hwnd={WinRT.Interop.WindowNative.GetWindowHandle(window)}");
             window.Activated += (_, eventArgs) => WriteLifecycle($"activated state={eventArgs.WindowActivationState}");

@@ -184,13 +184,11 @@ public sealed partial class ConnectionSettingsWindow : Window
 
     private async void BrowseRecordPathButton_Click(object sender, RoutedEventArgs e)
     {
-        IntPtr handle = WindowNative.GetWindowHandle(this);
         if (AppendCheckBox.IsChecked == true)
         {
             FileOpenPicker picker = new() { SuggestedStartLocation = PickerLocationId.Desktop };
             picker.FileTypeFilter.Add(".bin");
-            InitializeWithWindow.Initialize(picker, handle);
-            Windows.Storage.StorageFile? file = await picker.PickSingleFileAsync();
+            Windows.Storage.StorageFile? file = await FilePickers.PickSingleFileAsync(picker, this);
             if (file is not null)
             {
                 settings.ExistingRecordFile = file.Path;
@@ -200,8 +198,7 @@ public sealed partial class ConnectionSettingsWindow : Window
         {
             FolderPicker picker = new() { SuggestedStartLocation = PickerLocationId.Desktop };
             picker.FileTypeFilter.Add("*");
-            InitializeWithWindow.Initialize(picker, handle);
-            Windows.Storage.StorageFolder? folder = await picker.PickSingleFolderAsync();
+            Windows.Storage.StorageFolder? folder = await FilePickers.PickSingleFolderAsync(picker, this);
             if (folder is not null)
             {
                 settings.RecordFolder = folder.Path;

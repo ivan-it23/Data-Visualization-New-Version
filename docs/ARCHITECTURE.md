@@ -64,7 +64,7 @@ Windows App SDK. Автоматизированных тестовых прое�
 | Слой | Файлы |
 | --- | --- |
 | Окна | `MainWindow.xaml.cs`, `Views/*`, `Controls/LineChartControl.xaml.cs`, `Controls/InlineSchematicBar.cs` |
-| Службы приложения | `Services/ChartWorkspace.cs`, `Services/ChartViewportState.cs`, `Services/AutoUpdateService.cs`, `Services/SecondaryWindowIntegration.cs`, `Services/WindowScaleService.cs`, `Services/PopupScale.cs`, `Services/MinimumWindowSize.cs` |
+| Службы приложения | `Services/ChartWorkspace.cs`, `Services/ChartViewportState.cs`, `Services/AutoUpdateService.cs`, `Services/SecondaryWindowIntegration.cs`, `Services/WindowScaleService.cs`, `Services/PopupScale.cs`, `Services/FilePickers.cs`, `Services/MinimumWindowSize.cs` |
 | Core | `Binary/BinaryStructs.cs`, `DomainModels.cs`, `Adapters/ToolDataAdapterRegistry.cs`, `Adapters/ToolSignature.cs`, `Access/ToolDataAccessView.cs` |
 | IO | `DataFiles/ToolDataFileReader.cs`, `DataFiles/ToolDataRepository.cs`, `DataFiles/ToolDataRangeExporter.cs`, `DataFiles/ToolDataFileConstructor.cs` |
 | Hardware | `Serial/SerialDeviceService.cs`, `Serial/LegacyToolSerialTransport.cs`, `Serial/DeviceExchangeLog.cs`, `Serial/DeviceProtocolLog.cs` |
@@ -234,6 +234,34 @@ MetrologyWindow → прибор или файл метрологии → Metrol
 которого сейчас рисуется, причём до добавления отступа: отрисовка добавляет свои
 5 % сама, и передача уже расширенного диапазона раздувала бы закреплённую ось на
 каждом шаге.
+
+### Системные диалоги выбора файлов
+
+Все вызовы `Windows.Storage.Pickers` идут через `Services/FilePickers.cs`, а не
+напрямую. Помощник привязывает диалог к окну-владельцу и **не даёт отказу пройти
+незамеченным**.
+
+Отказ здесь реален: пикеры не работают в процессе с правами администратора —
+вызов завершается `E_FAIL`. Обработчики меню объявлены `async void`, поэтому
+исключение уходило мимо кода окна, и для пользователя это выглядело так, будто
+пункт меню не нажимается. Именно так вело себя приложение после автообновления,
+пока установщик запускал его напрямую своим привилегированным токеном (см.
+[`../installer/README.md`](../installer/README.md)).
+
+Штатно приложение с повышенными правами не работает, но пользователь может
+запустить его так вручную, и тогда он обязан получить объяснение, а не молчание.
+Права процесса пишутся первой строкой журнала жизненного цикла.
+
+### Один открытый диалог за раз
+
+WinUI допускает только один открытый `ContentDialog`; второй показ падает
+исключением. Поэтому `PopupScale.ShowScaledAsync` показывает диалоги по одному:
+второй ждёт ответа на первый. Без очереди поток загрузки файла в базу успевал
+запросить выбор прибора, пока был открыт другой диалог, и приложение падало —
+исключение из `async void` обработчика перехватить было некому.
+
+Отсюда правило: **диалоги показываются только через `ShowScaledAsync`**. Прямой
+`ShowAsync` обходит и очередь, и масштабирование.
 
 ### Масштаб всплывающих поверхностей
 
