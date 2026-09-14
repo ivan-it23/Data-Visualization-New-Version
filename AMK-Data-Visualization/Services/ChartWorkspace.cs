@@ -175,6 +175,19 @@ internal sealed class ChartWorkspace
     }
 
     /// <summary>
+    /// Записи источника несут служебный заголовок `.DEV`.
+    /// </summary>
+    /// <remarks>
+    /// Спрашивается у хранилища, а не у возможностей прибора: заголовок —
+    /// свойство контейнера. Живые кадры опроса его не несут никогда, поэтому
+    /// признак гаснет сам, как только график переключается на прибор.
+    /// </remarks>
+    public bool HasPreambleSourceForGraph(int graphNumber)
+    {
+        return GetRepositoryForGraph(graphNumber).HasRecordPreambles;
+    }
+
+    /// <summary>
     /// Возможности источника, загруженного в график. Возвращает <c>false</c>,
     /// когда источника ещё нет, и тогда о приборе не известно ничего.
     /// </summary>
@@ -211,16 +224,17 @@ internal sealed class ChartWorkspace
         ChartConfiguration configuration = GetConfigurationForGraph(graphNumber);
         List<SuppressedCurve> suppressedCurves = GetSuppressedCurves(graphNumber);
         int availableTransmitterCount = GetAvailableTransmitterCountForGraph(graphNumber);
+        bool hasPreambleSource = HasPreambleSourceForGraph(graphNumber);
         bool changed = RestoreSupportedCurves(
             configuration,
             suppressedCurves,
-            availableTransmitterCount);
+            availableTransmitterCount,
+            hasPreambleSource);
 
         for (int index = configuration.Curves.Count - 1; index >= 0; index--)
         {
             CurveDefinition curve = configuration.Curves[index];
-            if (curve.SourceElement != ElementType.Transmitter
-                || curve.ElementIndex >= 0 && curve.ElementIndex < availableTransmitterCount)
+            if (IsCurveSupported(curve, availableTransmitterCount, hasPreambleSource))
             {
                 continue;
             }
@@ -255,18 +269,48 @@ internal sealed class ChartWorkspace
         return true;
     }
 
+    /// <summary>
+    /// Источник в состоянии дать этой кривой данные.
+    /// </summary>
+    /// <remarks>
+    /// Единственное место, где решается вопрос подавления, — им пользуются и
+    /// снятие, и возврат. Разъехавшись, эти две проверки дали бы кривую,
+    /// которую снимают и тут же возвращают, или наоборот — снятую навсегда.
+    ///
+    /// Обе причины подавления обратимы, и это принципиально для заголовка
+    /// `.DEV`: переключение «открытый файл — прибор — тот же файл» штатное, и
+    /// кривые акселерометра обязаны вернуться сами, а не требовать повторного
+    /// выбора пресета.
+    /// </remarks>
+    private static bool IsCurveSupported(
+        CurveDefinition curve,
+        int availableTransmitterCount,
+        bool hasPreambleSource)
+    {
+        if (curve.SourceElement == ElementType.Preamble)
+        {
+            return hasPreambleSource;
+        }
+
+        if (curve.SourceElement != ElementType.Transmitter)
+        {
+            return true;
+        }
+
+        return curve.ElementIndex >= 0 && curve.ElementIndex < availableTransmitterCount;
+    }
+
     private static bool RestoreSupportedCurves(
         ChartConfiguration configuration,
         List<SuppressedCurve> suppressedCurves,
-        int availableTransmitterCount)
+        int availableTransmitterCount,
+        bool hasPreambleSource)
     {
         bool changed = false;
         foreach (SuppressedCurve suppressed in suppressedCurves.OrderBy(item => item.OriginalIndex).ToArray())
         {
             CurveDefinition curve = suppressed.Curve;
-            if (curve.SourceElement != ElementType.Transmitter
-                || curve.ElementIndex < 0
-                || curve.ElementIndex >= availableTransmitterCount)
+            if (!IsCurveSupported(curve, availableTransmitterCount, hasPreambleSource))
             {
                 continue;
             }

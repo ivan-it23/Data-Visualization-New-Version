@@ -900,7 +900,8 @@ public sealed class SerialDeviceService : IDisposable
             $"[WriteMetrology]   port timeouts: read={ReadTimeoutMilliseconds}ms write={WriteTimeoutMilliseconds}ms");
         DeviceExchangeLog.Append(
             $"[WriteMetrology]   inData: signature=0x{data.Signature:X8} serial={data.Serial} " +
-            $"D_sonde_mm={data.SondeDiameterMm} Rx_Position={data.RxPosition}");
+            $"D_sonde_mm={data.SondeDiameterMm} Rx_Position={data.RxPosition} " +
+            $"timestamp={data.TimestampUnixSeconds}");
         DeviceExchangeLog.Append(
             $"[WriteMetrology]   inData: L1=[{JoinMetrologyValues(data.GetL1)}] " +
             $"L2=[{JoinMetrologyValues(data.GetL2)}] F=[{data.GetFrequency(0)} {data.GetFrequency(1)}]");
@@ -1000,9 +1001,28 @@ public sealed class SerialDeviceService : IDisposable
             return SerialOperationResult.InvalidResponse;
         }
 
+        // Отметка времени занимает восемь байт, отобранных у служебной области,
+        // и её смещение подтверждено пока только объявлением структуры. Сверка
+        // возвращённого значения с отправленным ловит расхождение раскладки
+        // первой же записью; без неё неверные байты молча ушли бы в служебную
+        // область прибора, и узнать об этом было бы неоткуда.
+        if (verification.IsSuccess
+            && IsExtendedFirmwareDevice
+            && verification.Data.TimestampUnixSeconds != data.TimestampUnixSeconds)
+        {
+            DeviceExchangeLog.Append(
+                $"[WriteMetrology]   verify mismatch: timestamp got={verification.Data.TimestampUnixSeconds} " +
+                $"expected={data.TimestampUnixSeconds}");
+            DeviceExchangeLog.Append("[WriteMetrology] END result=INVALID_RESPONSE (verify failed)");
+            return SerialOperationResult.InvalidResponse;
+        }
+
         if (verification.IsSuccess)
         {
-            DeviceExchangeLog.Append("[WriteMetrology]   verify OK: signature/serial match");
+            DeviceExchangeLog.Append(
+                IsExtendedFirmwareDevice
+                    ? "[WriteMetrology]   verify OK: signature/serial/timestamp match"
+                    : "[WriteMetrology]   verify OK: signature/serial match");
         }
         else
         {

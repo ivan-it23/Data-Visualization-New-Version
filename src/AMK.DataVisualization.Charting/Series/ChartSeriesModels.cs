@@ -27,7 +27,23 @@ public enum DataType
     /// Амплитудное УЭС — обратная задача по затуханию. Доступно только для
     /// приборов новой прошивки.
     /// </summary>
-    RhoAttSmt
+    RhoAttSmt,
+
+    // Служебный заголовок записи `.DEV`. Величины доступны только у источника,
+    // записи которого несут заголовок: у `.bin`, `.biv` и у живых кадров опроса
+    // его нет. Выводятся в отсчётах — цена деления не подтверждена.
+
+    /// <summary>Первая ось акселерометра из заголовка записи `.DEV`.</summary>
+    PreambleAccelerationX,
+
+    /// <summary>Вторая ось акселерометра из заголовка записи `.DEV`.</summary>
+    PreambleAccelerationY,
+
+    /// <summary>Третья ось акселерометра из заголовка записи `.DEV`.</summary>
+    PreambleAccelerationZ,
+
+    /// <summary>Модуль вектора ускорения из заголовка записи `.DEV`.</summary>
+    PreambleAccelerationMagnitude
 }
 
 public enum FrequencyBand
@@ -49,7 +65,14 @@ public enum ElementType
 {
     Transmitter,
     Receiver,
-    SilentTx
+    SilentTx,
+
+    /// <summary>
+    /// Величина из служебного заголовка записи `.DEV`, а не из кадра
+    /// измерений. К передатчикам и приёмникам отношения не имеет, поэтому
+    /// правила, гасящие кривые по числу передатчиков, её не трогают.
+    /// </summary>
+    Preamble
 }
 
 public enum XAxisType
@@ -82,6 +105,12 @@ public enum PresetType
 
     /// <summary>Амплитудные УЭС, только новая прошивка.</summary>
     RhoAttSmt,
+
+    /// <summary>
+    /// Акселерометр из служебного заголовка записи: три оси и модуль вектора.
+    /// Доступен только для источников, записи которых несут заголовок `.DEV`.
+    /// </summary>
+    Accelerometer,
 
     Custom
 }

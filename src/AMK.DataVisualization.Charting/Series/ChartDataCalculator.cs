@@ -156,6 +156,11 @@ public static class ChartDataCalculator
             DataType.RhoSmt => CalculateFilteredRhoSmtData(records, metadata, curve, minX, maxX, minY, maxY, metrology),
             DataType.RhoAttSmt => CalculateFilteredRhoAttSmtData(records, metadata, curve, minX, maxX, minY, maxY, metrology),
             DataType.Temperature => CalculateFilteredTemperatureData(records, metadata, minX, maxX, minY, maxY),
+            DataType.PreambleAccelerationX
+                or DataType.PreambleAccelerationY
+                or DataType.PreambleAccelerationZ
+                or DataType.PreambleAccelerationMagnitude
+                => CalculateFilteredPreambleData(records, metadata, curve.DataType, minX, maxX, minY, maxY),
             _ => CalculateAlignedSingleCurveData(records, metadata, curve, minX, maxX, minY, maxY, metrology)
         };
 
@@ -225,6 +230,13 @@ public static class ChartDataCalculator
 
             case DataType.Temperature:
                 CalculateTemperatureData(records, metadata, request, window, output);
+                break;
+
+            case DataType.PreambleAccelerationX:
+            case DataType.PreambleAccelerationY:
+            case DataType.PreambleAccelerationZ:
+            case DataType.PreambleAccelerationMagnitude:
+                CalculatePreambleData(records, metadata, request, window, output);
                 break;
         }
 
@@ -513,6 +525,74 @@ public static class ChartDataCalculator
             MeasurementView measurement = CreateMeasurementView(records, metadata, recordIndex);
             float value = measurement.Temperature;
             if (value >= minY && value <= maxY)
+            {
+                output.Add(value);
+            }
+        }
+
+        return output;
+    }
+
+    /// <summary>
+    /// Величина из служебного заголовка записи. Записи без заголовка дают
+    /// разрыв кривой, а не ноль: нуля в этом месте прибор не измерял.
+    /// </summary>
+    private static bool TryGetPreambleValue(MeasurementView measurement, DataType type, out float value)
+    {
+        value = MissingValue;
+        if (measurement.Metadata.Preamble is not DevPreamble preamble)
+        {
+            return false;
+        }
+
+        value = type switch
+        {
+            DataType.PreambleAccelerationX => preamble.X,
+            DataType.PreambleAccelerationY => preamble.Y,
+            DataType.PreambleAccelerationZ => preamble.Z,
+            DataType.PreambleAccelerationMagnitude => preamble.Magnitude,
+            _ => MissingValue
+        };
+
+        return float.IsFinite(value);
+    }
+
+    private static void CalculatePreambleData(
+        IReadOnlyList<GpToolData> records,
+        IReadOnlyList<ToolRecordMetadata> metadata,
+        ChartDataRequest request,
+        DataIndexWindow window,
+        List<List<float>> output)
+    {
+        output.Add(new List<float>(window.Count));
+        for (int recordIndex = window.StartIndex; recordIndex < window.EndIndex; recordIndex++)
+        {
+            MeasurementView measurement = CreateMeasurementView(records, metadata, recordIndex);
+            bool hasValue = TryGetPreambleValue(measurement, request.Type, out float value);
+            AppendAlignedFilteredPlotValue(output[0], hasValue, value, request.MinY, request.MaxY);
+        }
+    }
+
+    private static List<float> CalculateFilteredPreambleData(
+        IReadOnlyList<GpToolData> records,
+        IReadOnlyList<ToolRecordMetadata> metadata,
+        DataType type,
+        double minX,
+        double maxX,
+        double minY,
+        double maxY)
+    {
+        DataIndexWindow window = GetDataIndexRange(records.Count, minX, maxX);
+        if (window.StartIndex >= window.EndIndex)
+        {
+            return [];
+        }
+
+        List<float> output = new(window.Count);
+        for (int recordIndex = window.StartIndex; recordIndex < window.EndIndex; recordIndex++)
+        {
+            MeasurementView measurement = CreateMeasurementView(records, metadata, recordIndex);
+            if (TryGetPreambleValue(measurement, type, out float value) && value >= minY && value <= maxY)
             {
                 output.Add(value);
             }

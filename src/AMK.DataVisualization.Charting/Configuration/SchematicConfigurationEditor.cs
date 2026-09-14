@@ -116,6 +116,10 @@ public sealed class SchematicConfigurationEditor
                 Selection.DataFilter = DataTypeFilter.TemperatureOnly;
                 CurrentPresetDisplayName = "Температура";
                 break;
+            case PresetType.Accelerometer:
+                Selection.DataFilter = DataTypeFilter.AccelerometerOnly;
+                CurrentPresetDisplayName = "Акселерометр";
+                break;
             case PresetType.RhoSmt:
                 Selection.DataFilter = DataTypeFilter.RhoSmtOnly;
                 CurrentPresetDisplayName = BuildSmtDisplayName("УЭС", Selection.RhoSmtMode);

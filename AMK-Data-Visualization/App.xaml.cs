@@ -20,6 +20,15 @@ public partial class App : Application
             // повышенными правами теряет системные диалоги выбора файлов, и по
             // журналу это должно быть видно сразу, а не выводиться по симптомам.
             WriteLifecycle($"before-main-window elevated={Services.FilePickers.IsElevatedProcess}");
+
+            // Раскладка двоичных структур проверяется до создания окна.
+            // Расхождение смещений не вызывает отказа само по себе — оно даёт
+            // правдоподобные и при этом неверные значения, поэтому приложение
+            // обязано отказаться работать. Причина уходит в
+            // amk-winui-error.txt рядом с остальной диагностикой запуска.
+            Core.Binary.BinaryLayoutVerifier.ThrowIfInvalid();
+            WriteLifecycle("binary-layout OK");
+
             window = new MainWindow();
             WriteLifecycle($"after-main-window hwnd={WinRT.Interop.WindowNative.GetWindowHandle(window)}");
             window.Activated += (_, eventArgs) => WriteLifecycle($"activated state={eventArgs.WindowActivationState}");

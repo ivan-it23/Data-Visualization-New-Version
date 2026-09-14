@@ -40,6 +40,13 @@ public static class BinaryLayoutConstants
     /// </summary>
     public const int MetrologyCommonSize = 84;
 
+    /// <summary>
+    /// Смещение отметки времени записи метрологии. Поле появилось в новой
+    /// прошивке за счёт служебной области, сокращённой с 58 до 54 слов; у
+    /// старой прошивки по этим восьми байтам лежит её служебная область.
+    /// </summary>
+    public const int MetrologyTimestampOffset = 124;
+
     public const int DevHeaderSize = 11;
 
     /// <summary>
@@ -316,14 +323,31 @@ public unsafe struct MetrologyData
     // Здесь кончается часть, общая для обоих поколений прошивки.
     //
     // Старая прошивка держит дальше служебную область ushort[78]. Новая
-    // отдала её первые 40 байт под воздушные поправки затухания, оставив
-    // ushort[58]; общий размер структуры не изменился и остался 240 байт.
+    // забирает из неё сначала 40 байт под воздушные поправки затухания, затем
+    // ещё 8 под отметку времени записи, и оставляет ushort[54]; общий размер
+    // структуры не изменился и остался 240 байт.
     //
-    // Читать и писать airAttDb допустимо только у приборов новой прошивки:
-    // для старого прибора это его служебная область, и запись туда испортит
-    // содержимое, смысл которого приложению неизвестен.
+    // Читать и писать airAttDb и TimestampUnixSeconds допустимо только у
+    // приборов новой прошивки: для старого прибора это его служебная область,
+    // и запись туда испортит содержимое, смысл которого приложению неизвестен.
     private fixed float airAttDb[BinaryLayoutConstants.ChannelCount];
-    private fixed ushort service[58];
+
+    /// <summary>
+    /// Время записи метрологии в прибор или в файл — секунды Unix-эпохи в UTC.
+    /// Проставляется приложением по часам компьютера в момент записи; прибор
+    /// это поле не меняет.
+    /// </summary>
+    /// <remarks>
+    /// Есть только у приборов новой прошивки — вызывающий обязан проверить
+    /// это по поколению источника, как и для <c>airAttDb</c>. Значение
+    /// разбирается и форматируется в <c>MetrologyTimestamp</c>: у прибора с
+    /// неразмеченной памятью здесь лежат байты <c>0xFF</c>, а у метрологии,
+    /// записанной до появления поля, — нули, и ни то ни другое датой не
+    /// является.
+    /// </remarks>
+    public long TimestampUnixSeconds;
+
+    private fixed ushort service[54];
 
     public readonly ushort GetL1(int transmitterIndex)
     {
@@ -506,6 +530,28 @@ public static class BinaryLayoutVerifier
         }
     }
 
+    /// <summary>
+    /// Смещение отметки времени записи в метрологии новой прошивки.
+    /// </summary>
+    public static unsafe int TimestampOffset
+    {
+        get
+        {
+            MetrologyData probe = default;
+            probe.TimestampUnixSeconds = -1;
+            byte* origin = (byte*)&probe;
+            for (int offset = 0; offset < sizeof(MetrologyData); offset++)
+            {
+                if (origin[offset] != 0)
+                {
+                    return offset;
+                }
+            }
+
+            return -1;
+        }
+    }
+
     public static void ThrowIfInvalid()
     {
         if (GpToolDataSize != BinaryLayoutConstants.CanonicalFrameSize)
@@ -523,6 +569,12 @@ public static class BinaryLayoutVerifier
         {
             throw new InvalidOperationException(
                 $"MetrologyData air attenuation must start at {BinaryLayoutConstants.MetrologyCommonSize} bytes, actual {AirAttDbOffset}.");
+        }
+
+        if (TimestampOffset != BinaryLayoutConstants.MetrologyTimestampOffset)
+        {
+            throw new InvalidOperationException(
+                $"MetrologyData timestamp must start at {BinaryLayoutConstants.MetrologyTimestampOffset} bytes, actual {TimestampOffset}.");
         }
 
         if (MetrologyDataSize != BinaryLayoutConstants.MetrologyDataSize)

@@ -201,6 +201,11 @@ public sealed class MeasurementView
 
     public ToolCapabilities Capabilities => Metadata.Capabilities;
 
+    /// <summary>
+    /// Служебный заголовок записи `.DEV`, если источник его имеет.
+    /// </summary>
+    public DevPreamble? Preamble => Metadata.Preamble;
+
     public uint Signature => record.Signature;
 
     public float Temperature => record.Temperature;

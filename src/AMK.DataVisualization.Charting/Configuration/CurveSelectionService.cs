@@ -6,6 +6,12 @@ public sealed class CurveSelectionService
 {
     private const int SilentColor = 0x007B7B7B;
     private const int TemperatureColor = 0x00447CB0;
+
+    // Оси акселерометра и модуль вектора. Цвета в COLORREF (0x00BBGGRR).
+    private const int PreambleAxisXColor = 0x00D6782A;
+    private const int PreambleAxisYColor = 0x003468EB;
+    private const int PreambleAxisZColor = 0x007AAF1B;
+    private const int PreambleMagnitudeColor = 0x00D65062;
     private static readonly int[] LeftAxisColors =
     [
         Rgb(64, 132, 92),
@@ -71,6 +77,9 @@ public sealed class CurveSelectionService
                     break;
                 case DataTypeFilter.TemperatureOnly:
                     curves.Add(CreateTemperatureCurve(selection.Frequency));
+                    break;
+                case DataTypeFilter.AccelerometerOnly:
+                    AddPreambleAccelerationCurves(curves, selection.Frequency);
                     break;
                 case DataTypeFilter.RhoSmtOnly:
                     AddSmtCurves(curves, selection, DataType.RhoSmt, selection.RhoSmtMode);
@@ -257,9 +266,16 @@ public sealed class CurveSelectionService
         bool hasTemperature = false;
         bool hasRhoAttSmt = false;
         bool hasAttDbSmt = false;
+        bool hasPreamble = false;
 
         foreach (CurveDefinition curve in curves)
         {
+            if (curve.SourceElement == ElementType.Preamble)
+            {
+                hasPreamble = true;
+                continue;
+            }
+
             switch (curve.DataType)
             {
                 case DataType.AmplitudeRx1:
@@ -295,6 +311,17 @@ public sealed class CurveSelectionService
                     hasTemperature = true;
                     break;
             }
+        }
+
+        // Акселерометр приходит из служебного заголовка записи, а не из кадра
+        // измерений, и в схеме прибора представлен быть не может. Набор
+        // распознаётся как «только акселерометр», если ничего другого в нём
+        // нет, и как произвольный, если есть.
+        if (hasPreamble)
+        {
+            return curves.All(curve => curve.SourceElement == ElementType.Preamble)
+                ? DataTypeFilter.AccelerometerOnly
+                : DataTypeFilter.All;
         }
 
         // Виды данных новой прошивки не смешиваются с остальными: набор с ними
@@ -573,6 +600,50 @@ public sealed class CurveSelectionService
         };
     }
 
+    /// <summary>
+    /// Три оси акселерометра и модуль вектора из служебного заголовка записи
+    /// `.DEV`. Все четыре кривые включены: пользователь убирает лишние
+    /// кнопкой-«глазом» в легенде.
+    /// </summary>
+    /// <remarks>
+    /// Единицы — отсчёты. Цена деления не подтверждена разработчиком прибора,
+    /// поэтому подписывать ось в <c>g</c> нельзя: это выдало бы оценку за факт.
+    /// Все четыре величины в одних единицах и одного порядка, поэтому делят
+    /// одну ось Y.
+    /// </remarks>
+    private static void AddPreambleAccelerationCurves(List<CurveDefinition> curves, FrequencyBand frequency)
+    {
+        curves.Add(CreatePreambleCurve("X", DataType.PreambleAccelerationX, PreambleAxisXColor, frequency));
+        curves.Add(CreatePreambleCurve("Y", DataType.PreambleAccelerationY, PreambleAxisYColor, frequency));
+        curves.Add(CreatePreambleCurve("Z", DataType.PreambleAccelerationZ, PreambleAxisZColor, frequency));
+        curves.Add(CreatePreambleCurve(
+            "|XYZ|",
+            DataType.PreambleAccelerationMagnitude,
+            PreambleMagnitudeColor,
+            frequency));
+    }
+
+    private static CurveDefinition CreatePreambleCurve(
+        string axisName,
+        DataType dataType,
+        int color,
+        FrequencyBand frequency)
+    {
+        return new CurveDefinition
+        {
+            Id = $"PREAMBLE_{dataType}",
+            DisplayName = $"Ускорение {axisName}",
+            Units = "отсчёты",
+            YAxisGroup = 0,
+            Enabled = true,
+            Color = color,
+            SourceElement = ElementType.Preamble,
+            ElementIndex = 0,
+            DataType = dataType,
+            Frequency = frequency
+        };
+    }
+
     private static CurveDefinition CreateTemperatureCurve(FrequencyBand frequency)
     {
         return new CurveDefinition
@@ -645,6 +716,10 @@ public sealed class CurveSelectionService
             DataType.RhoAttSmt => "УЭС по затуханию",
             DataType.AttDbSmt => "Затухание",
             DataType.Temperature => "Температура",
+            DataType.PreambleAccelerationX => "Ускорение X",
+            DataType.PreambleAccelerationY => "Ускорение Y",
+            DataType.PreambleAccelerationZ => "Ускорение Z",
+            DataType.PreambleAccelerationMagnitude => "Ускорение |XYZ|",
             _ => string.Empty
         };
     }
@@ -663,6 +738,19 @@ public sealed class CurveSelectionService
             if (curve.DataType == DataType.Temperature)
             {
                 curve.Color = TemperatureColor;
+            }
+            else if (curve.SourceElement == ElementType.Preamble)
+            {
+                // Цвет закреплён за осью: X всегда одного цвета независимо от
+                // того, какие ещё кривые попали в конфигурацию. Подбор по
+                // месту в списке сделал бы цвет осей плавающим.
+                curve.Color = curve.DataType switch
+                {
+                    DataType.PreambleAccelerationX => PreambleAxisXColor,
+                    DataType.PreambleAccelerationY => PreambleAxisYColor,
+                    DataType.PreambleAccelerationZ => PreambleAxisZColor,
+                    _ => PreambleMagnitudeColor
+                };
             }
             else
             {

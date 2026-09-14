@@ -4,6 +4,7 @@ using AMK.DataVisualization.Charting.Series;
 using AMK.DataVisualization.Charting.Configuration;
 using AMK.DataVisualization.Core;
 using AMK.DataVisualization.Core.Adapters;
+using AMK.DataVisualization.Core.Binary;
 using AMK.DataVisualization.DeviceRegistry;
 using AMK.DataVisualization.IO.DataFiles;
 using AMK.DataVisualization.Hardware.Serial;
@@ -1162,14 +1163,18 @@ public sealed partial class MainWindow : Window
         AddPresetMenuItem(flyout, graphNumber, "УЭС по затуханию (на приборе)", PresetType.RhoAttSmt, SmtComputationMode.FromSonde);
         AddPresetMenuItem(flyout, graphNumber, "УЭС по затуханию (на компьютере)", PresetType.RhoAttSmt, SmtComputationMode.FromComputer);
 
-        // Температура не относится ни к фазовым, ни к амплитудным измерениям,
-        // поэтому стоит отдельно и в разделы не входит.
+        // Температура и акселерометр не относятся ни к фазовым, ни к
+        // амплитудным измерениям, поэтому стоят отдельно и в разделы не входят.
+        // Акселерометр к тому же приходит не из кадра измерений, а из
+        // служебного заголовка записи `.DEV`.
         flyout.Items.Add(new MenuFlyoutSeparator());
         AddPresetMenuItem(flyout, graphNumber, "Температура", PresetType.Temperature, null);
+        AddPresetMenuItem(flyout, graphNumber, "Акселерометр", PresetType.Accelerometer, null);
 
         flyout.Opening += (_, _) =>
         {
             bool extendedFirmware = chartWorkspace.IsExtendedFirmwareSourceForGraph(graphNumber);
+            bool hasPreamble = chartWorkspace.HasPreambleSourceForGraph(graphNumber);
             foreach (MenuFlyoutItemBase item in flyout.Items)
             {
                 if (item is not MenuFlyoutItem menuItem || menuItem.Tag is not PresetMenuTag tag)
@@ -1181,6 +1186,14 @@ public sealed partial class MainWindow : Window
                 if (tag.Preset is PresetType.RhoAttSmt or PresetType.AttDbSmt)
                 {
                     enabled = enabled && extendedFirmware;
+                }
+
+                // Акселерометр лежит в служебном заголовке записи `.DEV`.
+                // У `.bin`, `.biv` и у живых кадров опроса его нет, поэтому
+                // пункт остаётся на месте, но гаснет.
+                if (tag.Preset == PresetType.Accelerometer)
+                {
+                    enabled = enabled && hasPreamble;
                 }
 
                 menuItem.IsEnabled = enabled;
@@ -2509,6 +2522,36 @@ public sealed partial class MainWindow : Window
             serial: 0,
             rxPosition: 0,
             sondeDiameterMillimeters: 0);
+        LogPreambleSummary(repository);
+    }
+
+    /// <summary>
+    /// Пишет в журнал сводку по служебным заголовкам записей `.DEV`.
+    /// </summary>
+    /// <remarks>
+    /// Счётчик записи и температура заголовка на график не выводятся — у
+    /// первого кривая была бы прямой, у второй не подтверждены единицы, — но
+    /// оба нужны для разбора: разрыв счётчика означает потерянные записи.
+    /// Поэтому они попадают в журнал сводкой по файлу, а не построчно: записей
+    /// в дампе тысячи, и построчный вывод вытеснил бы весь остальной журнал.
+    /// </remarks>
+    private static void LogPreambleSummary(ToolDataRepository repository)
+    {
+        if (!repository.TryGetPreambleSummary(out DevPreambleSummary summary))
+        {
+            return;
+        }
+
+        DeviceExchangeLog.Append(
+            $"Служебные заголовки записей: {summary.RecordCount} из {repository.DataSize}");
+        DeviceExchangeLog.Append(
+            $"  счётчик записи: {summary.FirstRamTime} … {summary.LastRamTime}, "
+            + (summary.RamTimeGapCount == 0
+                ? "без разрывов"
+                : $"разрывов: {summary.RamTimeGapCount} — часть записей дампа потеряна"));
+        DeviceExchangeLog.Append(
+            $"  температура заголовка: {summary.MinTemperature} … {summary.MaxTemperature} "
+            + "(датчик и единицы не подтверждены разработчиком прибора)");
     }
 
     private NotesJournalSource GetNotesJournalSource()

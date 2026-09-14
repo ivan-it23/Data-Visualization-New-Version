@@ -137,10 +137,17 @@ public static class ToolDataFileReader
         int skippedFrameCount = 0;
         for (int index = 0; index < validation.FrameCount; index++)
         {
-            if (ReadParsedFrameAt(stream, validation.Format, validation.PhysicalFrameSize, index, rawFrame, out ParsedToolFrame frame))
+            if (ReadParsedFrameAt(
+                    stream,
+                    validation.Format,
+                    validation.PhysicalFrameSize,
+                    index,
+                    rawFrame,
+                    out ParsedToolFrame frame,
+                    out DevPreamble? preamble))
             {
                 records.Add(frame.CanonicalData);
-                metadata.Add(new ToolRecordMetadata(frame.Kind, frame.Capabilities));
+                metadata.Add(new ToolRecordMetadata(frame.Kind, frame.Capabilities, preamble));
             }
             else
             {
@@ -334,19 +341,39 @@ public static class ToolDataFileReader
         return true;
     }
 
+    /// <summary>
+    /// Читает запись файла: служебный заголовок `.DEV`, если он есть, и кадр
+    /// измерений.
+    /// </summary>
+    /// <remarks>
+    /// Заголовок есть у каждой записи `.DEV` обоих поколений прошивки и всегда
+    /// занимает 11 байт — это правило контейнера, а не свойство прибора.
+    /// Нечитаемый заголовок кадр не отменяет: измерения от него не зависят,
+    /// и терять их из-за служебных байт нельзя.
+    /// </remarks>
     private static bool ReadParsedFrameAt(
         FileStream stream,
         FileFormat format,
         int physicalFrameSize,
         int frameIndex,
         byte[] rawFrame,
-        out ParsedToolFrame frame)
+        out ParsedToolFrame frame,
+        out DevPreamble? preamble)
     {
         frame = default;
-        long frameOffset = checked((long)frameIndex * physicalFrameSize);
+        preamble = null;
+        long recordOffset = checked((long)frameIndex * physicalFrameSize);
+        long frameOffset = recordOffset;
         if (format == FileFormat.Dev)
         {
             frameOffset += BinaryLayoutConstants.DevHeaderSize;
+            Span<byte> header = stackalloc byte[BinaryLayoutConstants.DevHeaderSize];
+            stream.Position = recordOffset;
+            if (stream.ReadAtLeast(header, header.Length, throwOnEndOfStream: false) == header.Length
+                && DevPreamble.TryRead(header, out DevPreamble parsedPreamble))
+            {
+                preamble = parsedPreamble;
+            }
         }
 
         stream.Position = frameOffset;

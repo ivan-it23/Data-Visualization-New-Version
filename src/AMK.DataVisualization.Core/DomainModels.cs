@@ -89,7 +89,19 @@ public sealed record ToolCapabilities(
     public bool IsExtendedFirmware => FrameSize == Binary.BinaryLayoutConstants.ExtendedFrameSize;
 }
 
-public sealed record ToolRecordMetadata(ToolDataKind Kind, ToolCapabilities Capabilities)
+/// <param name="Preamble">
+/// Служебный заголовок записи `.DEV`. У записей `.bin` и `.biv` и у кадров,
+/// принятых от прибора, его нет: заголовок пишет не прошивка обмена, а тот
+/// модуль, что складывает дамп в память прибора.
+///
+/// Возможности прибора сюда не входят намеренно. <see cref="ToolCapabilities"/>
+/// выводятся из сигнатуры и описывают прибор, а заголовок — свойство
+/// контейнера: один и тот же прибор пишет `.bin` без него и `.DEV` с ним.
+/// </param>
+public sealed record ToolRecordMetadata(
+    ToolDataKind Kind,
+    ToolCapabilities Capabilities,
+    Binary.DevPreamble? Preamble = null)
 {
     public static ToolRecordMetadata Empty { get; } = new(ToolDataKind.Unknown, ToolCapabilities.Empty);
 }

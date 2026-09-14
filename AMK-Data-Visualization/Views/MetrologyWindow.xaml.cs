@@ -196,6 +196,16 @@ public sealed partial class MetrologyWindow : Window
     }
 
     /// <summary>
+    /// Поколение прошивки источника, показанного в окне. Опирается на ту же
+    /// сигнатуру, из которой окно берёт идентификацию, поэтому прибор с
+    /// неразмеченной метрологией опознаётся по своим кадрам.
+    /// </summary>
+    private FirmwareGeneration ResolveGeneration(MetrologyData data)
+    {
+        return MetrologySignature.Decode(ResolveIdentitySignature(data.Signature, out _)).Generation;
+    }
+
+    /// <summary>
     /// Готовит воздушную поправку затухания к показу в поле.
     /// </summary>
     /// <remarks>
@@ -284,6 +294,16 @@ public sealed partial class MetrologyWindow : Window
                   + "Тип, число передатчиков, модификация и серийный номер показаны по кадрам прибора "
                   + "и будут записаны в него кнопкой «Записать в зонд»."
                 : "Поколение прошивки определено по сигнатуре метрологии.");
+
+        // Поле только для чтения и целиком выводится из данных, поэтому
+        // обновляется всегда, а не только при смене поколения: перетирать в
+        // нём нечего. Поправки затухания ниже пользователь правит руками, и
+        // их значения сохраняются до смены поколения.
+        TimestampHeader.Opacity = extendedFirmware ? 1.0 : 0.5;
+        TimestampTextBox.IsEnabled = extendedFirmware;
+        TimestampTextBox.Text = extendedFirmware
+            ? MetrologyTimestamp.Describe(data.TimestampUnixSeconds)
+            : string.Empty;
 
         if (!force && appliedExtendedFirmware == extendedFirmware)
         {
@@ -470,6 +490,9 @@ public sealed partial class MetrologyWindow : Window
 
         try
         {
+            // Отметка ставится в момент самой записи, а не при чтении формы:
+            // поле означает, когда эти данные легли в файл.
+            MetrologyTimestamp.TryStamp(ref data, ResolveGeneration(data));
             metrologySession.SaveToFile(file.Path, data);
             FillForm(data);
             metrologyUpdated();
@@ -542,6 +565,9 @@ public sealed partial class MetrologyWindow : Window
         SetBusy(true);
         try
         {
+            // Отметка ставится после подтверждения, непосредственно перед
+            // отправкой: поле означает момент записи в прибор.
+            MetrologyTimestamp.TryStamp(ref data, ResolveGeneration(data));
             SerialOperationResult result = await serialDeviceService.WriteMetrologyAsync(data);
             if (result != SerialOperationResult.Success)
             {

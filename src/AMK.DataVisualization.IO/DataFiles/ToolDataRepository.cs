@@ -50,6 +50,17 @@ public sealed class ToolDataRepository
     /// </summary>
     public int FrameSize { get; private set; } = BinaryLayoutConstants.LegacyFrameSize;
 
+    /// <summary>
+    /// У записей источника есть служебный заголовок `.DEV`.
+    /// </summary>
+    /// <remarks>
+    /// Признак выводится из самих данных, а не из возможностей прибора: те
+    /// описывают прибор и берутся из сигнатуры, а заголовок принадлежит
+    /// контейнеру. Один и тот же прибор пишет `.bin` без заголовка и `.DEV`
+    /// с ним, а живые кадры опроса не несут его никогда.
+    /// </remarks>
+    public bool HasRecordPreambles { get; private set; }
+
     public void LoadDataFromFile(string fileName)
     {
         ApplyLoadedData(ToolDataFileReader.LoadDataFromFile(fileName), fileName);
@@ -84,8 +95,70 @@ public sealed class ToolDataRepository
         LoadedTrailingByteCount = loadedData.TrailingByteCount;
         LoadedSkippedFrameCount = loadedData.SkippedFrameCount;
         FrameSize = loadedData.FrameSize;
+        HasRecordPreambles = HasAnyPreamble(recordMetadata);
         dataVersion++;
         InvalidateDerivedCaches();
+    }
+
+    /// <summary>
+    /// Сводка по служебным заголовкам источника. Возвращает <c>false</c>, если
+    /// заголовков нет.
+    /// </summary>
+    public bool TryGetPreambleSummary(out DevPreambleSummary summary)
+    {
+        summary = default;
+        int count = 0;
+        int first = 0;
+        int last = 0;
+        int gaps = 0;
+        sbyte minTemperature = sbyte.MaxValue;
+        sbyte maxTemperature = sbyte.MinValue;
+        int? previousRamTime = null;
+
+        foreach (ToolRecordMetadata item in recordMetadata)
+        {
+            if (item.Preamble is not DevPreamble preamble)
+            {
+                continue;
+            }
+
+            if (count == 0)
+            {
+                first = preamble.RamTime;
+            }
+
+            if (previousRamTime is int previous && preamble.RamTime != previous + 1)
+            {
+                gaps++;
+            }
+
+            previousRamTime = preamble.RamTime;
+            last = preamble.RamTime;
+            minTemperature = preamble.T < minTemperature ? preamble.T : minTemperature;
+            maxTemperature = preamble.T > maxTemperature ? preamble.T : maxTemperature;
+            count++;
+        }
+
+        if (count == 0)
+        {
+            return false;
+        }
+
+        summary = new DevPreambleSummary(count, first, last, gaps, minTemperature, maxTemperature);
+        return true;
+    }
+
+    private static bool HasAnyPreamble(IReadOnlyList<ToolRecordMetadata> metadata)
+    {
+        foreach (ToolRecordMetadata item in metadata)
+        {
+            if (item.Preamble is not null)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public void ClearData()
@@ -98,6 +171,7 @@ public sealed class ToolDataRepository
         LoadedTrailingByteCount = 0;
         LoadedSkippedFrameCount = 0;
         FrameSize = BinaryLayoutConstants.LegacyFrameSize;
+        HasRecordPreambles = false;
         dataVersion++;
         InvalidateDerivedCaches();
     }

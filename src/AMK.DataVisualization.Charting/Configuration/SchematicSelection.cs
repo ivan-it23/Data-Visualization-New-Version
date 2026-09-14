@@ -17,7 +17,13 @@ public enum DataTypeFilter
     AttDbSmtOnly,
 
     /// <summary>Амплитудные УЭС, только новая прошивка.</summary>
-    RhoAttSmtOnly
+    RhoAttSmtOnly,
+
+    /// <summary>
+    /// Акселерометр из служебного заголовка записи `.DEV`. К схеме прибора
+    /// отношения не имеет: ни передатчики, ни приёмники в выборе не участвуют.
+    /// </summary>
+    AccelerometerOnly
 }
 
 public sealed class SchematicSelection
