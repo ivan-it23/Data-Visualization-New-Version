@@ -90,8 +90,8 @@
             <TextBox x:Name="SignatureBinaryTextBox" Canvas.Left="508" Canvas.Top="263" Width="369" Height="30" MinHeight="0" Padding="5,2" IsReadOnly="True" FontFamily="Consolas" />
             <TextBlock Canvas.Left="362" Canvas.Top="312" Text="Палитра" />
             <TextBox x:Name="SignaturePaletteTextBox" Canvas.Left="425" Canvas.Top="305" Width="83" Height="30" MinHeight="0" Padding="5,2" IsReadOnly="True" />
-            <TextBlock x:Name="TimestampHeader" Canvas.Left="897" Canvas.Top="270" Text="Дата записи" />
-            <TextBox x:Name="TimestampTextBox" Canvas.Left="990" Canvas.Top="263" Width="170" Height="30" MinHeight="0" Padding="5,2" IsReadOnly="True" ToolTipService.ToolTip="Момент, когда эта метрология была записана в прибор или в файл. Проставляется приложением по часам компьютера и показан в местном времени; в приборе хранится в UTC. Есть только у приборов с новой прошивкой. Пустое поле означает, что записи этим приложением ещё не было." />
+            <TextBlock x:Name="TimestampHeader" Canvas.Left="362" Canvas.Top="354" Text="Дата записи" />
+            <TextBox x:Name="TimestampTextBox" Canvas.Left="470" Canvas.Top="347" Width="186" Height="30" MinHeight="0" Padding="5,2" IsReadOnly="True" ToolTipService.ToolTip="Момент, когда эта метрология была записана в прибор или в файл. Проставляется приложением по часам компьютера и показан в местном времени; в приборе хранится в UTC. Есть только у приборов с новой прошивкой. Пустое поле означает, что записи этим приложением ещё не было." />
 
             <!-- Идентификация зонда. -->
             <Border Canvas.Left="10" Canvas.Top="397" Width="1160" Height="76" BorderBrush="{ThemeResource TextControlBorderBrush}" BorderThickness="1" CornerRadius="2" />

@@ -135,4 +135,20 @@ public readonly record struct ToolIdentity(
     public bool IsCartographLwd4TxMode =>
         DeviceType == DeviceType.Cartograph
         && TransmitterCount == 4;
+
+    /// <summary>
+    /// Прибор отвечает пакетом без поля длины. Единственный такой случай —
+    /// Картограф в режиме LWD 4tx старой прошивки.
+    /// </summary>
+    /// <remarks>
+    /// Картограф с новой прошивкой отвечает как все приборы этого поколения:
+    /// <c>LWD_1_DDS_ATT_UES.c</c> не различает типы приборов и собирает ответ
+    /// на <c>0x11</c> как <c>[CMD][struct_size + 5 : 2][кадр][CRC]</c>
+    /// (<c>WorkCyclogramStateCommandHandler</c>, ветка <c>GetDataCommand</c>).
+    /// Подтверждено прибором 320349001: ответ <c>11 45 01 …</c>, где
+    /// <c>45 01</c> — поле длины 325.
+    /// </remarks>
+    public bool UsesFixedLengthTransport =>
+        IsCartographLwd4TxMode
+        && !IsExtendedFirmware;
 }

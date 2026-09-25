@@ -734,8 +734,8 @@ void main(void) {
     //
     ECAP_stopCounter(ECAP1_BASE);
     ECAP_enableAPWMMode(ECAP1_BASE);
-    ECAP_setAPWMPeriod(ECAP1_BASE, 48U);
-    ECAP_setAPWMCompare(ECAP1_BASE,24U);
+    ECAP_setAPWMPeriod(ECAP1_BASE, 48U);//48
+    ECAP_setAPWMCompare(ECAP1_BASE,24U);//24
     ECAP_clearInterrupt(ECAP1_BASE, (ECAP_ISR_SOURCE_CAPTURE_EVENT_1  |
                         ECAP_ISR_SOURCE_CAPTURE_EVENT_2  |
                         ECAP_ISR_SOURCE_CAPTURE_EVENT_3  |

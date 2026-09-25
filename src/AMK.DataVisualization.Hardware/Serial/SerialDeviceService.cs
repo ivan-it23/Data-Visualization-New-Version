@@ -38,10 +38,10 @@ public sealed class SerialDeviceService : IDisposable
     // LOOP_NEXT принимает 242 байта payload: два служебных байта (на реальном
     // Cartograph 4tx это 0x05 0x06), затем 240 байт GP_TOOL_DATA/метрологии.
     private const int LegacyServicePrefixSize = 2;
-    // Ветка Картографа в режиме LWD 4tx подтверждена на физическом приборе и
-    // остаётся на кадре 240 байт. Перейдёт ли этот режим после перепрошивки на
-    // 320 байт и сохранится ли для него транспорт фиксированной длины —
-    // открытый вопрос, ответ на который даст прошивка.
+    // Транспорт фиксированной длины есть только у Картографа в режиме LWD 4tx
+    // старой прошивки, и кадр в нём всегда 240 байт. Картограф с новой
+    // прошивкой отвечает пакетом с полем длины, как остальные приборы этого
+    // поколения, — см. ToolIdentity.UsesFixedLengthTransport.
     private const int LegacyPayloadSize = LegacyServicePrefixSize + BinaryLayoutConstants.LegacyFrameSize;
     // Квитанция без данных занимает на проводе те же пять байт, что и в
     // length-framed ветке: [CMD][05][00][CRC:2]. Для reader'а LOOP_NEXT это
@@ -809,7 +809,10 @@ public sealed class SerialDeviceService : IDisposable
                 MetrologyData data = MemoryMarshal.Read<MetrologyData>(metrologyPayload);
                 UpdateMetrologyCache(data);
                 ToolIdentity identity = LogIdentity("PROBE FRAMED METROLOGY DECODED", data.Signature);
-                if (identity.IsCartographLwd4TxMode)
+                // Транспорт фиксированной длины — только у старого Картографа.
+                // Картограф с новой прошивкой остаётся на поле длины: ответ на
+                // 0x11 у него 325 байт, и чтение 245 байт сдвигало весь обмен.
+                if (identity.UsesFixedLengthTransport)
                 {
                     ConfigureLegacyLineSignals(serialPort);
                     useLegacyCartographProtocol = true;
@@ -828,6 +831,23 @@ public sealed class SerialDeviceService : IDisposable
                 preReceiveDelayMilliseconds: LegacyMetrologyPreReceiveDelayMilliseconds);
             if (legacyResult.IsSuccess && TryActivateLegacyCartographMode(legacyResult.Data, "legacy_metrology"))
             {
+                return;
+            }
+
+            // Картограф с новой прошивкой отдаёт метрологию всегда пакетом
+            // [0x13][F5 00][240 байт][CRC] (GetMetroCommand), и чтение
+            // фиксированной длины принимает его побайтово тем же. Метрология
+            // верна и остаётся в кэше, но кадры прибор отдаёт с полем длины,
+            // поэтому обмен возвращается на него.
+            if (legacyResult.IsSuccess
+                && UniversalCanonicalAdapter.BuildIdentity(legacyResult.Data.Signature) is
+                    { IsCartographLwd4TxMode: true, IsExtendedFirmware: true })
+            {
+                UpdateMetrologyCache(legacyResult.Data);
+                ConfigureFramedLineSignals(serialPort);
+                DeviceProtocolLog.Write(
+                    $"PROTOCOL SELECTED | protocol=FRAMED_LEN | source=legacy_metrology_extended_cartograph | " +
+                    $"signature=0x{legacyResult.Data.Signature:X8}");
                 return;
             }
 
@@ -1273,7 +1293,7 @@ public sealed class SerialDeviceService : IDisposable
     private bool TryActivateLegacyCartographMode(MetrologyData data, string source)
     {
         ToolIdentity identity = LogIdentity($"LEGACY ACTIVATION CHECK | source={source}", data.Signature);
-        if (!identity.IsCartographLwd4TxMode)
+        if (!identity.UsesFixedLengthTransport)
         {
             DeviceProtocolLog.Write(
                 $"LEGACY ACTIVATION REJECTED | source={source} | tool_code={identity.ToolCode} | " +
@@ -1297,7 +1317,8 @@ public sealed class SerialDeviceService : IDisposable
         DeviceProtocolLog.Write(
             $"{operation} | signature=0x{signature:X8} | tool_code={identity.ToolCode} | " +
             $"type={identity.DeviceType} | tx={identity.TransmitterCount} | modification={identity.Modification} | " +
-            $"cartograph_lwd_4tx={identity.IsCartographLwd4TxMode}");
+            $"cartograph_lwd_4tx={identity.IsCartographLwd4TxMode} | frame_size={identity.FrameSize} | " +
+            $"fixed_length_transport={identity.UsesFixedLengthTransport}");
         return identity;
     }
 
